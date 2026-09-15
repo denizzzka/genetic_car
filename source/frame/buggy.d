@@ -88,7 +88,7 @@ Frame buggyFrame()
 
     beam(roofBack, roofCenter, crossRadius);
     beam(roofCenter, roofFront, crossRadius);
-    beam(floorMid, floorFront, crossRadius);
+    beam(floorMid, floorFront, crossRadius, BeamKind.axial);
 
     beam(motor, railMid, susRadius);
     beam(motor, hoopTop, susRadius);
@@ -123,3 +123,4 @@ unittest
     assert(full.nodes.length == 2 * f.nodes.length - planeNodeCount(f));
     assert(full.totalBeamLength > 0.0f);
 }
+

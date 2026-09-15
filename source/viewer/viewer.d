@@ -74,7 +74,7 @@ class BuggyScene: Scene
             Material mat;
             if (b.kind == BeamKind.cross)
                 mat = matCross;
-            else if (isOnPlane(a) && isOnPlane(b2))
+            else if (b.kind == BeamKind.axial)
                 mat = matAxial;
             else
                 mat = matBeam;

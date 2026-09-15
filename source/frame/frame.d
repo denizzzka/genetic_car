@@ -33,7 +33,7 @@ struct Node
 }
 
 /// Тип балки.
-enum BeamKind { normal, cross }
+enum BeamKind { normal, cross, axial }
 
 /**
  * Балка: пара индексов узлов в `Frame.nodes`.
@@ -42,6 +42,8 @@ enum BeamKind { normal, cross }
  * в полном каркасе одна труба соединяет правый узел `a` с зеркалом левого
  * узла `b`, а вторая — зеркало правого `a` с правым `b`. Такая труба прямая
  * и проходит сквозь плоскость симметрии, не преломляясь в осевом узле.
+ *
+ * `axial` — балка целиком лежит на оси симметрии (оба узла `x == 0`).
  */
 struct Beam
 {
@@ -112,6 +114,8 @@ bool isOnPlane(const vec3 p)
  * она проходит прямым лучом сквозь плоскость симметрии, соединяя узел `a`
  * с зеркалом узла `b` (и наоборот). Балка, у которой конец лежит на оси
  * (`x == 0`), считается обычной, а не cross-.
+ *
+ * Axial-балка целиком лежит на оси симметрии (оба узла с `x == 0`).
  */
 FullFrame mirrorClosure(const Frame frame)
 {
@@ -140,21 +144,30 @@ FullFrame mirrorClosure(const Frame frame)
         if (beam.a == beam.b)
             continue;
 
-        if (beam.kind == BeamKind.cross)
+        const aOffPlane = full.right[beam.a] != full.left[beam.a];
+        const bOffPlane = full.right[beam.b] != full.left[beam.b];
+
+        final switch (beam.kind)
         {
-            full.beams ~= FullBeam(full.right[beam.a], full.left[beam.b], beam.radius, BeamKind.cross);
-            full.beams ~= FullBeam(full.left[beam.a], full.right[beam.b], beam.radius, BeamKind.cross);
-            continue;
+            case BeamKind.cross:
+                assert(aOffPlane && bOffPlane,
+                    "cross-балка должна соединять два узла с x > 0");
+                full.beams ~= FullBeam(full.right[beam.a], full.left[beam.b], beam.radius, BeamKind.cross);
+                full.beams ~= FullBeam(full.left[beam.a], full.right[beam.b], beam.radius, BeamKind.cross);
+                break;
+
+            case BeamKind.axial:
+                assert(!aOffPlane && !bOffPlane,
+                    "осевая балка должна целиком лежать на x == 0");
+                full.beams ~= FullBeam(full.right[beam.a], full.right[beam.b], beam.radius, BeamKind.axial);
+                break;
+
+            case BeamKind.normal:
+                full.beams ~= FullBeam(full.right[beam.a], full.right[beam.b], beam.radius, BeamKind.normal);
+                if (aOffPlane || bOffPlane)
+                    full.beams ~= FullBeam(full.left[beam.a], full.left[beam.b], beam.radius, BeamKind.normal);
+                break;
         }
-
-        full.beams ~= FullBeam(full.right[beam.a], full.right[beam.b], beam.radius, BeamKind.normal);
-
-        const bothOnPlane = full.left[beam.a] == full.right[beam.a]
-            && full.left[beam.b] == full.right[beam.b];
-        if (bothOnPlane)
-            continue;
-
-        full.beams ~= FullBeam(full.left[beam.a], full.left[beam.b], beam.radius, BeamKind.normal);
     }
 
     return full;
@@ -260,7 +273,7 @@ unittest
         Node(vec3(0.0f,  1.0f, 0.5f), AnchorKind.axle),
         Node(vec3(0.0f, -1.0f, 0.5f), AnchorKind.spring),
     ];
-    frame.beams = [Beam(0, 1)];
+    frame.beams = [Beam(0, 1, 0.04f, BeamKind.axial)];
 
     const full = mirrorClosure(frame);
 
@@ -268,6 +281,7 @@ unittest
     assert(full.nodes.length == 2);
     // Балка одна.
     assert(full.beams.length == 1);
+    assert(full.beams[0].kind == BeamKind.axial);
     assert(isSymmetric(full));
 }
 
