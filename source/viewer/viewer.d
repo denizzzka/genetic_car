@@ -18,6 +18,8 @@ class BuggyScene: Scene
     {
     }
 
+    Entity carRoot;
+
     override void afterLoad()
     {
         auto camera = addCamera();
@@ -33,6 +35,9 @@ class BuggyScene: Scene
         sun.shadowEnabled = true;
         sun.energy = 10.0f;
         sun.pitch(-45.0f);
+
+        carRoot = addEntity();
+        carRoot.rotation = rotationQuaternion(Vector3f(1, 0, 0), degtorad(-90.0f));
 
         const half = buggyFrame();
         buildFrame(half);
@@ -58,7 +63,7 @@ class BuggyScene: Scene
             if (length < 1e-5f)
                 continue;
 
-            auto e = addEntity();
+            auto e = addEntity(carRoot);
             e.drawable = New!ShapeCylinder(b.radius, length, 8, assetManager);
             e.material = matBeam;
             e.position = (a + b2) * 0.5f;
@@ -84,7 +89,7 @@ class BuggyScene: Scene
 
     private void addWheel(const vec3 pos)
     {
-        auto e = addEntity();
+        auto e = addEntity(carRoot);
         e.drawable = New!ShapeTorus(0.2f, 0.1f, 16, 8, assetManager);
         e.material = wheelMaterial();
         e.position = pos;
@@ -102,7 +107,7 @@ class BuggyScene: Scene
 
     private void addNodeSphere(const vec3 pos, AnchorKind kind)
     {
-        auto e = addEntity();
+        auto e = addEntity(carRoot);
         e.drawable = New!ShapeSphere(0.03f, assetManager);
         e.material = kindMaterial(kind);
         e.position = pos;
@@ -145,3 +150,4 @@ class MyGame: Game
         currentScene = New!BuggyScene(this);
     }
 }
+
