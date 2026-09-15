@@ -54,6 +54,14 @@ class BuggyScene: Scene
         matBeam.baseColorFactor = Color4f(0.55f, 0.55f, 0.62f, 1.0f);
         matBeam.metallicFactor = 0.7f;
 
+        auto matCross = addMaterial();
+        matCross.baseColorFactor = Color4f(0.9f, 0.85f, 0.15f, 1.0f);
+        matCross.metallicFactor = 0.7f;
+
+        auto matAxial = addMaterial();
+        matAxial.baseColorFactor = Color4f(0.2f, 0.8f, 0.25f, 1.0f);
+        matAxial.metallicFactor = 0.7f;
+
         foreach (b; full.beams)
         {
             const a = full.nodes[b.a];
@@ -63,9 +71,17 @@ class BuggyScene: Scene
             if (length < 1e-5f)
                 continue;
 
+            Material mat;
+            if (b.kind == BeamKind.cross)
+                mat = matCross;
+            else if (isOnPlane(a) && isOnPlane(b2))
+                mat = matAxial;
+            else
+                mat = matBeam;
+
             auto e = addEntity(carRoot);
             e.drawable = New!ShapeCylinder(b.radius, length, 8, assetManager);
-            e.material = matBeam;
+            e.material = mat;
             e.position = (a + b2) * 0.5f;
             e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
         }

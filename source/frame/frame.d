@@ -32,11 +32,22 @@ struct Node
     AnchorKind kind = AnchorKind.none;
 }
 
-/// Балка: пара индексов узлов в `Frame.nodes`.
+/// Тип балки.
+enum BeamKind { normal, cross }
+
+/**
+ * Балка: пара индексов узлов в `Frame.nodes`.
+ *
+ * `cross` — балка, заданная ДВУМЯ узлами правой половины (оба `x > 0`):
+ * в полном каркасе одна труба соединяет правый узел `a` с зеркалом левого
+ * узла `b`, а вторая — зеркало правого `a` с правым `b`. Такая труба прямая
+ * и проходит сквозь плоскость симметрии, не преломляясь в осевом узле.
+ */
 struct Beam
 {
     size_t a, b;
     float radius = 0.04f;
+    BeamKind kind = BeamKind.normal;
 }
 
 /**
@@ -54,6 +65,7 @@ struct FullBeam
 {
     size_t a, b;
     float radius;
+    BeamKind kind = BeamKind.normal;
 }
 
 /// Полный двусторонний каркас, полученный из правой половины.
@@ -93,10 +105,13 @@ bool isOnPlane(const vec3 p)
  * Развёрнуть половину каркаса в полный.
  *
  * Узел с `x > 0` дублируется зеркально, узел на оси — остаётся один.
- * Балка добавляется дважды (правая + зеркальная), кроме балок,
+ * Обычная балка добавляется дважды (правая + зеркальная), кроме балок,
  * целиком лежащих на оси — они существуют в единственном экземпляре.
- * Cross-балка от правого узла к узлу на оси продолжается зеркальной
- * половиной сквозь плоскость симметрии.
+ *
+ * Cross-балка задаётся двумя узлами правой половины (оба `x > 0`):
+ * она проходит прямым лучом сквозь плоскость симметрии, соединяя узел `a`
+ * с зеркалом узла `b` (и наоборот). Балка, у которой конец лежит на оси
+ * (`x == 0`), считается обычной, а не cross-.
  */
 FullFrame mirrorClosure(const Frame frame)
 {
@@ -125,14 +140,21 @@ FullFrame mirrorClosure(const Frame frame)
         if (beam.a == beam.b)
             continue;
 
-        full.beams ~= FullBeam(full.right[beam.a], full.right[beam.b], beam.radius);
+        if (beam.kind == BeamKind.cross)
+        {
+            full.beams ~= FullBeam(full.right[beam.a], full.left[beam.b], beam.radius, BeamKind.cross);
+            full.beams ~= FullBeam(full.left[beam.a], full.right[beam.b], beam.radius, BeamKind.cross);
+            continue;
+        }
+
+        full.beams ~= FullBeam(full.right[beam.a], full.right[beam.b], beam.radius, BeamKind.normal);
 
         const bothOnPlane = full.left[beam.a] == full.right[beam.a]
             && full.left[beam.b] == full.right[beam.b];
         if (bothOnPlane)
             continue;
 
-        full.beams ~= FullBeam(full.left[beam.a], full.left[beam.b], beam.radius);
+        full.beams ~= FullBeam(full.left[beam.a], full.left[beam.b], beam.radius, BeamKind.normal);
     }
 
     return full;
@@ -186,8 +208,8 @@ unittest
         Node(vec3(0.3f,  0.0f, 0.9f), AnchorKind.spring), // свободно, x > 0
     ];
     frame.beams = [
-        Beam(0, 2),  // правое колесо -> мотор (cross-балка)
-        Beam(1, 2),  // заднее колесо -> мотор (cross-балка)
+        Beam(0, 2),  // правое колесо -> мотор (обычная, конец на оси)
+        Beam(1, 2),  // заднее колесо -> мотор (обычная, конец на оси)
         Beam(2, 3),  // мотор -> свободный узел вправо
         Beam(3, 3),  // вырожденная, должна отбрасываться
     ];
@@ -202,9 +224,15 @@ unittest
     // Осевой узел мотора не дублируется.
     assert(full.right[2] == full.left[2]);
 
-    // Первая балка (0->2) разворачивается в пару сквозных:
+    // Первая балка (0->2) разворачивается в пару обычных:
     // правый узел -> осевой и левый узел -> осевой.
     const mirroredBeam = FullBeam(full.left[0], full.left[2], frame.beams[0].radius);
+
+    // Балка с концом на оси — не cross-.
+    foreach (b; full.beams)
+    {
+        assert(b.kind != BeamKind.cross);
+    }
     bool hasMirrored;
     foreach (b; full.beams)
     {
@@ -214,7 +242,7 @@ unittest
             break;
         }
     }
-    assert(hasMirrored, "cross-балка не получила зеркальное продолжение");
+    assert(hasMirrored, "обычная балка не получила зеркальное продолжение");
 
     // Полный каркас симметричен.
     assert(isSymmetric(full));
@@ -240,6 +268,43 @@ unittest
     assert(full.nodes.length == 2);
     // Балка одна.
     assert(full.beams.length == 1);
+    assert(isSymmetric(full));
+}
+
+unittest
+{
+    // Cross-балка: оба узла с x > 0. Разворачивается в пару прямых труб
+    // сквозь плоскость: правый a <-> левый b и левый a <-> правый b.
+    Frame frame;
+    frame.nodes = [
+        Node(vec3(0.6f,  1.0f, 0.3f)),
+        Node(vec3(0.6f, -1.0f, 0.3f)),
+    ];
+    frame.beams = [
+        Beam(0, 1, 0.04f, BeamKind.cross),
+    ];
+
+    const full = mirrorClosure(frame);
+
+    assert(full.nodes.length == 4);
+    assert(full.beams.length == 2);
+    foreach (b; full.beams)
+        assert(b.kind == BeamKind.cross);
+
+    // Обе трубы симметричного каркаса: a->зеркало(b) и зеркало(a)->b.
+    const прямой = FullBeam(full.right[0], full.left[1], 0.04f, BeamKind.cross);
+    const зеркальный = FullBeam(full.left[0], full.right[1], 0.04f, BeamKind.cross);
+    bool hasStraight, hasMirrored;
+    foreach (b; full.beams)
+    {
+        if (b.a == прямой.a && b.b == прямой.b)
+            hasStraight = true;
+        if (b.a == зеркальный.a && b.b == зеркальный.b)
+            hasMirrored = true;
+    }
+    assert(hasStraight, "нет прямой трубы a -> зеркало(b)");
+    assert(hasMirrored, "нет зеркальной трубы зеркало(a) -> b");
+
     assert(isSymmetric(full));
 }
 

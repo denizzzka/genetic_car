@@ -15,9 +15,9 @@ Frame buggyFrame()
         return f.nodes.length - 1;
     }
 
-    void beam(size_t a, size_t b, float radius = 0.04f)
+    void beam(size_t a, size_t b, float radius = 0.04f, BeamKind kind = BeamKind.normal)
     {
-        f.beams ~= Beam(a, b, radius);
+        f.beams ~= Beam(a, b, radius, kind);
     }
 
     const railBack = node(vec3(0.50f, -1.10f, 0.18f));
@@ -93,6 +93,9 @@ Frame buggyFrame()
     beam(motor, railMid, susRadius);
     beam(motor, hoopTop, susRadius);
     beam(motor, railMidBack, susRadius);
+
+    beam(railFront, roofBack, crossRadius, BeamKind.cross);
+    beam(railBack, dashTop, crossRadius, BeamKind.cross);
 
     return f;
 }
