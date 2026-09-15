@@ -1,6 +1,11 @@
-import std.stdio;
+module app;
 
-void main()
+import dagon;
+import viewer;
+
+void main(string[] args)
 {
-	writeln("Edit source/app.d to start your project.");
+    MyGame game = New!MyGame(1280, 720, false, "Genetic Car - Frame Viewer", args);
+    game.run();
+    Delete(game);
 }
