@@ -1,0 +1,5 @@
+name "genetic_car"
+description "Generating buggy vehicles using a genetic algorithm"
+authors "Denis Feklushkin"
+copyright "Copyright © 2026, Denis Feklushkin"
+license "proprietary"
