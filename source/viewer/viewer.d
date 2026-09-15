@@ -67,10 +67,37 @@ class BuggyScene: Scene
 
         foreach (node; half.nodes)
         {
-            addNodeSphere(node.pos, node.kind);
-            if (!isOnPlane(node.pos))
-                addNodeSphere(mirrorX(node.pos), node.kind);
+            if (node.kind == AnchorKind.wheel)
+            {
+                addWheel(node.pos);
+                if (!isOnPlane(node.pos))
+                    addWheel(mirrorX(node.pos));
+            }
+            else
+            {
+                addNodeSphere(node.pos, node.kind);
+                if (!isOnPlane(node.pos))
+                    addNodeSphere(mirrorX(node.pos), node.kind);
+            }
         }
+    }
+
+    private void addWheel(const vec3 pos)
+    {
+        auto e = addEntity();
+        e.drawable = New!ShapeTorus(0.2f, 0.1f, 16, 8, assetManager);
+        e.material = wheelMaterial();
+        e.position = pos;
+        e.rotation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
+    }
+
+    private Material wheelMaterial()
+    {
+        auto mat = addMaterial();
+        mat.baseColorFactor = Color4f(0.08f, 0.08f, 0.08f, 1.0f);
+        mat.roughnessFactor = 0.9f;
+        mat.metallicFactor = 0.0f;
+        return mat;
     }
 
     private void addNodeSphere(const vec3 pos, AnchorKind kind)
