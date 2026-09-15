@@ -1,4 +1,4 @@
-module genetic_car.frame.frame;
+module frame.frame;
 
 import std.math;
 import dlib.math.vector;
