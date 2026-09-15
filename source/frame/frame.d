@@ -23,7 +23,7 @@ enum float planeEpsilon = 1e-4f;
  * Что крепится в точке каркаса.
  * `none` — свободный (эволюционируемый) структурный узел.
  */
-enum AnchorKind { none, wheel, motor, shock, spring, axle }
+enum AnchorKind { none, wheel, wheelDrive, motor, shock, spring, axle }
 
 /// Узел правой половины каркаса. `pos.x >= 0`; `pos.x == 0` — узел на оси симметрии.
 struct Node

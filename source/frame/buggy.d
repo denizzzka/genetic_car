@@ -32,7 +32,7 @@ Frame buggyFrame()
     const dashTop = node(vec3(0.44f, 0.72f, 0.35f));
     const noseTop = node(vec3(0.46f, 0.95f, 0.30f));
 
-    const wheelRear = node(vec3(0.72f, -0.95f, 0.10f), AnchorKind.wheel);
+    const wheelRear = node(vec3(0.72f, -0.95f, 0.10f), AnchorKind.wheelDrive);
     const wheelFront = node(vec3(0.72f, 0.75f, 0.10f), AnchorKind.wheel);
     const shockFront = node(vec3(0.55f, 0.80f, 0.60f), AnchorKind.shock);
     const shockRear = node(vec3(0.55f, -0.80f, 0.70f), AnchorKind.shock);

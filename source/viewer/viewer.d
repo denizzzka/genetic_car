@@ -94,6 +94,12 @@ class BuggyScene: Scene
                 if (!isOnPlane(node.pos))
                     addWheel(mirrorX(node.pos));
             }
+            else if (node.kind == AnchorKind.wheelDrive)
+            {
+                addDriveWheel(node.pos);
+                if (!isOnPlane(node.pos))
+                    addDriveWheel(mirrorX(node.pos));
+            }
             else
             {
                 addNodeSphere(node.pos, node.kind);
@@ -112,10 +118,28 @@ class BuggyScene: Scene
         e.rotation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
     }
 
+    private void addDriveWheel(const vec3 pos)
+    {
+        auto e = addEntity(carRoot);
+        e.drawable = New!ShapeTorus(0.2f, 0.1f, 16, 8, assetManager);
+        e.material = driveWheelMaterial();
+        e.position = pos;
+        e.rotation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
+    }
+
     private Material wheelMaterial()
     {
         auto mat = addMaterial();
         mat.baseColorFactor = Color4f(0.08f, 0.08f, 0.08f, 1.0f);
+        mat.roughnessFactor = 0.9f;
+        mat.metallicFactor = 0.0f;
+        return mat;
+    }
+
+    private Material driveWheelMaterial()
+    {
+        auto mat = addMaterial();
+        mat.baseColorFactor = Color4f(0.6f, 0.1f, 0.1f, 1.0f);
         mat.roughnessFactor = 0.9f;
         mat.metallicFactor = 0.0f;
         return mat;
@@ -136,6 +160,7 @@ class BuggyScene: Scene
         final switch (kind)
         {
             case AnchorKind.wheel:
+            case AnchorKind.wheelDrive:
                 mat.baseColorFactor = Color4f(0.05f, 0.05f, 0.05f, 1.0f);
                 break;
             case AnchorKind.motor:
