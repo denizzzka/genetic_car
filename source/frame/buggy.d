@@ -43,6 +43,7 @@ Frame buggyFrame()
 
     const floorMid = node(vec3(0.00f, -0.35f, 0.18f));
     const floorFront = node(vec3(0.00f, 0.55f, 0.18f));
+    const floorRail = node(vec3(0.00f, 0.05f, 0.18f));
     const roofCenter = node(vec3(0.00f, -0.10f, 1.02f));
 
     const railRadius = 0.05f;
@@ -94,8 +95,10 @@ Frame buggyFrame()
     beam(motor, hoopTop, susRadius);
     beam(motor, railMidBack, susRadius);
 
-    beam(railFront, roofBack, crossRadius, BeamKind.cross);
-    beam(railBack, dashTop, crossRadius, BeamKind.cross);
+    beam(railFront, roofBack, crossRadius);
+    beam(railBack, dashTop, crossRadius);
+
+    beam(railMid, floorRail, crossRadius, BeamKind.cross);
 
     return f;
 }
