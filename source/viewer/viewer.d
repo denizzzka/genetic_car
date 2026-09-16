@@ -54,9 +54,9 @@ class BuggyScene: Scene
         carRoot.rotation = rotationQuaternion(Vector3f(1, 0, 0), degtorad(-90.0f));
 
         currentGenome = encodeFrame(grammar, buggyFrame());
-        auto car = new Buggy(currentFrame());
-        buildCar(car);
-        current = car;
+        auto frame = currentFrame();
+        current = new Buggy(frame, centerOffset(frame));
+        buildCar(current);
 
         auto ePlane = addEntity();
         ePlane.drawable = New!ShapePlane(10.0f, 10.0f, 1, assetManager);
@@ -78,7 +78,8 @@ class BuggyScene: Scene
         {
             currentGenome = encodeFrame(grammar, buggyFrame());
             removeCar();
-            current = new Buggy(currentFrame());
+            auto frame = currentFrame();
+            current = new Buggy(frame, centerOffset(frame));
             buildCar(current);
         }
         else if (eventManager.keyDown[KEY_M])
@@ -88,7 +89,7 @@ class BuggyScene: Scene
             auto candidate = currentGenome;
             foreach (_; 0 .. 100)
             {
-                candidate = currentGenome;
+                candidate = cloneGenotype(currentGenome);
                 mutate(candidate, 0.05f, rnd);
                 f = develop(grammar, candidate, ok);
                 if (ok)
@@ -98,10 +99,29 @@ class BuggyScene: Scene
             {
                 currentGenome = candidate;
                 removeCar();
-                current = new Buggy(f);
+                current = new Buggy(f, centerOffset(f));
                 buildCar(current);
             }
         }
+    }
+
+    /// Компенсирующее смещение, приводящее каркас к началу координат.
+    /// Только по Y и Z: сдвиг по X сломал бы плоскость симметрии x == 0,
+    /// а полный каркас (с зеркалом) и так симметричен относительно неё.
+    private vec3 centerOffset(const Frame f)
+    {
+        vec3 c = vec3(0.0f);
+        foreach (n; f.nodes)
+        {
+            c.y += n.pos.y;
+            c.z += n.pos.z;
+        }
+        if (f.nodes.length > 0)
+        {
+            c.y /= f.nodes.length;
+            c.z /= f.nodes.length;
+        }
+        return vec3(0.0f, -c.y, -c.z);
     }
 
     private void removeCar()
@@ -113,6 +133,7 @@ class BuggyScene: Scene
     private void buildCar(const Buggy car)
     {
         const full = car.full;
+        const off = car.offset;
 
         auto matBeam = addMaterial();
         matBeam.baseColorFactor = Color4f(0.55f, 0.55f, 0.62f, 1.0f);
@@ -128,8 +149,8 @@ class BuggyScene: Scene
 
         foreach (b; full.beams)
         {
-            const a = full.nodes[b.a];
-            const b2 = full.nodes[b.b];
+            const a = full.nodes[b.a] + off;
+            const b2 = full.nodes[b.b] + off;
             const dir = b2 - a;
             const float length = dir.length;
             if (length < 1e-5f)
@@ -152,16 +173,17 @@ class BuggyScene: Scene
 
         foreach (i, nodePos; full.nodes)
         {
+            const pos = nodePos + off;
             switch (car.kinds[i])
             {
                 case AnchorKind.wheel:
-                    addWheel(nodePos);
+                    addWheel(pos);
                     break;
                 case AnchorKind.wheelDrive:
-                    addDriveWheel(nodePos);
+                    addDriveWheel(pos);
                     break;
                 default:
-                    addNodeSphere(nodePos, car.kinds[i]);
+                    addNodeSphere(pos, car.kinds[i]);
                     break;
             }
         }

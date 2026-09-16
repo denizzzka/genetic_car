@@ -14,8 +14,13 @@ class Buggy
     /// Якоря полного каркаса, выровнены с `full.nodes`.
     AnchorKind[] kinds;
 
-    this(const Frame half)
+    /// Смещение отображения, приводящее каркас к началу координат.
+    /// Не меняет геометрию, применяется только при отрисовке.
+    vec3 offset;
+
+    this(const Frame half, vec3 offset = vec3(0.0f))
     {
+        this.offset = offset;
         full = mirrorClosure(half);
 
         kinds.length = full.nodes.length;
