@@ -28,6 +28,7 @@ class BuggyScene: Scene
     Grammar grammar;
     Random rnd;
     Buggy current;
+    Genotype currentGenome;
 
     override void afterLoad()
     {
@@ -52,12 +53,21 @@ class BuggyScene: Scene
         carRoot = addEntity();
         carRoot.rotation = rotationQuaternion(Vector3f(1, 0, 0), degtorad(-90.0f));
 
-        auto car = new Buggy(buggyFrame());
+        currentGenome = encodeFrame(grammar, buggyFrame());
+        auto car = new Buggy(currentFrame());
         buildCar(car);
         current = car;
 
         auto ePlane = addEntity();
         ePlane.drawable = New!ShapePlane(10.0f, 10.0f, 1, assetManager);
+    }
+
+    private Frame currentFrame()
+    {
+        bool ok;
+        auto f = develop(grammar, currentGenome, ok);
+        assert(ok, "encoded buggy frame must develop");
+        return f;
     }
 
     override void update(Time t)
@@ -66,24 +76,27 @@ class BuggyScene: Scene
 
         if (eventManager.keyDown[KEY_R])
         {
+            currentGenome = encodeFrame(grammar, buggyFrame());
             removeCar();
-            current = new Buggy(buggyFrame());
+            current = new Buggy(currentFrame());
             buildCar(current);
         }
         else if (eventManager.keyDown[KEY_M])
         {
             bool ok;
             Frame f;
+            auto candidate = currentGenome;
             foreach (_; 0 .. 100)
             {
-                auto g = randomGenotype(grammar, 8, rnd);
-                mutate(g, 0.05f, rnd);
-                f = develop(grammar, g, ok);
+                candidate = currentGenome;
+                mutate(candidate, 0.05f, rnd);
+                f = develop(grammar, candidate, ok);
                 if (ok)
                     break;
             }
             if (ok)
             {
+                currentGenome = candidate;
                 removeCar();
                 current = new Buggy(f);
                 buildCar(current);

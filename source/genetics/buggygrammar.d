@@ -35,55 +35,36 @@ private Terminal!Tok marker(Tok tok)
 /**
  * Грамматика правой половины багги.
  *
- * Узлы отдельно не генерируются: они появляются только как концы балок.
- * Каждая балка: старт — seed/последний созданный узел или существующий по
- * индексу, конец — вновь создаваемый (старт + смещение) или существующий
- * по индексу. Связность сохраняется, т.к. новые узлы прицепляются к старым.
+ * Первые три токена `coord` задают абсолютную позицию seed-узла
+ * (любую, не фиксированную), затем идут балки. Узлы отдельно не
+ * генерируются: они появляются только как концы балок. Каждая балка:
+ * старт — seed/последний созданный узел или существующий по индексу,
+ * конец — вновь создаваемый (старт + смещение) или существующий по индексу.
+ * Связность сохраняется, т.к. новые узлы прицепляются к старым.
  */
 Grammar buggyGrammar()
 {
     auto beamList_ = nt("beamList", null);
 
-    auto idx = nt("idx", [
-        new Production([t(Tok.refIdx, 0)]),
-        new Production([t(Tok.refIdx, 1)]),
-        new Production([t(Tok.refIdx, 2)]),
-        new Production([t(Tok.refIdx, 3)]),
-        new Production([t(Tok.refIdx, 4)]),
-    ]);
+    auto idx = new Sampler!Tok("idx", Tok.refIdx, 64);
+    auto destX = new Sampler!Tok("destX", Tok.coord, -1.5f, 1.5f);
+    auto destY = new Sampler!Tok("destY", Tok.coord, -1.5f, 1.5f);
+    auto destZ = new Sampler!Tok("destZ", Tok.coord, -1.5f, 1.5f);
+    auto seedX = new Sampler!Tok("seedX", Tok.coord, -2.0f, 2.0f);
+    auto seedY = new Sampler!Tok("seedY", Tok.coord, -2.0f, 2.0f);
+    auto seedZ = new Sampler!Tok("seedZ", Tok.coord, -2.0f, 2.0f);
+    auto radius = new Sampler!Tok("radius", Tok.radius, 0.02f, 0.06f);
 
     auto startRef = nt("startRef", [
         new Production([marker(Tok.refLast)]),
         new Production([idx]),
     ]);
 
-    auto destX = nt("destX", [
-        new Production([t(Tok.coord, 0.0f)]),
-        new Production([t(Tok.coord, 0.35f)]),
-        new Production([t(Tok.coord, 0.7f)]),
-    ]);
-
-    auto destY = nt("destY", [
-        new Production([t(Tok.coord, -0.35f)]),
-        new Production([t(Tok.coord, 0.0f)]),
-        new Production([t(Tok.coord, 0.35f)]),
-    ]);
-
-    auto destZ = nt("destZ", [
-        new Production([t(Tok.coord, 0.0f)]),
-        new Production([t(Tok.coord, 0.35f)]),
-        new Production([t(Tok.coord, 0.7f)]),
-    ]);
+    auto seedPos = nt("seedPos", [new Production([seedX, seedY, seedZ])]);
 
     auto endRef = nt("endRef", [
         new Production([marker(Tok.endNew), destX, destY, destZ]),
         new Production([idx]),
-    ]);
-
-    auto radius = nt("radius", [
-        new Production([t(Tok.radius, 0.03f)]),
-        new Production([t(Tok.radius, 0.04f)]),
-        new Production([t(Tok.radius, 0.05f)]),
     ]);
 
     auto beamKind = nt("beamKind", [
@@ -102,11 +83,11 @@ Grammar buggyGrammar()
     ];
 
     auto start = nt("frame", [
-        new Production([beamList_]),
+        new Production([seedPos, beamList_]),
     ]);
 
     auto symbols = [
-        start, beamList_, beam, startRef, idx,
+        start, seedPos, seedX, seedY, seedZ, beamList_, beam, startRef, idx,
         endRef, destX, destY, destZ, radius, beamKind,
     ];
     return new Grammar(start, symbols);
@@ -123,10 +104,16 @@ bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
 {
     result = Frame.init;
 
-    result.nodes ~= Node(vec3(0.0f, 0.0f, 0.0f));
+    // Первые три токена — абсолютная позиция seed-узла.
+    if (tokens.length < 3)
+        return false;
+    if (tokens[0].tok != Tok.coord || tokens[1].tok != Tok.coord || tokens[2].tok != Tok.coord)
+        return false;
+    auto seed = vec3(tokens[0].f, tokens[1].f, tokens[2].f);
+    result.nodes ~= Node(seed);
     size_t last = 0;
 
-    size_t i = 0;
+    size_t i = 3;
     while (i < tokens.length)
     {
         size_t start;
@@ -308,8 +295,9 @@ unittest
     // Декодирование сходится почти всегда; значительная доля геномов даёт
     // валидный каркас (остальные отбрасываются самокоррекцией — ссылки на
     // узлы, которых ещё нет, вырожденные балки, cross/axial вне оси).
+    // С непрерывными самплерами доля валидных ~4% (см. counter выше).
     assert(decodeOk > 3000);
-    assert(valid > 250);
+    assert(valid > 150);
 
     // Кроссинговер сохраняет число генов (по одному на нетерминал).
     auto g1 = randomGenotype(gr, 8, rnd);

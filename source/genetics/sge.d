@@ -32,7 +32,7 @@ final class Terminal(TokT) : Symbol
     auto i() const => payload.tryGet!(const int);
 }
 
-final class NonTerminal : Symbol
+class NonTerminal : Symbol
 {
     immutable string name;
     size_t id;
@@ -41,6 +41,49 @@ final class NonTerminal : Symbol
     this(string name)
     {
         this.name = name;
+    }
+}
+
+/**
+ * Самплер — нетерминал-лист с собственным геном: при раскрытии берёт
+ * следующий кодон своего гена и превращает его в значение токена.
+ *
+ * float: `min + (codon / uint.max) * (max - min)`.
+ * int: `codon % bound`.
+ */
+final class Sampler(TokT) : NonTerminal
+{
+    TokT tok;
+    float min;
+    float max;
+    bool isInt;
+    size_t bound;
+
+    this(string name, TokT tok, float min, float max)
+    {
+        super(name);
+        this.tok = tok;
+        this.min = min;
+        this.max = max;
+    }
+
+    this(string name, TokT tok, size_t bound)
+    {
+        super(name);
+        this.tok = tok;
+        this.bound = bound;
+        isInt = true;
+    }
+
+    Terminal!TokT sample(TokT tok, uint codon) const
+    {
+        if (isInt)
+            return new Terminal!TokT(tok, cast(int)(codon % bound));
+        else
+        {
+            const t = min + (cast(float)codon / cast(float)uint.max) * (max - min);
+            return new Terminal!TokT(tok, t);
+        }
     }
 }
 
@@ -83,16 +126,20 @@ final class Genotype
     }
 }
 
-Genotype randomGenotype(const Grammar gr, size_t maxGeneLength, ref Random rnd)
+version (unittest)
 {
-    auto genotype = new Genotype(gr.symbols.length);
-    foreach (ref gene; genotype.genes)
+    /// Случайный геном: каждый ген — список случайных кодонов.
+    Genotype randomGenotype(const Grammar gr, size_t maxGeneLength, ref Random rnd)
     {
-        gene.length = uniform(cast(size_t)1, maxGeneLength + 1, rnd);
-        foreach (ref codon; gene)
-            codon = uniform(0u, uint.max, rnd);
+        auto genotype = new Genotype(gr.symbols.length);
+        foreach (ref gene; genotype.genes)
+        {
+            gene.length = uniform(cast(size_t)1, maxGeneLength + 1, rnd);
+            foreach (ref codon; gene)
+                codon = uniform(0u, uint.max, rnd);
+        }
+        return genotype;
     }
-    return genotype;
 }
 
 Genotype crossover(const Genotype a, const Genotype b, ref Random rnd)
@@ -133,7 +180,7 @@ Terminal!TokT[] decode(TokT)(const Grammar gr, const Genotype genotype, out bool
     Symbol[] stack;
     stack ~= cast(NonTerminal) gr.start;
     size_t expansions = 0;
-    enum size_t maxExpansions = 1000;
+    enum size_t maxExpansions = 10000;
     size_t[] used = new size_t[gr.symbols.length];
 
     auto result = appender!(Terminal!TokT[])();
@@ -141,23 +188,35 @@ Terminal!TokT[] decode(TokT)(const Grammar gr, const Genotype genotype, out bool
     {
         auto sym = stack[$ - 1];
         stack.length -= 1;
-        auto nt = cast(NonTerminal) sym;
-        if (nt is null)
+        auto sp = cast(Sampler!TokT) sym;
+        if (sp !is null)
         {
-            result.put(cast(Terminal!TokT) sym);
+            auto gene = genotype.genes[sp.id];
+            if (gene.length == 0)
+                return null;
+            auto codon = gene[used[sp.id] % gene.length];
+            ++used[sp.id];
+            result.put(sp.sample(sp.tok, codon));
             continue;
         }
 
-        auto gene = genotype.genes[nt.id];
-        if (gene.length == 0)
-            return null;
-        auto codon = gene[used[nt.id] % gene.length];
-        ++used[nt.id];
-        auto production = nt.productions[codon % nt.productions.length];
+        auto nt = cast(NonTerminal) sym;
+        if (nt !is null)
+        {
+            auto gene = genotype.genes[nt.id];
+            if (gene.length == 0)
+                return null;
+            auto codon = gene[used[nt.id] % gene.length];
+            ++used[nt.id];
+            auto production = nt.productions[codon % nt.productions.length];
 
-        foreach_reverse (s; production.symbols)
-            stack ~= s;
-        ++expansions;
+            foreach_reverse (s; production.symbols)
+                stack ~= s;
+            ++expansions;
+            continue;
+        }
+
+        result.put(cast(Terminal!TokT) sym);
     }
 
     if (expansions >= maxExpansions)
