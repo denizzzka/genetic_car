@@ -182,6 +182,11 @@ bool isValidFrame(const Frame f)
 {
     if (f.nodes.length == 0 || f.beams.length == 0)
         return false;
+    // Правая половина каркаса: узлы не могут уходить на левую сторону
+    // (x < 0) — иначе зеркальное замыкание сломает инвариант половины.
+    foreach (n; f.nodes)
+        if (n.pos.x < -planeEpsilon)
+            return false;
     foreach (b; f.beams)
     {
         if (b.a >= f.nodes.length || b.b >= f.nodes.length)
@@ -199,9 +204,9 @@ bool isValidFrame(const Frame f)
             case BeamKind.normal:
                 break;
             case BeamKind.cross:
-                // Правый узел (вне плоскости) к осевому (x == 0),
-                // на тех же y, z — иначе mirrorClosure упадёт.
-                if (aOnPlane == bOnPlane)
+                // Правый узел a (вне плоскости) к осевому b (x == 0),
+                // на тех же y, z — ровно так, как ожидает mirrorClosure.
+                if (aOnPlane || !bOnPlane)
                     return false;
                 if (!isClose(pa.y, pb.y) || !isClose(pa.z, pb.z))
                     return false;
@@ -245,11 +250,14 @@ bool isValidFrame(const Frame f)
 
 /// Расшифровать геном из грамматики багги в кадр (фенотип).
 /// ok=false если декодирование или разбор не удались.
+/// ok=true гарантирует непустой валидный каркас: ни один ранний return
+/// не должен оставлять ok=true (decode выставляет его внутри себя).
 Frame develop(const Grammar gr, const Genotype g, out bool ok)
 {
     ok = false;
-    auto tokens = decode!Tok(gr, g, ok);
-    if (!ok)
+    bool decodeOk;
+    auto tokens = decode!Tok(gr, g, decodeOk);
+    if (!decodeOk)
         return Frame.init;
     Frame result;
     if (!frameFromTokens(tokens, result))
@@ -295,9 +303,9 @@ unittest
     // Декодирование сходится почти всегда; значительная доля геномов даёт
     // валидный каркас (остальные отбрасываются самокоррекцией — ссылки на
     // узлы, которых ещё нет, вырожденные балки, cross/axial вне оси).
-    // С непрерывными самплерами доля валидных ~4% (см. counter выше).
+    // С непрерывными самплерами доля валидных ~1.7% (см. counter).
     assert(decodeOk > 3000);
-    assert(valid > 150);
+    assert(valid > 50);
 
     // Кроссинговер сохраняет число генов (по одному на нетерминал).
     auto g1 = randomGenotype(gr, 8, rnd);
