@@ -1,6 +1,7 @@
 module viewer.viewer;
 
 import dagon;
+import car.car;
 import frame.frame;
 import frame.buggy;
 
@@ -39,16 +40,16 @@ class BuggyScene: Scene
         carRoot = addEntity();
         carRoot.rotation = rotationQuaternion(Vector3f(1, 0, 0), degtorad(-90.0f));
 
-        const half = buggyFrame();
-        buildFrame(half);
+        auto car = new Buggy(buggyFrame());
+        buildCar(car);
 
         auto ePlane = addEntity();
         ePlane.drawable = New!ShapePlane(10.0f, 10.0f, 1, assetManager);
     }
 
-    private void buildFrame(const Frame half)
+    private void buildCar(const Buggy car)
     {
-        const full = mirrorClosure(half);
+        const full = car.full;
 
         auto matBeam = addMaterial();
         matBeam.baseColorFactor = Color4f(0.55f, 0.55f, 0.62f, 1.0f);
@@ -86,25 +87,19 @@ class BuggyScene: Scene
             e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
         }
 
-        foreach (node; half.nodes)
+        foreach (i, nodePos; full.nodes)
         {
-            if (node.kind == AnchorKind.wheel)
+            switch (car.kinds[i])
             {
-                addWheel(node.pos);
-                if (!isOnPlane(node.pos))
-                    addWheel(mirrorX(node.pos));
-            }
-            else if (node.kind == AnchorKind.wheelDrive)
-            {
-                addDriveWheel(node.pos);
-                if (!isOnPlane(node.pos))
-                    addDriveWheel(mirrorX(node.pos));
-            }
-            else
-            {
-                addNodeSphere(node.pos, node.kind);
-                if (!isOnPlane(node.pos))
-                    addNodeSphere(mirrorX(node.pos), node.kind);
+                case AnchorKind.wheel:
+                    addWheel(nodePos);
+                    break;
+                case AnchorKind.wheelDrive:
+                    addDriveWheel(nodePos);
+                    break;
+                default:
+                    addNodeSphere(nodePos, car.kinds[i]);
+                    break;
             }
         }
     }
