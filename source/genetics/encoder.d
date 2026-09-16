@@ -317,7 +317,7 @@ unittest
     size_t beamTotal;
     foreach (_; 0 .. 200)
     {
-        auto c = cloneGenotype(genome);
+        auto c = genome.dup;
         mutate(c, 1 + uniform(0u, 3u, rnd), rnd);
         bool ok;
         auto f = develop(gr, c, ok);

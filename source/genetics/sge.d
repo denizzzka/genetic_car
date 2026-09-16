@@ -124,6 +124,17 @@ final class Genotype
     {
         genes.length = nGenes;
     }
+
+    /// Глубокая копия генома (мутация применяется к копии-кандидату).
+    Genotype dup() const
+    {
+        auto copy = new Genotype(this.genes.length);
+
+        foreach (g, ref gene; this.genes)
+            copy.genes[g] = gene.dup;
+
+        return copy;
+    }
 }
 
 version (unittest)
@@ -188,15 +199,6 @@ void mutate(Genotype genotype, size_t hits, ref Random rnd)
             pos -= gene.length;
         }
     }
-}
-
-/// Глубокая копия генома (мутация применяется к копии-кандидату).
-Genotype cloneGenotype(const Genotype src)
-{
-    auto copy = new Genotype(src.genes.length);
-    foreach (g, ref gene; src.genes)
-        copy.genes[g] = gene.dup;
-    return copy;
 }
 
 /**
