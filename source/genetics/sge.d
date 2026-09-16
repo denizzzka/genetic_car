@@ -11,7 +11,7 @@ final class Terminal(TokT) : Symbol
     TokT tok;
     SumType!(int, float) payload;
 
-    private this(TokT tok)
+    this(TokT tok)
     {
         this.tok = tok;
     }
@@ -28,8 +28,8 @@ final class Terminal(TokT) : Symbol
         payload = f;
     }
 
-    float f() const => payload.tryGet!(const float);
-    int i() const => payload.tryGet!(const int);
+    auto f() const => payload.tryGet!(const float);
+    auto i() const => payload.tryGet!(const int);
 }
 
 final class NonTerminal : Symbol
@@ -120,26 +120,28 @@ void mutate(Genotype genotype, float probability, ref Random rnd)
 /**
  * Расшифровка генома в последовательность терминалов.
  *
- * Обход дерева вывода в ширину: раскрытый нетерминал берёт следующий кодон из своего
- * гена; при исчерпании гена кодоны переиспользуются по кругу. Интроны —
- * гены символов, не встречающихся в данном дереве, — не затрагиваются и
- * передаются потомкам как есть.
+ * Обход дерева вывода в глубину: левосторонний разворот продукции, поэтому
+ * терминалы выходят в том же порядке, что и в грамматике. Раскрытый
+ * нетерминал берёт следующий кодон из своего гена; при исчерпании гена
+ * кодоны переиспользуются по кругу. Интроны — гены символов, не
+ * встречающихся в данном дереве, — не затрагиваются и передаются потомкам
+ * как есть.
  */
 Terminal!TokT[] decode(TokT)(const Grammar gr, const Genotype genotype, out bool ok)
 {
     ok = false;
 
-    Symbol[] queue;
-    queue ~= cast(NonTerminal) gr.start;
-    size_t head = 0;
+    Symbol[] stack;
+    stack ~= cast(NonTerminal) gr.start;
     size_t expansions = 0;
     enum size_t maxExpansions = 1000;
     size_t[] used = new size_t[gr.symbols.length];
 
     auto result = appender!(Terminal!TokT[])();
-    while (head < queue.length && expansions < maxExpansions)
+    while (stack.length > 0 && expansions < maxExpansions)
     {
-        auto sym = queue[head++];
+        auto sym = stack[$ - 1];
+        stack.length -= 1;
         auto nt = cast(NonTerminal) sym;
         if (nt is null)
         {
@@ -153,7 +155,9 @@ Terminal!TokT[] decode(TokT)(const Grammar gr, const Genotype genotype, out bool
         auto codon = gene[used[nt.id] % gene.length];
         ++used[nt.id];
         auto production = nt.productions[codon % nt.productions.length];
-        queue ~= production.symbols;
+
+        foreach_reverse (s; production.symbols)
+            stack ~= s;
         ++expansions;
     }
 

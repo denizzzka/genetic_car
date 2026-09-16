@@ -4,8 +4,7 @@ import dlib.math.vector;
 import frame.frame;
 import genetics.sge;
 
-/// Семантический тип терминала, по нему фенотип-билдер разбирает токены.
-enum Tok { anchor, index, coord, beamKind }
+enum Tok { refLast, refIdx, endNew, coord, radius, beamKind }
 
 private Terminal!Tok t(T)(Tok tok)
 {
@@ -24,61 +23,66 @@ private NonTerminal nt(string name, Production[] productions)
     return n;
 }
 
-private Production[] nodeListOf(NonTerminal node, NonTerminal nodeList)
+/// Маркерный токен без значения
+private Terminal!Tok marker(Tok tok)
 {
-    return [
-        new Production([node, nodeList]), // ещё узел
-        new Production([node]),           // стоп
-    ];
+    assert(tok == Tok.refLast || tok == Tok.endNew);
+
+    return new Terminal!Tok(tok);
 }
 
 /**
  * Грамматика правой половины багги.
  *
- * Сначала порождается список узлов (позиция + тип якоря), затем список балок
- * (индексы узлов, радиус, тип). Позиция x >= 0; x == 0 означает узел на
- * плоскости симметрии.
+ * Узлы отдельно не генерируются: они появляются только как концы балок.
+ * Каждая балка: старт — seed/последний созданный узел или существующий по
+ * индексу, конец — вновь создаваемый (старт + смещение) или существующий
+ * по индексу. Связность сохраняется, т.к. новые узлы прицепляются к старым.
  */
 Grammar buggyGrammar()
 {
-    auto nodeList_ = nt("nodeList", null);
     auto beamList_ = nt("beamList", null);
 
-    auto anchor = nt("anchor", [
-        new Production([t(Tok.anchor, AnchorKind.none)]),
-        new Production([t(Tok.anchor, AnchorKind.wheel)]),
-        new Production([t(Tok.anchor, AnchorKind.wheelDrive)]),
-        new Production([t(Tok.anchor, AnchorKind.motor)]),
-        new Production([t(Tok.anchor, AnchorKind.shock)]),
-        new Production([t(Tok.anchor, AnchorKind.spring)]),
-        new Production([t(Tok.anchor, AnchorKind.axle)]),
-    ]);
-
-    auto xCoord = nt("x", [
-        new Production([t(Tok.coord, 0.00f)]),  // на оси
-        new Production([t(Tok.coord, 0.50f)]),  // вправо от оси
-    ]);
-
-    auto coord = nt("coord", [
-        new Production([t(Tok.coord, -1.0f)]),
-        new Production([t(Tok.coord, -0.5f)]),
-        new Production([t(Tok.coord, 0.0f)]),
-        new Production([t(Tok.coord, 0.5f)]),
-        new Production([t(Tok.coord, 1.0f)]),
-    ]);
-
     auto idx = nt("idx", [
-        new Production([t(Tok.index, 0)]),
-        new Production([t(Tok.index, 1)]),
-        new Production([t(Tok.index, 2)]),
-        new Production([t(Tok.index, 3)]),
-        new Production([t(Tok.index, 4)]),
+        new Production([t(Tok.refIdx, 0)]),
+        new Production([t(Tok.refIdx, 1)]),
+        new Production([t(Tok.refIdx, 2)]),
+        new Production([t(Tok.refIdx, 3)]),
+        new Production([t(Tok.refIdx, 4)]),
+    ]);
+
+    auto startRef = nt("startRef", [
+        new Production([marker(Tok.refLast)]),
+        new Production([idx]),
+    ]);
+
+    auto destX = nt("destX", [
+        new Production([t(Tok.coord, 0.0f)]),
+        new Production([t(Tok.coord, 0.35f)]),
+        new Production([t(Tok.coord, 0.7f)]),
+    ]);
+
+    auto destY = nt("destY", [
+        new Production([t(Tok.coord, -0.35f)]),
+        new Production([t(Tok.coord, 0.0f)]),
+        new Production([t(Tok.coord, 0.35f)]),
+    ]);
+
+    auto destZ = nt("destZ", [
+        new Production([t(Tok.coord, 0.0f)]),
+        new Production([t(Tok.coord, 0.35f)]),
+        new Production([t(Tok.coord, 0.7f)]),
+    ]);
+
+    auto endRef = nt("endRef", [
+        new Production([marker(Tok.endNew), destX, destY, destZ]),
+        new Production([idx]),
     ]);
 
     auto radius = nt("radius", [
-        new Production([t(Tok.coord, 0.03f)]),
-        new Production([t(Tok.coord, 0.04f)]),
-        new Production([t(Tok.coord, 0.05f)]),
+        new Production([t(Tok.radius, 0.03f)]),
+        new Production([t(Tok.radius, 0.04f)]),
+        new Production([t(Tok.radius, 0.05f)]),
     ]);
 
     auto beamKind = nt("beamKind", [
@@ -87,17 +91,8 @@ Grammar buggyGrammar()
         new Production([t(Tok.beamKind, BeamKind.axial)]),
     ]);
 
-    auto node = nt("node", [
-        new Production([anchor, xCoord, coord, coord]),
-    ]);
-
-    nodeList_.productions = [
-        new Production([node, nodeList_]),
-        new Production([node]),
-    ];
-
     auto beam = nt("beam", [
-        new Production([idx, idx, radius, beamKind]),
+        new Production([startRef, endRef, radius, beamKind]),
     ]);
 
     beamList_.productions = [
@@ -106,12 +101,12 @@ Grammar buggyGrammar()
     ];
 
     auto start = nt("frame", [
-        new Production([nodeList_, beamList_]),
+        new Production([beamList_]),
     ]);
 
     auto symbols = [
-        start, nodeList_, node, anchor, xCoord, coord,
-        idx, radius, beamKind, beam, beamList_,
+        start, beamList_, beam, startRef, idx,
+        endRef, destX, destY, destZ, radius, beamKind,
     ];
     return new Grammar(start, symbols);
 }
@@ -119,45 +114,76 @@ Grammar buggyGrammar()
 /**
  * Разобрать терминалы в правую половину каркаса.
  *
- * Возвращает false, если структура токенов не сошлась: в узле должны быть
- * x, y, z, в балке — две индекса, радиус и тип.
+ * Создаётся seed-узел, затем балки по порядку. Токены `refLast` ссылаются
+ * на последний созданный узел, `refIdx` — на существующий по номеру,
+ * `endNew` (со смещениями) создаёт новый узел на позиции старта + смещение.
  */
 bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
 {
     result = Frame.init;
+
+    result.nodes ~= Node(vec3(0.0f, 0.0f, 0.0f));
+    size_t last = 0;
+
     size_t i = 0;
     while (i < tokens.length)
     {
+        size_t start;
         switch (tokens[i].tok)
         {
-            case Tok.anchor:
+            case Tok.refLast:
+                start = last;
+                ++i;
+                break;
+            case Tok.refIdx:
+                start = tokens[i].i;
+                if (start >= result.nodes.length)
+                    return false;
+                ++i;
+                break;
+            default:
+                return false;
+        }
+
+        size_t end;
+        switch (tokens[i].tok)
+        {
+            case Tok.endNew:
                 if (i + 3 >= tokens.length)
                     return false;
                 if (tokens[i + 1].tok != Tok.coord
                     || tokens[i + 2].tok != Tok.coord
                     || tokens[i + 3].tok != Tok.coord)
                     return false;
-                auto x = tokens[i + 1].f;
-                auto y = tokens[i + 2].f;
-                auto z = tokens[i + 3].f;
-                result.nodes ~= Node(vec3(x, y, z),
-                    cast(AnchorKind) tokens[i].i);
+                auto dx = tokens[i + 1].f;
+                auto dy = tokens[i + 2].f;
+                auto dz = tokens[i + 3].f;
+                result.nodes ~= Node(result.nodes[start].pos + vec3(dx, dy, dz));
+                end = result.nodes.length - 1;
+                last = end;
                 i += 4;
                 break;
-            case Tok.index:
-                if (i + 3 >= tokens.length)
+            case Tok.refIdx:
+                end = tokens[i].i;
+                if (end >= result.nodes.length)
                     return false;
-                if (tokens[i + 1].tok != Tok.index
-                    || tokens[i + 2].tok != Tok.coord
-                    || tokens[i + 3].tok != Tok.beamKind)
-                    return false;
-                result.beams ~= Beam(tokens[i].i, tokens[i + 1].i,
-                    tokens[i + 2].f, cast(BeamKind) tokens[i + 3].i);
-                i += 4;
+                ++i;
                 break;
             default:
                 return false;
         }
+
+        if (tokens[i].tok != Tok.radius)
+            return false;
+        auto radius = tokens[i].f;
+        ++i;
+
+        if (tokens[i].tok != Tok.beamKind)
+            return false;
+        auto beamKind = cast(BeamKind) tokens[i].i;
+        ++i;
+
+        result.beams ~= Beam(start, end, radius, beamKind);
     }
     return true;
 }
@@ -256,10 +282,11 @@ unittest
         }
     }
 
-    // Декодирование сходится почти всегда; случайная грамматика даёт и
-    // валидные (связные) каркасы.
+    // Декодирование сходится почти всегда; значительная доля геномов даёт
+    // валидный каркас (остальные отбрасываются самокоррекцией — ссылки на
+    // узлы, которых ещё нет, или вырожденные балки).
     assert(decodeOk > 3000);
-    assert(valid > 0);
+    assert(valid > 500);
 
     // Кроссинговер сохраняет число генов (по одному на нетерминал).
     auto g1 = randomGenotype(gr, 8, rnd);
