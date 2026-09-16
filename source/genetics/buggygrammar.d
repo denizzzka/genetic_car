@@ -1,5 +1,6 @@
 module genetics.buggygrammar;
 
+import std.math;
 import dlib.math.vector;
 import frame.frame;
 import genetics.sge;
@@ -202,6 +203,27 @@ bool isValidFrame(const Frame f)
         const pb = f.nodes[b.b].pos;
         if (b.a == b.b || distance(pa, pb) < 1e-4f)
             return false;
+
+        const aOnPlane = isOnPlane(pa);
+        const bOnPlane = isOnPlane(pb);
+        final switch (b.kind)
+        {
+            case BeamKind.normal:
+                break;
+            case BeamKind.cross:
+                // Правый узел (вне плоскости) к осевому (x == 0),
+                // на тех же y, z — иначе mirrorClosure упадёт.
+                if (aOnPlane == bOnPlane)
+                    return false;
+                if (!isClose(pa.y, pb.y) || !isClose(pa.z, pb.z))
+                    return false;
+                break;
+            case BeamKind.axial:
+                // Оба конца на оси симметрии.
+                if (!aOnPlane || !bOnPlane)
+                    return false;
+                break;
+        }
     }
 
     bool[] visited = new bool[f.nodes.length];
@@ -284,9 +306,9 @@ unittest
 
     // Декодирование сходится почти всегда; значительная доля геномов даёт
     // валидный каркас (остальные отбрасываются самокоррекцией — ссылки на
-    // узлы, которых ещё нет, или вырожденные балки).
+    // узлы, которых ещё нет, вырожденные балки, cross/axial вне оси).
     assert(decodeOk > 3000);
-    assert(valid > 500);
+    assert(valid > 250);
 
     // Кроссинговер сохраняет число генов (по одному на нетерминал).
     auto g1 = randomGenotype(gr, 8, rnd);
