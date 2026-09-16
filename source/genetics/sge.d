@@ -5,16 +5,13 @@ import std.random;
 
 abstract class Symbol {}
 
-/// Семантический тип терминала, по нему фенотип-билдер разбирает токены.
-enum Tok { anchor, index, coord, beamKind }
-
-final class Terminal : Symbol
+final class Terminal(TokT) : Symbol
 {
-    Tok tok;
+    TokT tok;
     int i;
     float f;
 
-    this(Tok tok, int i = 0, float f = 0)
+    this(TokT tok, int i = 0, float f = 0)
     {
         this.tok = tok;
         this.i = i;
@@ -114,7 +111,7 @@ void mutate(Genotype genotype, float probability, ref Random rnd)
  * гены символов, не встречающихся в данном дереве, — не затрагиваются и
  * передаются потомкам как есть.
  */
-Terminal[] decode(const Grammar gr, const Genotype genotype, out bool ok)
+Terminal!TokT[] decode(TokT)(const Grammar gr, const Genotype genotype, out bool ok)
 {
     ok = false;
 
@@ -125,14 +122,14 @@ Terminal[] decode(const Grammar gr, const Genotype genotype, out bool ok)
     enum size_t maxExpansions = 1000;
     size_t[] used = new size_t[gr.symbols.length];
 
-    auto result = appender!(Terminal[])();
+    auto result = appender!(Terminal!TokT[])();
     while (head < queue.length && expansions < maxExpansions)
     {
         auto sym = queue[head++];
         auto nt = cast(NonTerminal) sym;
         if (nt is null)
         {
-            result.put(cast(Terminal) sym);
+            result.put(cast(Terminal!TokT) sym);
             continue;
         }
 

@@ -4,9 +4,12 @@ import dlib.math.vector;
 import frame.frame;
 import genetics.sge;
 
-private Terminal t(Tok tok, int i = 0, float f = 0)
+/// Семантический тип терминала, по нему фенотип-билдер разбирает токены.
+enum Tok { anchor, index, coord, beamKind }
+
+private Terminal!Tok t(Tok tok, int i = 0, float f = 0)
 {
-    return new Terminal(tok, i, f);
+    return new Terminal!Tok(tok, i, f);
 }
 
 private NonTerminal nt(string name, Production[] productions)
@@ -114,7 +117,7 @@ Grammar buggyGrammar()
  * Возвращает false, если структура токенов не сошлась: в узле должны быть
  * x, y, z, в балке — две индекса, радиус и тип.
  */
-bool frameFromTokens(const Terminal[] tokens, out Frame result)
+bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
 {
     result = Frame.init;
     size_t i = 0;
@@ -204,7 +207,7 @@ bool isValidFrame(const Frame f)
 Frame develop(const Grammar gr, const Genotype g, out bool ok)
 {
     ok = false;
-    auto tokens = decode(gr, g, ok);
+    auto tokens = decode!Tok(gr, g, ok);
     if (!ok)
         return Frame.init;
     Frame result;
@@ -230,7 +233,7 @@ unittest
         assert(g.genes.length == gr.symbols.length);
 
         bool ok;
-        auto tokens = decode(gr, g, ok);
+        auto tokens = decode!Tok(gr, g, ok);
         if (!ok)
             continue;
         ++decodeOk;
