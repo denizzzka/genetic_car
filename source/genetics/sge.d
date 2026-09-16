@@ -163,6 +163,15 @@ void mutate(Genotype genotype, float probability, ref Random rnd)
                 codon = uniform(0u, uint.max, rnd);
 }
 
+/// Глубокая копия генома (мутация применяется к копии-кандидату).
+Genotype cloneGenotype(const Genotype src)
+{
+    auto copy = new Genotype(src.genes.length);
+    foreach (g, ref gene; src.genes)
+        copy.genes[g] = gene.dup;
+    return copy;
+}
+
 /**
  * Расшифровка генома в последовательность терминалов.
  *
