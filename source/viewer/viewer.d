@@ -1,9 +1,13 @@
 module viewer.viewer;
 
 import dagon;
+import dagon.core.keycodes;
+import dagon.core.time;
+import std.random;
 import car.car;
 import frame.frame;
 import frame.buggy;
+import genetics;
 
 class BuggyScene: Scene
 {
@@ -21,8 +25,16 @@ class BuggyScene: Scene
 
     Entity carRoot;
 
+    Grammar grammar;
+    Random rnd;
+    Buggy current;
+
     override void afterLoad()
     {
+        eventManager.trackUpDownState = true;
+        grammar = buggyGrammar();
+        rnd = Random(unpredictableSeed);
+
         auto camera = addCamera();
         auto freeview = New!FreeviewComponent(eventManager, camera);
         freeview.setZoom(4.0f);
@@ -42,9 +54,42 @@ class BuggyScene: Scene
 
         auto car = new Buggy(buggyFrame());
         buildCar(car);
+        current = car;
 
         auto ePlane = addEntity();
         ePlane.drawable = New!ShapePlane(10.0f, 10.0f, 1, assetManager);
+    }
+
+    override void update(Time t)
+    {
+        super.update(t);
+
+        if (eventManager.keyDown[KEY_R])
+        {
+            removeCar();
+            current = new Buggy(buggyFrame());
+            buildCar(current);
+        }
+        else if (eventManager.keyDown[KEY_M])
+        {
+            auto g = randomGenotype(grammar, 8, rnd);
+            mutate(g, 0.05f, rnd);
+
+            bool ok;
+            auto f = develop(grammar, g, ok);
+            if (ok)
+            {
+                removeCar();
+                current = new Buggy(f);
+                buildCar(current);
+            }
+        }
+    }
+
+    private void removeCar()
+    {
+        foreach (e; carRoot.children)
+            removeEntity(e);
     }
 
     private void buildCar(const Buggy car)
