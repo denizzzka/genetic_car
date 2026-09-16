@@ -241,9 +241,8 @@ unittest
     auto gt = encodeTokens(gr, tokens);
     assert(gt.genes.length == gr.symbols.length);
 
-    bool ok;
-    auto decoded = decode!Tok(gr, gt, ok);
-    assert(ok, "decode must succeed");
+    auto decoded = decode!Tok(gr, gt);
+    assert(decoded !is null, "decode must succeed");
     assert(decoded.length == tokens.length);
 
     Frame f2;
@@ -306,6 +305,7 @@ unittest
 {
     import frame.buggy : buggyFrame;
     import std.random;
+    import std.typecons : Nullable;
 
     auto gr = buggyGrammar();
     auto genome = encodeFrame(gr, buggyFrame());
@@ -319,12 +319,11 @@ unittest
     {
         auto c = genome.dup;
         mutate(c, 1 + uniform(0u, 3u, rnd), rnd);
-        bool ok;
-        auto f = develop(gr, c, ok);
-        if (!ok)
+        auto may = develop(gr, c);
+        if (may.isNull)
             continue;
         ++okCount;
-        beamTotal += f.beams.length;
+        beamTotal += may.get.beams.length;
     }
 
     assert(okCount > 100, "большинство точечных мутаций должны развиваться в валидный каркас");

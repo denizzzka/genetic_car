@@ -1,6 +1,7 @@
 module genetics.buggygrammar;
 
 import std.math;
+import std.typecons: Nullable;
 import dlib.math.vector;
 import frame.frame;
 import genetics.sge;
@@ -249,23 +250,19 @@ bool isValidFrame(const Frame f)
 }
 
 /// Расшифровать геном из грамматики багги в кадр (фенотип).
-/// ok=false если декодирование или разбор не удались.
-/// ok=true гарантирует непустой валидный каркас: ни один ранний return
-/// не должен оставлять ok=true (decode выставляет его внутри себя).
-Frame develop(const Grammar gr, const Genotype g, out bool ok)
+/// Значение-результат сам говорит об успехе: `Nullable!Frame.isNull`
+/// означает, что декодирование, разбор или валидация не прошли.
+Nullable!Frame develop(const Grammar gr, const Genotype g)
 {
-    ok = false;
-    bool decodeOk;
-    auto tokens = decode!Tok(gr, g, decodeOk);
-    if (!decodeOk)
-        return Frame.init;
+    auto tokens = decode!Tok(gr, g);
+    if (tokens is null)
+        return Nullable!Frame.init;
     Frame result;
     if (!frameFromTokens(tokens, result))
-        return Frame.init;
+        return Nullable!Frame.init;
     if (!isValidFrame(result))
-        return Frame.init;
-    ok = true;
-    return result;
+        return Nullable!Frame.init;
+    return Nullable!Frame(result);
 }
 
 unittest
@@ -281,9 +278,8 @@ unittest
         auto g = randomGenotype(gr, 8, rnd);
         assert(g.genes.length == gr.symbols.length);
 
-        bool ok;
-        auto tokens = decode!Tok(gr, g, ok);
-        if (!ok)
+        auto tokens = decode!Tok(gr, g);
+        if (tokens is null)
             continue;
         ++decodeOk;
         assert(tokens.length > 0);

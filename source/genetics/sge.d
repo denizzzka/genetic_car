@@ -125,7 +125,7 @@ final class Genotype
         genes.length = nGenes;
     }
 
-    /// Глубокая копия генома (мутация применяется к копии-кандидату).
+    /// Глубокая копия генома
     Genotype dup() const
     {
         auto copy = new Genotype(this.genes.length);
@@ -210,11 +210,12 @@ void mutate(Genotype genotype, size_t hits, ref Random rnd)
  * кодоны переиспользуются по кругу. Интроны — гены символов, не
  * встречающихся в данном дереве, — не затрагиваются и передаются потомкам
  * как есть.
+ *
+ * Возвращает null, если декодирование невозможно (пустой ген, слишком
+ * много развёрток); сам результат выступает признаком успеха.
  */
-Terminal!TokT[] decode(TokT)(const Grammar gr, const Genotype genotype, out bool ok)
+Terminal!TokT[] decode(TokT)(const Grammar gr, const Genotype genotype)
 {
-    ok = false;
-
     Symbol[] stack;
     stack ~= cast(NonTerminal) gr.start;
     size_t expansions = 0;
@@ -260,7 +261,6 @@ Terminal!TokT[] decode(TokT)(const Grammar gr, const Genotype genotype, out bool
     if (expansions >= maxExpansions)
         return null;
 
-    ok = true;
     return result.data;
 }
 

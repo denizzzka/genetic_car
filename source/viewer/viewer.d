@@ -4,6 +4,7 @@ import dagon;
 import dagon.core.keycodes;
 import dagon.core.time;
 import std.random;
+import std.typecons : Nullable;
 import car.car;
 import frame.frame;
 import frame.buggy;
@@ -64,10 +65,9 @@ class BuggyScene: Scene
 
     private Frame currentFrame()
     {
-        bool ok;
-        auto f = develop(grammar, currentGenome, ok);
-        assert(ok, "encoded buggy frame must develop");
-        return f;
+        auto may = develop(grammar, currentGenome);
+        assert(!may.isNull, "encoded buggy frame must develop");
+        return may.get;
     }
 
     override void update(Time t)
@@ -91,9 +91,13 @@ class BuggyScene: Scene
             {
                 candidate = currentGenome.dup;
                 mutate(candidate, 1 + uniform(0u, 3u, rnd), rnd);
-                f = develop(grammar, candidate, ok);
-                if (ok)
+                auto may = develop(grammar, candidate);
+                if (!may.isNull)
+                {
+                    f = may.get;
+                    ok = true;
                     break;
+                }
             }
             if (ok)
             {
