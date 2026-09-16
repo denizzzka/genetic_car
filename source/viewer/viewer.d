@@ -72,11 +72,16 @@ class BuggyScene: Scene
         }
         else if (eventManager.keyDown[KEY_M])
         {
-            auto g = randomGenotype(grammar, 8, rnd);
-            mutate(g, 0.05f, rnd);
-
             bool ok;
-            auto f = develop(grammar, g, ok);
+            Frame f;
+            foreach (_; 0 .. 100)
+            {
+                auto g = randomGenotype(grammar, 8, rnd);
+                mutate(g, 0.05f, rnd);
+                f = develop(grammar, g, ok);
+                if (ok)
+                    break;
+            }
             if (ok)
             {
                 removeCar();
