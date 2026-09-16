@@ -298,6 +298,37 @@ unittest
     }
 
     auto rnd = Random(1);
-    mutate(gt, 0.05f, rnd);
+    mutate(gt, 1, rnd);
     assert(gt.genes.length == gr.symbols.length);
+}
+
+unittest
+{
+    import frame.buggy : buggyFrame;
+    import std.random;
+
+    auto gr = buggyGrammar();
+    auto genome = encodeFrame(gr, buggyFrame());
+    auto rnd = Random(3);
+
+    // Мутация малого числа кодонов (1-3) в подавляющем большинстве случаев
+    // должна оставаться валидной и не разрушать каркас целиком.
+    size_t okCount;
+    size_t beamTotal;
+    foreach (_; 0 .. 200)
+    {
+        auto c = cloneGenotype(genome);
+        mutate(c, 1 + uniform(0u, 3u, rnd), rnd);
+        bool ok;
+        auto f = develop(gr, c, ok);
+        if (!ok)
+            continue;
+        ++okCount;
+        beamTotal += f.beams.length;
+    }
+
+    assert(okCount > 100, "большинство точечных мутаций должны развиваться в валидный каркас");
+    const avg = beamTotal / okCount;
+    assert(avg >= 10 && avg <= 70,
+        "одна мутация не должна обрушивать или раздувать каркас");
 }

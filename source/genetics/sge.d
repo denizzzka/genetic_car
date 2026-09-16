@@ -155,12 +155,39 @@ Genotype crossover(const Genotype a, const Genotype b, ref Random rnd)
     return child;
 }
 
-void mutate(Genotype genotype, float probability, ref Random rnd)
+/**
+ * Мутирует геном: переворачивает ровно `hits` случайно выбранных кодонов.
+ *
+ * Вероятностная мутация каждого кодона при сотнях кодонов в геноме давала
+ * бы десятки правок за нажатие и каскадно разрушала структуру: ген
+ * `beamList` кодирует длину цепочки балок, и один флип "продолжить"->"конец"
+ * обрывает почти всю раму. Фиксированное число правок делает одну мутацию
+ * умеренным изменением фенотипа.
+ */
+void mutate(Genotype genotype, size_t hits, ref Random rnd)
 {
-    foreach (ref gene; genotype.genes)
-        foreach (ref codon; gene)
-            if (uniform(0.0f, 1.0f, rnd) < probability)
-                codon = uniform(0u, uint.max, rnd);
+    if (hits == 0)
+        return;
+
+    size_t total;
+    foreach (gene; genotype.genes)
+        total += gene.length;
+    if (total == 0)
+        return;
+
+    foreach (_; 0 .. hits)
+    {
+        auto pos = uniform(0, total, rnd);
+        foreach (ref gene; genotype.genes)
+        {
+            if (pos < gene.length)
+            {
+                gene[pos] = uniform(0u, uint.max, rnd);
+                break;
+            }
+            pos -= gene.length;
+        }
+    }
 }
 
 /// Глубокая копия генома (мутация применяется к копии-кандидату).
@@ -233,4 +260,33 @@ Terminal!TokT[] decode(TokT)(const Grammar gr, const Genotype genotype, out bool
 
     ok = true;
     return result.data;
+}
+
+unittest
+{
+    import std.random : Random;
+
+    auto g = new Genotype(3);
+    g.genes = [[5u, 5u], [5u, 5u, 5u], [5u, 5u, 5u, 5u]];
+    auto g0 = new Genotype(3);
+    foreach (i, ref gene; g.genes)
+        g0.genes[i] = gene.dup;
+
+    auto rnd = Random(1);
+    mutate(g, 4, rnd);
+
+    size_t diffs;
+    foreach (i, ref gene; g.genes)
+        foreach (j, codon; gene)
+            if (codon != g0.genes[i][j])
+                ++diffs;
+    assert(diffs == 4, "mutate должен менять ровно hits кодонов");
+
+    mutate(g, 0, rnd);
+    size_t diffs0;
+    foreach (i, ref gene; g.genes)
+        foreach (j, codon; gene)
+            if (codon != g0.genes[i][j])
+                ++diffs0;
+    assert(diffs0 == 4, "mutate с hits == 0 ничего не меняет");
 }

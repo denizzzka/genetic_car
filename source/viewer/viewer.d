@@ -90,7 +90,7 @@ class BuggyScene: Scene
             foreach (_; 0 .. 100)
             {
                 candidate = cloneGenotype(currentGenome);
-                mutate(candidate, 0.05f, rnd);
+                mutate(candidate, 1 + uniform(0u, 3u, rnd), rnd);
                 f = develop(grammar, candidate, ok);
                 if (ok)
                     break;
