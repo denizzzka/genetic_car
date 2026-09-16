@@ -34,7 +34,7 @@ final class Terminal(TokT) : Symbol
 
 final class NonTerminal : Symbol
 {
-    string name;
+    immutable string name;
     size_t id;
     Production[] productions;
 
