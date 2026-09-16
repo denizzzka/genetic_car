@@ -2,21 +2,34 @@ module genetics.sge;
 
 import std.array : appender;
 import std.random;
+import std.sumtype;
 
 abstract class Symbol {}
 
 final class Terminal(TokT) : Symbol
 {
     TokT tok;
-    int i;
-    float f;
+    SumType!(int, float) payload;
 
-    this(TokT tok, int i = 0, float f = 0)
+    private this(TokT tok)
     {
         this.tok = tok;
-        this.i = i;
-        this.f = f;
     }
+
+    this(TokT tok, int i)
+    {
+        this(tok);
+        payload = i;
+    }
+
+    this(TokT tok, float f)
+    {
+        this(tok);
+        payload = f;
+    }
+
+    auto f() const => payload.tryGet!(const float);
+    auto i() const => payload.tryGet!(const int);
 }
 
 final class NonTerminal : Symbol

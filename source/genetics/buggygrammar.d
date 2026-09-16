@@ -7,9 +7,14 @@ import genetics.sge;
 /// Семантический тип терминала, по нему фенотип-билдер разбирает токены.
 enum Tok { anchor, index, coord, beamKind }
 
-private Terminal!Tok t(Tok tok, int i = 0, float f = 0)
+private Terminal!Tok t(T)(Tok tok)
 {
-    return new Terminal!Tok(tok, i, f);
+    return new Terminal!Tok(tok);
+}
+
+private Terminal!Tok t(T)(Tok tok, T val)
+{
+    return new Terminal!Tok(tok, val);
 }
 
 private NonTerminal nt(string name, Production[] productions)
@@ -50,16 +55,16 @@ Grammar buggyGrammar()
     ]);
 
     auto xCoord = nt("x", [
-        new Production([t(Tok.coord, 0, 0.00f)]),  // на оси
-        new Production([t(Tok.coord, 0, 0.50f)]),  // вправо от оси
+        new Production([t(Tok.coord, 0.00f)]),  // на оси
+        new Production([t(Tok.coord, 0.50f)]),  // вправо от оси
     ]);
 
     auto coord = nt("coord", [
-        new Production([t(Tok.coord, 0, -1.0f)]),
-        new Production([t(Tok.coord, 0, -0.5f)]),
-        new Production([t(Tok.coord, 0, 0.0f)]),
-        new Production([t(Tok.coord, 0, 0.5f)]),
-        new Production([t(Tok.coord, 0, 1.0f)]),
+        new Production([t(Tok.coord, -1.0f)]),
+        new Production([t(Tok.coord, -0.5f)]),
+        new Production([t(Tok.coord, 0.0f)]),
+        new Production([t(Tok.coord, 0.5f)]),
+        new Production([t(Tok.coord, 1.0f)]),
     ]);
 
     auto idx = nt("idx", [
@@ -71,9 +76,9 @@ Grammar buggyGrammar()
     ]);
 
     auto radius = nt("radius", [
-        new Production([t(Tok.coord, 0, 0.03f)]),
-        new Production([t(Tok.coord, 0, 0.04f)]),
-        new Production([t(Tok.coord, 0, 0.05f)]),
+        new Production([t(Tok.coord, 0.03f)]),
+        new Production([t(Tok.coord, 0.04f)]),
+        new Production([t(Tok.coord, 0.05f)]),
     ]);
 
     auto beamKind = nt("beamKind", [
