@@ -28,8 +28,8 @@ final class Terminal(TokT) : Symbol
         payload = f;
     }
 
-    auto f() const => payload.tryGet!(const float);
-    auto i() const => payload.tryGet!(const int);
+    float f() const => payload.tryGet!(const float);
+    int i() const => payload.tryGet!(const int);
 }
 
 final class NonTerminal : Symbol
