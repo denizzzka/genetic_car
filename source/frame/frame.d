@@ -154,7 +154,7 @@ FullFrame mirrorClosure(const Frame frame)
                 {
                     const pa = frame.nodes[beam.a].pos;
                     const pb = frame.nodes[beam.b].pos;
-                    assert(approxEqual(pa.y, pb.y) && approxEqual(pa.z, pb.z),
+                    assert(isClose(pa.y, pb.y) && isClose(pa.z, pb.z),
                         "cross-балка должна быть перпендикулярна плоскости x == 0");
                     full.beams ~= FullBeam(full.right[beam.a], full.left[beam.a],
                         beam.radius, BeamKind.cross);
@@ -218,8 +218,6 @@ bool isSymmetric(const FullFrame full)
 
 unittest
 {
-    import std.math : approxEqual;
-
     // Узлы половины: два колесных якоря справа, момент на оси, свободный узел.
     Frame frame;
     frame.nodes = [
