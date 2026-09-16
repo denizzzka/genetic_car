@@ -204,6 +204,7 @@ bool isValidFrame(const Frame f)
         if (b.a == b.b || distance(pa, pb) < 1e-4f)
             return false;
 
+        //TODO: Возможно надо переключать тип балкиесли она перестала удовлетворять критериям типа
         const aOnPlane = isOnPlane(pa);
         const bOnPlane = isOnPlane(pb);
         final switch (b.kind)
