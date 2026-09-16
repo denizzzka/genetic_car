@@ -83,6 +83,7 @@ final class Genotype
     }
 }
 
+version(unittest)
 Genotype randomGenotype(const Grammar gr, size_t maxGeneLength, ref Random rnd)
 {
     auto genotype = new Genotype(gr.symbols.length);
