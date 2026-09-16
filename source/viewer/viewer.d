@@ -106,22 +106,19 @@ class BuggyScene: Scene
     }
 
     /// Компенсирующее смещение, приводящее каркас к началу координат.
-    /// Только по Y и Z: сдвиг по X сломал бы плоскость симметрии x == 0,
-    /// а полный каркас (с зеркалом) и так симметричен относительно неё.
+    /// Сдвиг по X безопасен: полный каркас симметричен относительно
+    /// x == 0, а смещение всей конструкции не нарушает этой симметрии.
     private vec3 centerOffset(const Frame f)
     {
         vec3 c = vec3(0.0f);
+
         foreach (n; f.nodes)
-        {
-            c.y += n.pos.y;
-            c.z += n.pos.z;
-        }
+            c += n.pos;
+
         if (f.nodes.length > 0)
-        {
-            c.y /= f.nodes.length;
-            c.z /= f.nodes.length;
-        }
-        return vec3(0.0f, -c.y, -c.z);
+            c /= f.nodes.length;
+
+        return -c;
     }
 
     private void removeCar()
