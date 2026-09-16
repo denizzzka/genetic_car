@@ -34,7 +34,7 @@ class BuggyScene: Scene
     {
         eventManager.trackUpDownState = true;
         grammar = buggyGrammar();
-        rnd = Random(unpredictableSeed);
+        rnd = Random(42);
 
         auto camera = addCamera();
         auto freeview = New!FreeviewComponent(eventManager, camera);
