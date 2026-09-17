@@ -8,11 +8,8 @@ import frame.frame;
 /// геометрию вместе с якорями. Позже сюда добавим физику.
 class Buggy
 {
-    /// Полный каркас: узлы (позиции), балки, соответствие правых/осевых.
+    /// Полный каркас: узлы (позиции), балки, якоря, соответствие правых/осевых.
     FullFrame full;
-
-    /// Якоря полного каркаса, выровнены с `full.nodes`.
-    AnchorKind[] kinds;
 
     /// Смещение отображения, приводящее каркас к началу координат.
     /// Не меняет геометрию, применяется только при отрисовке.
@@ -22,13 +19,5 @@ class Buggy
     {
         this.offset = offset;
         full = mirrorClosure(half);
-
-        kinds.length = full.nodes.length;
-        foreach (i, node; half.nodes)
-        {
-            kinds[full.right[i]] = node.kind;
-            kinds[full.left[i]] = node.kind;
-        }
     }
 }
-

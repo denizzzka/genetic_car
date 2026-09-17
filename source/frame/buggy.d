@@ -9,15 +9,20 @@ Frame buggyFrame()
 {
     Frame f;
 
-    size_t node(vec3 pos, AnchorKind kind = AnchorKind.none)
+    size_t node(vec3 pos)
     {
-        f.nodes ~= Node(pos, kind);
+        f.nodes ~= Node(pos);
         return f.nodes.length - 1;
     }
 
     void beam(size_t a, size_t b, float radius = 0.04f, BeamKind kind = BeamKind.normal)
     {
         f.beams ~= Beam(a, b, radius, kind);
+    }
+
+    void anchor(size_t nodeIdx, AnchorKind kind)
+    {
+        f.anchors ~= Anchor(nodeIdx, kind);
     }
 
     const railBack = node(vec3(0.50f, -1.10f, 0.18f));
@@ -32,19 +37,22 @@ Frame buggyFrame()
     const dashTop = node(vec3(0.44f, 0.72f, 0.35f));
     const noseTop = node(vec3(0.46f, 0.95f, 0.30f));
 
-    const wheelRear = node(vec3(0.72f, -0.95f, 0.10f), AnchorKind.wheelDrive);
-    const wheelFront = node(vec3(0.72f, 0.75f, 0.10f), AnchorKind.wheel);
-    const shockFront = node(vec3(0.55f, 0.80f, 0.60f), AnchorKind.shock);
-    const shockRear = node(vec3(0.55f, -0.80f, 0.70f), AnchorKind.shock);
-    const springFront = node(vec3(0.60f, 0.82f, 0.12f), AnchorKind.spring);
-    const springRear = node(vec3(0.60f, -0.82f, 0.12f), AnchorKind.spring);
-    const motor = node(vec3(0.00f, -0.05f, 0.50f), AnchorKind.motor);
-    const axle = node(vec3(0.00f, -0.70f, 0.15f), AnchorKind.axle);
+    const wheelRear = node(vec3(0.72f, -0.95f, 0.10f));
+    const wheelFront = node(vec3(0.72f, 0.75f, 0.10f));
+    const shockFront = node(vec3(0.55f, 0.80f, 0.60f));
+    const shockRear = node(vec3(0.55f, -0.80f, 0.70f));
+    const springFront = node(vec3(0.60f, 0.82f, 0.12f));
+    const springRear = node(vec3(0.60f, -0.82f, 0.12f));
+    const motor = node(vec3(0.00f, -0.05f, 0.50f));
+    const axle = node(vec3(0.00f, -0.70f, 0.15f));
 
     const floorMid = node(vec3(0.00f, -0.35f, 0.18f));
     const floorFront = node(vec3(0.00f, 0.55f, 0.18f));
     const floorRail = node(vec3(0.00f, 0.05f, 0.18f));
     const roofCenter = node(vec3(0.00f, -0.10f, 1.02f));
+
+    anchor(wheelRear, AnchorKind.motorWheel);
+    anchor(wheelFront, AnchorKind.wheel);
 
     const railRadius = 0.05f;
     const cageRadius = 0.045f;
@@ -105,7 +113,7 @@ Frame buggyFrame()
 
 size_t anchorCount(const Frame f)
 {
-    return f.nodes.filter!(n => n.kind != AnchorKind.none).walkLength();
+    return f.anchors.length;
 }
 
 size_t planeNodeCount(const Frame f)
@@ -119,11 +127,12 @@ unittest
 
     assert(f.nodes.length > 10);
     assert(f.beams.length > 10);
-    assert(anchorCount(f) >= 6);
+    assert(f.anchors.length == 2);
 
     const full = mirrorClosure(f);
     assert(isSymmetric(full));
     assert(full.nodes.length == 2 * f.nodes.length - planeNodeCount(f));
     assert(full.totalBeamLength > 0.0f);
+    // Оба якоря на правых узлах (x > 0) -> по 2 зеркальных = 4.
+    assert(full.anchors.length == 4);
 }
-

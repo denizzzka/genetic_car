@@ -19,17 +19,25 @@ import dlib.math.vector;
 /// Полуось: узел считается лежащим на плоскости симметрии.
 enum float planeEpsilon = 1e-4f;
 
-/**
- * Что крепится в точке каркаса.
- * `none` — свободный (эволюционируемый) структурный узел.
- */
-enum AnchorKind { none, wheel, wheelDrive, motor, shock, spring, axle }
+/// Тип якоря (колеса).
+/// Колёса сделаны отдельными Anchor, а не общими "шарнирами", потому что
+/// более общие шарниры не позволяют применять оптимизации в физическом
+/// движке: специализированные контактные модели, расчёт трения качения,
+/// крутящего момента и т.д. недоступны для универсальных шарниров.
+enum AnchorKind { wheel, motorWheel }
 
 /// Узел правой половины каркаса. `pos.x >= 0`; `pos.x == 0` — узел на оси симметрии.
 struct Node
 {
     vec3 pos;
-    AnchorKind kind = AnchorKind.none;
+}
+
+/// Якорь (колесо), прикреплённый к узлу по индексу.
+/// Хранится на том же уровне иерархии, что и `Beam`.
+struct Anchor
+{
+    size_t node;
+    AnchorKind kind;
 }
 
 /// Тип балки.
@@ -60,6 +68,7 @@ struct Frame
 {
     Node[] nodes;
     Beam[] beams;
+    Anchor[] anchors;
 }
 
 /// Балка уже развёрнутого полного каркаса.
@@ -80,6 +89,8 @@ struct FullFrame
     /// index половины -> индекс левого узла в `nodes` (== `right` для осевых).
     size_t[] left;
     FullBeam[] beams;
+    /// Якоря (колёса), развёрнутые зеркальным замыканием.
+    Anchor[] anchors;
 
     /// Суммарная длина всех балок полного каркаса (приближение массы).
     @property float totalBeamLength() const
@@ -115,6 +126,9 @@ bool isOnPlane(const vec3 p)
  * одна прямая труба `(x,y,z) -> (-x,y,z)`, проходящая сквозь плоскость.
  *
  * Axial-балка целиком лежит на оси симметрии (оба узла с `x == 0`).
+ *
+ * Якоря (колёса) разворачиваются аналогично: якорь на осевом узле
+ * остаётся один, на правом — дублируется зеркально.
  */
 FullFrame mirrorClosure(const Frame frame)
 {
@@ -175,6 +189,16 @@ FullFrame mirrorClosure(const Frame frame)
         }
     }
 
+    foreach (anchor; frame.anchors)
+    {
+        const fullIdx = full.right[anchor.node];
+        const mirrorIdx = full.left[anchor.node];
+
+        full.anchors ~= Anchor(fullIdx, anchor.kind);
+        if (fullIdx != mirrorIdx)
+            full.anchors ~= Anchor(mirrorIdx, anchor.kind);
+    }
+
     return full;
 }
 
@@ -221,13 +245,17 @@ unittest
     // Узлы половины: два колесных якоря справа, момент на оси, свободный узел.
     Frame frame;
     frame.nodes = [
-        Node(vec3(0.6f,  1.0f, 0.3f), AnchorKind.wheel),  // переднее правое колесо
-        Node(vec3(0.6f, -1.0f, 0.3f), AnchorKind.wheel),  // заднее правое колесо
-        Node(vec3(0.0f,  0.0f, 0.5f), AnchorKind.motor),  // мотор на оси
-        Node(vec3(0.3f,  0.0f, 0.9f), AnchorKind.spring), // свободно, x > 0
+        Node(vec3(0.6f,  1.0f, 0.3f)),  // переднее правое колесо
+        Node(vec3(0.6f, -1.0f, 0.3f)),  // заднее правое колесо
+        Node(vec3(0.0f,  0.0f, 0.5f)),  // мотор на оси
+        Node(vec3(0.3f,  0.0f, 0.9f)),  // свободно, x > 0
+    ];
+    frame.anchors = [
+        Anchor(0, AnchorKind.wheel),
+        Anchor(1, AnchorKind.motorWheel),
     ];
     frame.beams = [
-        Beam(0, 2),  // правое колесо -> мотор (обычная, конец на оси)
+        Beam(0, 2),  // переднее колесо -> мотор (обычная, конец на оси)
         Beam(1, 2),  // заднее колесо -> мотор (обычная, конец на оси)
         Beam(2, 3),  // мотор -> свободный узел вправо
         Beam(3, 3),  // вырожденная, должна отбрасываться
@@ -242,6 +270,31 @@ unittest
 
     // Осевой узел мотора не дублируется.
     assert(full.right[2] == full.left[2]);
+
+    // Два якоря на правых узлах (x > 0) -> 4 якоря в полном каркасе.
+    assert(full.anchors.length == 4);
+
+    // Первый якорь (wheel на узле 0) даёт пару: right[0] и left[0].
+    bool hasRightWheel, hasLeftWheel;
+    foreach (a; full.anchors)
+    {
+        if (a.kind == AnchorKind.wheel && a.node == full.right[0])
+            hasRightWheel = true;
+        if (a.kind == AnchorKind.wheel && a.node == full.left[0])
+            hasLeftWheel = true;
+    }
+    assert(hasRightWheel && hasLeftWheel, "wheel-якорь должен быть зеркально продублирован");
+
+    // Второй якорь (motorWheel на узле 1) даёт пару: right[1] и left[1].
+    bool hasRightMotor, hasLeftMotor;
+    foreach (a; full.anchors)
+    {
+        if (a.kind == AnchorKind.motorWheel && a.node == full.right[1])
+            hasRightMotor = true;
+        if (a.kind == AnchorKind.motorWheel && a.node == full.left[1])
+            hasLeftMotor = true;
+    }
+    assert(hasRightMotor && hasLeftMotor, "motorWheel-якорь должен быть зеркально продублирован");
 
     // Первая балка (0->2) разворачивается в пару обычных:
     // правый узел -> осевой и левый узел -> осевой.
@@ -266,8 +319,7 @@ unittest
     // Полный каркас симметричен.
     assert(isSymmetric(full));
 
-    // Вырожденная балка (3,3) отброшена: 3 балки -> 3*2 - 1 = 5...
-    // На самом деле: 0->2, 1->2, 2->3 дают по 2 балки (6), (3,3) отброшена.
+    // Вырожденная балка (3,3) отброшена: 3 балки -> 3*2 = 6.
     assert(full.beams.length == 6);
 }
 
@@ -276,8 +328,8 @@ unittest
     // Балка целиком на оси симметрии существует в одном экземпляре.
     Frame frame;
     frame.nodes = [
-        Node(vec3(0.0f,  1.0f, 0.5f), AnchorKind.axle),
-        Node(vec3(0.0f, -1.0f, 0.5f), AnchorKind.spring),
+        Node(vec3(0.0f,  1.0f, 0.5f)),
+        Node(vec3(0.0f, -1.0f, 0.5f)),
     ];
     frame.beams = [Beam(0, 1, 0.04f, BeamKind.axial)];
 
@@ -320,10 +372,28 @@ unittest
 
 unittest
 {
+    // Якорь на осевом узле не дублируется.
+    Frame frame;
+    frame.nodes = [
+        Node(vec3(0.0f, 0.0f, 0.5f)),
+    ];
+    frame.anchors = [
+        Anchor(0, AnchorKind.wheel),
+    ];
+    frame.beams = [];
+
+    const full = mirrorClosure(frame);
+    assert(full.anchors.length == 1);
+    assert(full.anchors[0].node == full.right[0]);
+    assert(full.anchors[0].kind == AnchorKind.wheel);
+}
+
+unittest
+{
     // Пустой каркас — тривиально симметричен и корректен.
     const full = mirrorClosure(Frame.init);
     assert(full.nodes.length == 0);
     assert(full.beams.length == 0);
+    assert(full.anchors.length == 0);
     assert(isSymmetric(full));
 }
-
