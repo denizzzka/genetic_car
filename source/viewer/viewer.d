@@ -3,12 +3,14 @@ module viewer.viewer;
 import dagon;
 import dagon.core.keycodes;
 import dagon.core.time;
+import std.algorithm : min;
 import std.random;
 import std.typecons : Nullable;
 import car.car;
 import frame.frame;
 import frame.buggy;
 import genetics;
+import physics_world;
 
 class BuggyScene: Scene
 {
@@ -42,6 +44,16 @@ class BuggyScene: Scene
     Random rnd;
     Buggy current;
     Genotype currentGenome;
+
+    /// Физика машины и сущности, синхронизируемые с телами.
+    /// Позиции/ориентации тел копируются в сущности в шаге физики.
+    CarPhysics physics;
+    Entity[] beamEntities;
+    Entity[] wheelEntities;
+
+    /// Аккумулятор фиксированного шага симуляции.
+    private double accumulator = 0.0;
+    private enum double fixedDt = 1.0 / 60.0;
 
     override void afterLoad()
     {
@@ -93,7 +105,7 @@ class BuggyScene: Scene
 
         currentGenome = encodeFrame(grammar, buggyFrame());
         auto frame = currentFrame();
-        current = new Buggy(frame, centerOffset(frame));
+        current = new Buggy(frame, groundOffset(frame));
         buildCar(current);
 
         auto ePlane = addEntity();
@@ -128,7 +140,7 @@ class BuggyScene: Scene
             currentGenome = encodeFrame(grammar, buggyFrame());
             removeCar();
             auto frame = currentFrame();
-            current = new Buggy(frame, centerOffset(frame));
+            current = new Buggy(frame, groundOffset(frame));
             buildCar(current);
         }
         else if (eventManager.keyDown[KEY_M])
@@ -152,16 +164,24 @@ class BuggyScene: Scene
             {
                 currentGenome = candidate;
                 removeCar();
-                current = new Buggy(f, centerOffset(f));
+                current = new Buggy(f, groundOffset(f));
                 buildCar(current);
             }
         }
+
+        if (physics !is null)
+            stepPhysics(t.delta);
     }
 
     /// Компенсирующее смещение, приводящее каркас к началу координат.
-    /// Сдвиг по X безопасен: полный каркас симметричен относительно
-    /// x == 0, а смещение всей конструкции не нарушает этой симметрии.
-    private vec3 centerOffset(const FullFrame f)
+    ///
+    /// Горизонтально (X, Y) каркас центрируется — смещение по X безопасно:
+    /// полный каркас симметричен относительно x == 0, а сдвиг всей
+    /// конструкции симметрии не нарушает. Вертикально (Z) каркас
+    /// поднимается так, чтобы нижняя точка самого низкого колеса
+    /// легла на землю (z == 0 в координатах машины). Иначе из-за
+    /// центрирования по средней высоте машина наполовину в земле.
+    private vec3 groundOffset(const FullFrame f)
     {
         vec3 c = vec3(0.0f);
 
@@ -171,11 +191,25 @@ class BuggyScene: Scene
         if (f.nodes.length > 0)
             c /= f.nodes.length;
 
-        return -c;
+        float minZ = float.max;
+        foreach (a; f.anchors)
+            minZ = min(minZ, f.nodes[a.node].z);
+
+        float lift = wheelRadius - minZ;
+        if (lift < 0.0f)
+            lift = 0.0f;
+
+        return vec3(-c.x, -c.y, lift);
     }
 
     private void removeCar()
     {
+        if (physics !is null)
+        {
+            physics.dispose();
+            physics = null;
+        }
+
         Entity[] toRemove;
         foreach (e; carRoot.children)
         {
@@ -196,6 +230,10 @@ class BuggyScene: Scene
     {
         const full = car.full;
         const off = car.offset;
+
+        physics = new CarPhysics(full, off);
+        beamEntities.length = 0;
+        wheelEntities.length = 0;
 
         foreach (b; full.beams)
         {
@@ -220,6 +258,7 @@ class BuggyScene: Scene
             e.position = (a + b2) * 0.5f;
             e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
             e.scaling = Vector3f(b.radius, length, b.radius);
+            beamEntities ~= e;
         }
 
         foreach (anchor; full.anchors)
@@ -244,6 +283,7 @@ class BuggyScene: Scene
         e.material = matWheel;
         e.position = pos;
         e.rotation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
+        wheelEntities ~= e;
     }
 
     private void addDriveWheel(const vec3 pos)
@@ -253,6 +293,44 @@ class BuggyScene: Scene
         e.material = matDriveWheel;
         e.position = pos;
         e.rotation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
+        wheelEntities ~= e;
+    }
+
+    /// Фиксированный шаг физики с накоплением dt, затем синхронизация
+    /// трансформов сущностей с телами. Управление: W — газ вперёд, S — назад.
+    private void stepPhysics(double dt)
+    {
+        float throttle = 0.0f;
+        if (eventManager.keyDown[KEY_W])
+            throttle = 1.0f;
+        else if (eventManager.keyDown[KEY_S])
+            throttle = -1.0f;
+
+        accumulator += dt;
+        if (accumulator > fixedDt * 8.0)
+            accumulator = fixedDt * 8.0;
+
+        while (accumulator >= fixedDt)
+        {
+            physics.step(fixedDt, throttle);
+            accumulator -= fixedDt;
+        }
+
+        auto bs = physics.beamStates();
+        foreach (i, e; beamEntities)
+            if (i < bs.length)
+            {
+                e.position = bs[i].position;
+                e.rotation = bs[i].orientation;
+            }
+
+        auto ws = physics.wheelStates();
+        foreach (i, e; wheelEntities)
+            if (i < ws.length)
+            {
+                e.position = ws[i].position;
+                e.rotation = ws[i].orientation;
+            }
     }
 }
 
