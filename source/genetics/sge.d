@@ -1,6 +1,6 @@
 module genetics.sge;
 
-import std.array : appender;
+import std.array: appender, insertInPlace;
 import std.random;
 import std.sumtype;
 
@@ -202,6 +202,52 @@ void mutate(Genotype genotype, size_t hits, ref Random rnd)
 }
 
 /**
+ * Индельная мутация: вставляет или удаляет ровно `hits` кодонов.
+ *
+ * Единственный оператор, меняющий длины генов, а значит и потолок
+ * рекурсивных списков (`beamList`, `anchorList`): сколько кодонов в гене —
+ * столько максимум элементов. Нужен для правил развития (зеркалирование,
+ * ветвление, повтор N раз, градиент), где число повторений и параметров
+ * должно уметь расти.
+ *
+ * Ген никогда не удаляется целиком: если удалять нечего, вставка выполняется
+ * принудительно. Пустой ген обнулил бы `decode` использующего его символа.
+ */
+void mutateIndel(Genotype genotype, size_t hits, ref Random rnd)
+{
+    if (hits == 0)
+        return;
+
+    foreach (_; 0 .. hits)
+    {
+        size_t total;
+        foreach (gene; genotype.genes)
+            total += gene.length;
+        if (total == 0)
+            return;
+
+        auto pos = uniform(0, total, rnd);
+        size_t gi;
+        while (pos >= genotype.genes[gi].length)
+        {
+            pos -= genotype.genes[gi].length;
+            ++gi;
+        }
+
+        const canDelete = genotype.genes[gi].length > 1;
+        const insert = !canDelete || uniform(0, 2, rnd) == 0;
+
+        if (insert)
+            genotype.genes[gi].insertInPlace(pos, uniform(0u, uint.max, rnd));
+        else
+        {
+            auto gene = genotype.genes[gi];
+            genotype.genes[gi] = gene[0 .. pos] ~ gene[pos + 1 .. $];
+        }
+    }
+}
+
+/**
  * Расшифровка генома в последовательность терминалов.
  *
  * Обход дерева вывода в глубину: левосторонний разворот продукции, поэтому
@@ -291,4 +337,35 @@ unittest
             if (codon != g0.genes[i][j])
                 ++diffs0;
     assert(diffs0 == 4, "mutate с hits == 0 ничего не меняет");
+}
+
+unittest
+{
+    import std.random: Random;
+
+    // Ген из одного кодона удалить нельзя — единственная правка станет вставкой.
+    auto g = new Genotype(1);
+    g.genes = [[7u]];
+    auto rnd = Random(1);
+    mutateIndel(g, 1, rnd);
+    assert(g.genes[0].length == 2, "ген не должен становиться пустым");
+
+    // Ни один ген не удаляется целиком даже при большом числе правок,
+    // а суммарная длина меняется не сильнее, чем на hits.
+    auto g2 = new Genotype(3);
+    g2.genes = [[1u, 2u, 3u], [4u], [5u, 6u]];
+    auto rnd2 = Random(2);
+    mutateIndel(g2, 50, rnd2);
+    size_t total;
+    foreach (gene; g2.genes)
+    {
+        assert(gene.length >= 1, "ген не должен стать пустым");
+        total += gene.length;
+    }
+    assert(total >= 3 && total <= 56, "длина генома не должна уезжать на произвол");
+
+    // hits == 0 ничего не меняет.
+    auto g3 = g2.dup;
+    mutateIndel(g3, 0, rnd2);
+    assert(g3.genes == g2.genes);
 }
