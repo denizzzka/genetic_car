@@ -96,6 +96,15 @@ do
         result ~= new Terminal!Tok(Tok.beamKind, cast(int) f.beams[be.beamIdx].kind);
     }
 
+    // Якоря (колёса) — после всех балок. Индекс узла кодируется в порядке
+    // создания нод декодером (`order[]`), а не в исходной нумерации каркаса.
+    result ~= new Terminal!Tok(Tok.anchors);
+    foreach (anchor; f.anchors)
+    {
+        result ~= new Terminal!Tok(Tok.anchorKind, cast(int) anchor.kind);
+        result ~= new Terminal!Tok(Tok.refIdx, cast(int) order[anchor.node]);
+    }
+
     return result;
 }
 
@@ -103,7 +112,7 @@ private size_t countBeams(const Terminal!Tok[] tokens, size_t start)
 {
     size_t count;
     size_t i = start;
-    while (i < tokens.length)
+    while (i < tokens.length && tokens[i].tok != Tok.anchors)
     {
         i++; // startRef
         if (tokens[i].tok == Tok.endNew)
@@ -112,6 +121,19 @@ private size_t countBeams(const Terminal!Tok[] tokens, size_t start)
             i++; // refIdx
         i++; // radius
         i++; // beamKind
+        count++;
+    }
+    return count;
+}
+
+private size_t countAnchors(const Terminal!Tok[] tokens, size_t start)
+{
+    // `start` указывает на маркер Tok.anchors; дальше — пары anchorKind+refIdx.
+    size_t count;
+    size_t i = start + 1;
+    while (i < tokens.length)
+    {
+        i += 2;
         count++;
     }
     return count;
@@ -176,9 +198,14 @@ Genotype encodeTokens(Grammar gr, const Terminal!Tok[] tokens)
     auto destZ = findSampler("destZ");
     auto radius = findSampler("radius");
 
+    auto anchorMarker = findNT("anchorMarker");
+    auto anchorList_ = findNT("anchorList");
+    auto anchor = findNT("anchor");
+    auto anchorKind_ = findNT("anchorKind");
+
     size_t totalBeams = countBeams(tokens, pi);
 
-    while (pi < tokens.length)
+    while (pi < tokens.length && tokens[pi].tok != Tok.anchors)
     {
         totalBeams--;
         gt.genes[beamList_.id] ~= (totalBeams > 0) ? 0u : 1u;
@@ -213,6 +240,30 @@ Genotype encodeTokens(Grammar gr, const Terminal!Tok[] tokens)
 
         gt.genes[radius.id] ~= encodeFloat(tokens[pi++].f, radius.min, radius.max);
         gt.genes[beamKind_.id] ~= cast(uint) tokens[pi++].i;
+    }
+
+    // Якоря: маркер, затем по паре (anchorKind, refIdx) на колесо.
+    if (pi < tokens.length)
+    {
+        assert(tokens[pi].tok == Tok.anchors, "ожидался маркер начала якорей");
+        gt.genes[anchorMarker.id] ~= 0u;
+        pi++;
+
+        size_t totalAnchors = countAnchors(tokens, pi - 1);
+        while (pi < tokens.length)
+        {
+            totalAnchors--;
+            gt.genes[anchorList_.id] ~= (totalAnchors > 0) ? 0u : 1u;
+            gt.genes[anchor.id] ~= 0u;
+
+            assert(tokens[pi].tok == Tok.anchorKind, "ожидался тип якоря");
+            gt.genes[anchorKind_.id] ~= cast(uint) tokens[pi].i;
+            pi++;
+
+            assert(tokens[pi].tok == Tok.refIdx, "ожидался индекс узла якоря");
+            gt.genes[idx.id] ~= cast(uint) tokens[pi].i;
+            pi++;
+        }
     }
 
     return gt;
@@ -294,6 +345,26 @@ unittest
             }
         }
         assert(found, "beam not found in roundtrip");
+    }
+
+    // Якоря округло возвращаются: тот же тип и тот же узел (по idx-отображению).
+    assert(f.anchors.length == f2.anchors.length);
+    bool[] anchorUsed = new bool[f2.anchors.length];
+    foreach (a1; f.anchors)
+    {
+        bool found;
+        foreach (ai, a2; f2.anchors)
+        {
+            if (anchorUsed[ai])
+                continue;
+            if (a2.kind == a1.kind && a2.node == idx[a1.node])
+            {
+                anchorUsed[ai] = true;
+                found = true;
+                break;
+            }
+        }
+        assert(found, "anchor not found in roundtrip");
     }
 
     auto rnd = Random(1);

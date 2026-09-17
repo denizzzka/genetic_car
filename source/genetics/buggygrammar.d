@@ -6,7 +6,7 @@ import dlib.math.vector;
 import frame.frame;
 import genetics.sge;
 
-enum Tok { refLast, refIdx, endNew, coord, radius, beamKind }
+enum Tok { refLast, refIdx, endNew, coord, radius, beamKind, anchors, anchorKind }
 
 private Terminal!Tok t(T)(Tok tok)
 {
@@ -37,11 +37,15 @@ private Terminal!Tok marker(Tok tok)
  * Грамматика правой половины багги.
  *
  * Первые три токена `coord` задают абсолютную позицию seed-узла
- * (любую, не фиксированную), затем идут балки. Узлы отдельно не
- * генерируются: они появляются только как концы балок. Каждая балка:
- * старт — seed/последний созданный узел или существующий по индексу,
- * конец — вновь создаваемый (старт + смещение) или существующий по индексу.
- * Связность сохраняется, т.к. новые узлы прицепляются к старым.
+ * (любую, не фиксированную), затем идут балки, затем — якоря (колёса).
+ * Узлы отдельно не генерируются: они появляются только как концы балок.
+ * Каждая балка: старт — seed/последний созданный узел или существующий
+ * по индексу, конец — вновь создаваемый (старт + смещение) или существующий
+ * по индексу. Связность сохраняется, т.к. новые узлы прицепляются к старым.
+ *
+ * Якоря генерируются после всех балок: это пара `anchorKind` + `refIdx`,
+ * где `refIdx` ссылается на уже созданный узел. Якоря лежат на том же
+ * уровне иерархии, что и балки (см. `Frame.anchors`).
  */
 Grammar buggyGrammar()
 {
@@ -83,13 +87,35 @@ Grammar buggyGrammar()
         new Production([beam]),
     ];
 
+    auto anchorList_ = nt("anchorList", null);
+
+    auto anchorKind = nt("anchorKind", [
+        new Production([t(Tok.anchorKind, AnchorKind.wheel)]),
+        new Production([t(Tok.anchorKind, AnchorKind.motorWheel)]),
+    ]);
+
+    auto anchor = nt("anchor", [
+        new Production([anchorKind, idx]),
+    ]);
+
+    anchorList_.productions = [
+        new Production([anchor, anchorList_]),
+        new Production([anchor]),
+    ];
+
+    // Маркер конца балок и начала якорей.
+    auto anchorMarker = nt("anchorMarker", [
+        new Production([new Terminal!Tok(Tok.anchors)]),
+    ]);
+
     auto start = nt("frame", [
-        new Production([seedPos, beamList_]),
+        new Production([seedPos, beamList_, anchorMarker, anchorList_]),
     ]);
 
     auto symbols = [
         start, seedPos, seedX, seedY, seedZ, beamList_, beam, startRef, idx,
         endRef, destX, destY, destZ, radius, beamKind,
+        anchorMarker, anchorList_, anchor, anchorKind,
     ];
     return new Grammar(start, symbols);
 }
@@ -97,9 +123,11 @@ Grammar buggyGrammar()
 /**
  * Разобрать терминалы в правую половину каркаса.
  *
- * Создаётся seed-узел, затем балки по порядку. Токены `refLast` ссылаются
- * на последний созданный узел, `refIdx` — на существующий по номеру,
- * `endNew` (со смещениями) создаёт новый узел на позиции старта + смещение.
+ * Создаётся seed-узел, затем балки по порядку до маркера `Tok.anchors`,
+ * затем якоря (каждая пара `anchorKind` + `refIdx` прикрепляет колесо
+ * к уже созданному узлу). Токены `refLast` ссылаются на последний созданный
+ * узел, `refIdx` — на существующий по номеру, `endNew` (со смещениями)
+ * создаёт новый узел на позиции старта + смещение.
  */
 bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
 {
@@ -115,7 +143,7 @@ bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
     size_t last = 0;
 
     size_t i = 3;
-    while (i < tokens.length)
+    while (i < tokens.length && tokens[i].tok != Tok.anchors)
     {
         size_t start;
         switch (tokens[i].tok)
@@ -174,11 +202,34 @@ bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
 
         result.beams ~= Beam(start, end, radius, beamKind);
     }
+
+    if (i >= tokens.length)
+        return true;
+
+    // Маркер `Tok.anchors` — переход к якорям.
+    ++i;
+    while (i < tokens.length)
+    {
+        if (tokens[i].tok != Tok.anchorKind)
+            return false;
+        auto kind = cast(AnchorKind) tokens[i].i;
+        ++i;
+
+        if (i >= tokens.length || tokens[i].tok != Tok.refIdx)
+            return false;
+        // Индекс узла, как и кодоны SGE, заворачивается по числу узлов:
+        // случайный индекс за пределами каркаса прижимается к существующему узлу,
+        // а не роняет весь кадр.
+        auto n = cast(size_t) tokens[i].i % result.nodes.length;
+        ++i;
+
+        result.anchors ~= Anchor(n, kind);
+    }
     return true;
 }
 
 /// Минимальная проверка каркаса: узлы в границах, без вырожденных балок,
-/// весь каркас — один связный граф.
+/// весь каркас — один связный граф, якоря — на валидных узлах.
 bool isValidFrame(const Frame f)
 {
     if (f.nodes.length == 0 || f.beams.length == 0)
@@ -218,6 +269,17 @@ bool isValidFrame(const Frame f)
                     return false;
                 break;
         }
+    }
+
+    // Якоря (колёса): валидный узел, не на оси симметрии.
+    // Дубли на одном узле допускаются — это вырожденный случай, который
+    // отсеется на этапе физики/фитнеса, а не на этапе синтаксиса.
+    foreach (a; f.anchors)
+    {
+        if (a.node >= f.nodes.length)
+            return false;
+        if (isOnPlane(f.nodes[a.node].pos))
+            return false;
     }
 
     bool[] visited = new bool[f.nodes.length];
@@ -293,6 +355,7 @@ unittest
             ++valid;
             assert(f.nodes.length > 0);
             assert(f.beams.length > 0);
+            assert(f.anchors.length > 0);
         }
     }
 

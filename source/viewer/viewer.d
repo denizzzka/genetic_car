@@ -172,19 +172,16 @@ class BuggyScene: Scene
             e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
         }
 
-        foreach (i, nodePos; full.nodes)
+        foreach (anchor; full.anchors)
         {
-            const pos = nodePos + off;
-            switch (car.kinds[i])
+            const pos = full.nodes[anchor.node] + off;
+            final switch (anchor.kind)
             {
                 case AnchorKind.wheel:
                     addWheel(pos);
                     break;
-                case AnchorKind.wheelDrive:
+                case AnchorKind.motorWheel:
                     addDriveWheel(pos);
-                    break;
-                default:
-                    addNodeSphere(pos, car.kinds[i]);
                     break;
             }
         }
@@ -225,43 +222,6 @@ class BuggyScene: Scene
         mat.metallicFactor = 0.0f;
         return mat;
     }
-
-    private void addNodeSphere(const vec3 pos, AnchorKind kind)
-    {
-        auto e = addEntity(carRoot);
-        e.drawable = New!ShapeSphere(0.03f, assetManager);
-        e.material = kindMaterial(kind);
-        e.position = pos;
-    }
-
-    private Material kindMaterial(AnchorKind kind)
-    {
-        auto mat = addMaterial();
-        mat.metallicFactor = 0.3f;
-        final switch (kind)
-        {
-            case AnchorKind.wheel:
-            case AnchorKind.wheelDrive:
-                mat.baseColorFactor = Color4f(0.05f, 0.05f, 0.05f, 1.0f);
-                break;
-            case AnchorKind.motor:
-                mat.baseColorFactor = Color4f(0.9f, 0.15f, 0.1f, 1.0f);
-                break;
-            case AnchorKind.shock:
-                mat.baseColorFactor = Color4f(0.1f, 0.5f, 0.9f, 1.0f);
-                break;
-            case AnchorKind.spring:
-                mat.baseColorFactor = Color4f(1.0f, 0.6f, 0.1f, 1.0f);
-                break;
-            case AnchorKind.axle:
-                mat.baseColorFactor = Color4f(0.6f, 0.2f, 0.8f, 1.0f);
-                break;
-            case AnchorKind.none:
-                mat.baseColorFactor = Color4f(0.45f, 0.45f, 0.45f, 1.0f);
-                break;
-        }
-        return mat;
-    }
 }
 
 class MyGame: Game
@@ -272,4 +232,3 @@ class MyGame: Game
         currentScene = New!BuggyScene(this);
     }
 }
-
