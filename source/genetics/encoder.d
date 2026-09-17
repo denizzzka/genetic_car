@@ -313,7 +313,7 @@ unittest
 
     HalfFrame f2;
     assert(frameFromTokens(decoded, f2), "frameFromTokens must succeed");
-    assert(isValidFrame(f2), "decoded frame must be valid");
+    assert(!isValidFrame(f2).isNull, "decoded frame must be valid");
     assert(f.nodes.length == f2.nodes.length);
     assert(f.beams.length == f2.beams.length);
 

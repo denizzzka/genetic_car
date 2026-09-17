@@ -293,19 +293,25 @@ private bool isWellFormed(const HalfFrame f)
     return true;
 }
 
-/// Минимальная проверка каркаса: узлы в границах, без вырожденных балок,
-/// весь (в т.ч. зеркальный) каркас — один связный граф, якоря — на валидных узлах.
-bool isValidFrame(const HalfFrame f)
+/// Строит полный (зеркально замкнутый) каркас из правой половины и
+/// проверяет его валидность
+///
+/// Result: готовый полный каркас в случае успеха;
+/// `null` означает, что каркас невалиден.
+Nullable!FullFrame isValidFrame(const HalfFrame f)
 {
     if (!isWellFormed(f))
-        return false;
+        return Nullable!FullFrame.init;
     // Связность проверяется на полном (зеркальном) каркасе. Связность
     // правой половины сама по себе не гарантирует, что mirrorClosure не
     // распадётся на отдельные компоненты: cross-балка в полном каркасе
     // соединяет правый узел со своим зеркалом, а осевой узел такой балки
     // вообще не получает рёбер, поэтому «висящие» cross-трубы и разорванные
     // пополам половины возможны даже при связной половине.
-    return isConnected(mirrorClosure(f));
+    auto full = mirrorClosure(f);
+    if (!isConnected(full))
+        return Nullable!FullFrame.init;
+    return Nullable!FullFrame(full);
 }
 
 /// Расшифровать геном из грамматики багги в полный (зеркально замкнутый)
@@ -321,12 +327,7 @@ Nullable!FullFrame develop(const Grammar gr, const Genotype g)
     HalfFrame result;
     if (!frameFromTokens(tokens, result))
         return Nullable!FullFrame.init;
-    if (!isWellFormed(result))
-        return Nullable!FullFrame.init;
-    auto full = mirrorClosure(result);
-    if (!isConnected(full))
-        return Nullable!FullFrame.init;
-    return Nullable!FullFrame(full);
+    return isValidFrame(result);
 }
 
 unittest
@@ -352,7 +353,7 @@ unittest
         if (!frameFromTokens(tokens, f))
             continue;
 
-        if (isValidFrame(f))
+        if (!isValidFrame(f).isNull)
         {
             ++valid;
             assert(f.nodes.length > 0);
@@ -389,7 +390,7 @@ unittest
             Node(vec3(0.0f, 0.0f, 0.0f)),
         ];
         f.beams = [Beam(0, 1, 0.04f, BeamKind.cross)];
-        assert(!isValidFrame(f));
+        assert(isValidFrame(f).isNull);
     }
 
     // Разорванные половины: обычная балка между двумя off-plane узлами,
@@ -401,7 +402,7 @@ unittest
             Node(vec3(0.3f, 1.0f, 0.0f)),
         ];
         f.beams = [Beam(0, 1, 0.04f, BeamKind.normal)];
-        assert(!isValidFrame(f));
+        assert(isValidFrame(f).isNull);
     }
 
     // Осевой узел-мост: связно и до, и после зеркального замыкания.
@@ -412,6 +413,6 @@ unittest
             Node(vec3(0.0f, 0.0f, 0.0f)),
         ];
         f.beams = [Beam(0, 1, 0.04f, BeamKind.normal)];
-        assert(isValidFrame(f));
+        assert(!isValidFrame(f).isNull);
     }
 }
