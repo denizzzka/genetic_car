@@ -27,6 +27,10 @@ do
     result ~= new Terminal!Tok(Tok.coord, f.nodes[0].pos.y);
     result ~= new Terminal!Tok(Tok.coord, f.nodes[0].pos.z);
 
+    // Нейтральный морфоген-градиент: taper == 1.0 не меняет геометрию.
+    result ~= new Terminal!Tok(Tok.taper, 1.0f);
+    result ~= new Terminal!Tok(Tok.taperPow, 1.0f);
+
     struct AdjEdge { size_t to; size_t beamIdx; }
     AdjEdge[][] adj;
     adj.length = f.nodes.length;
@@ -196,6 +200,13 @@ Genotype encodeTokens(Grammar gr, const Terminal!Tok[] tokens)
     gt.genes[startY.id] ~= encodeFloat(tokens[pi++].f, startY.min, startY.max);
     assert(tokens[pi].tok == Tok.coord, "позиция первого узла: z");
     gt.genes[startZ.id] ~= encodeFloat(tokens[pi++].f, startZ.min, startZ.max);
+
+    auto taper = findSampler("taper");
+    auto taperPow = findSampler("taperPow");
+    assert(tokens[pi].tok == Tok.taper, "морфоген толщины: taper");
+    gt.genes[taper.id] ~= encodeFloat(tokens[pi++].f, taper.min, taper.max);
+    assert(tokens[pi].tok == Tok.taperPow, "морфоген толщины: taperPow");
+    gt.genes[taperPow.id] ~= encodeFloat(tokens[pi++].f, taperPow.min, taperPow.max);
 
     auto beamList_ = findNT("beamList");
     auto beam = findNT("beam");
