@@ -3,13 +3,11 @@ module viewer.viewer;
 import dagon;
 import dagon.core.keycodes;
 import dagon.core.time;
-import std.algorithm : min;
+import std.algorithm : min, sort;
 import std.random;
-import std.typecons : Nullable;
-import car.car;
+import std.stdio : writefln;
 import frame.frame;
 import genetics;
-import physics_world;
 
 class BuggyScene: Scene
 {
@@ -27,10 +25,9 @@ class BuggyScene: Scene
 
     Entity carRoot;
 
-    /// Геометрия и материалы, переиспользуемые между кадрами мутаций:
-    /// создаются один раз, чтобы повторное нажатие M не накапливало
-    /// меши и материалы (dlib-память вне GC, иначе — утечка на каждый
-    /// кадр и крах после десятков нажатий).
+    /// Геометрия и материалы, переиспользуемые между поколениями:
+    /// создаются один раз, чтобы перестройка галереи не накапливала
+    /// меши и материалы (dlib-память вне GC, иначе — утечка и крах).
     Mesh meshBeam = null;
     Mesh meshWheel = null;
     Material matBeam;
@@ -39,18 +36,16 @@ class BuggyScene: Scene
 
     Grammar grammar;
     Random rnd;
-    Buggy current;
-    Genotype currentGenome;
 
-    /// Физика машины и сущности, синхронизируемые с телами.
-    /// Позиции/ориентации тел копируются в сущности в шаге физики.
-    CarPhysics physics;
-    Entity[] beamEntities;
-    Entity[] wheelEntities;
+    /// Текущая популяция отбора и номер поколения.
+    Individual[] population;
+    size_t generation;
 
-    /// Аккумулятор фиксированного шага симуляции.
-    private double accumulator = 0.0;
-    private enum double fixedDt = 1.0 / 60.0;
+    /// Объём популяции, размер витрины и поколений за нажатие G.
+    enum size_t populationSize = 20;
+    enum size_t galleryTop = 5;
+    enum size_t generationsPerPress = 10;
+    enum float gallerySpacing = 3.0f;
 
     override void afterLoad()
     {
@@ -60,7 +55,7 @@ class BuggyScene: Scene
 
         auto camera = addCamera();
         auto freeview = New!FreeviewComponent(eventManager, camera);
-        freeview.setZoom(4.0f);
+        freeview.setZoom(7.0f);
         freeview.setRotation(30.0f, -45.0f, 0.0f);
         freeview.translationStiffness = 0.25f;
         freeview.rotationStiffness = 0.25f;
@@ -92,19 +87,18 @@ class BuggyScene: Scene
         matDriveWheel.roughnessFactor = 0.9f;
         matDriveWheel.metallicFactor = 0.0f;
 
-        currentGenome = startGenome(grammar);
-        auto frame = currentFrame();
-        current = new Buggy(frame, groundOffset(frame));
-        buildCar(current);
-
         auto ePlane = addEntity();
-        ePlane.drawable = New!ShapePlane(10.0f, 10.0f, 1, assetManager);
+        ePlane.drawable = New!ShapePlane(12.0f, 12.0f, 1, assetManager);
+
+        resetPopulation();
+        buildGallery();
+        logGeneration();
 
         /*
         BuggyScene is dlib-allocated (New!), so the GC can't see
-        references to objects (grammar, currentGenome, current) stored
-        in its fields. After enough GC pressure, these objects get
-        collected, and the next access SIGSEGVs.
+        references to objects (grammar, population) stored in its fields.
+        After enough GC pressure, these objects get collected, and the
+        next access SIGSEGVs.
 
         It is need to register the scene's memory as a GC range so
         the GC scans its fields for pointers.
@@ -113,11 +107,11 @@ class BuggyScene: Scene
         GC.addRange(cast(void*)this, __traits(classInstanceSize, BuggyScene));
     }
 
-    private Frame currentFrame()
+    /// Новое 0-е поколение: идентичные копии закодированного багги.
+    private void resetPopulation()
     {
-        auto may = develop(grammar, currentGenome);
-        assert(!may.isNull, "encoded buggy frame must develop");
-        return may.get;
+        population = evaluatePopulation(grammar, seedPopulation(grammar, populationSize));
+        generation = 0;
     }
 
     override void update(Time t)
@@ -126,73 +120,42 @@ class BuggyScene: Scene
 
         if (eventManager.keyDown[KEY_R])
         {
-            currentGenome = startGenome(grammar);
-            removeCar();
-            auto frame = currentFrame();
-            current = new Buggy(frame, groundOffset(frame));
-            buildCar(current);
+            resetPopulation();
+            buildGallery();
+            logGeneration();
+        }
+        else if (eventManager.keyDown[KEY_G])
+        {
+            population = evolve(grammar, population, generationsPerPress, rnd);
+            generation += generationsPerPress;
+            buildGallery();
+            logGeneration();
         }
         else if (eventManager.keyDown[KEY_M])
         {
-            auto candidate = mutateStep(grammar, currentGenome, rnd);
-            if (!candidate.isNull)
-            {
-                auto f = develop(grammar, candidate.get).get;
-                currentGenome = candidate.get;
-                removeCar();
-                current = new Buggy(f, groundOffset(f));
-                buildCar(current);
-            }
+            population = evolve(grammar, population, 1, rnd);
+            generation += 1;
+            buildGallery();
+            logGeneration();
         }
-
-        if (physics !is null)
-            stepPhysics(t.delta);
     }
 
-    /// Компенсирующее смещение, приводящее каркас к началу координат.
-    ///
-    /// Горизонтально (X, Y) каркас центрируется по среднему узлов. Вертикально
-    /// (Z) каркас поднимается так, чтобы нижняя точка самого низкого колеса
-    /// легла на землю (z == 0 в координатах машины). Иначе из-за
-    /// центрирования по средней высоте машина наполовину в земле.
-    private vec3 groundOffset(const Frame f)
+    private void logGeneration()
     {
-        vec3 c = vec3(0.0f);
-
-        foreach (n; f.nodes)
-            c += n.pos;
-
-        if (f.nodes.length > 0)
-            c /= f.nodes.length;
-
-        float minZ = float.max;
-        foreach (a; f.anchors)
-            minZ = min(minZ, f.nodes[a.node].pos.z);
-
-        float lift = wheelRadius - minZ;
-        if (lift < 0.0f)
-            lift = 0.0f;
-
-        return vec3(-c.x, -c.y, lift);
+        writefln("gen %d: best=%.4f mean=%.4f pop=%d",
+            generation, bestFitness(population), meanFitness(population),
+            population.length);
     }
 
     private void removeCar()
     {
-        if (physics !is null)
-        {
-            physics.dispose();
-            physics = null;
-        }
-
         Entity[] toRemove;
         foreach (e; carRoot.children)
-        {
             toRemove ~= e;
-        }
 
         // Снимаем детей с корня и из мира: иначе сущности навечно
-        // остаются в carRoot.children и с каждым нажатием M каркас
-        // накапливает десятки сущностей в сцене.
+        // остаются в carRoot.children и с каждым поколением галерея
+        // накапливает сотни сущностей в сцене.
         foreach (e; toRemove)
         {
             removeEntity(e);
@@ -200,14 +163,33 @@ class BuggyScene: Scene
         }
     }
 
-    private void buildCar(const Buggy car)
+    /// Витрина: топ-min(galleryTop) лучших в ряд по убыванию фитнеса.
+    private void buildGallery()
     {
-        const frame = car.frame;
-        const off = car.offset;
+        removeCar();
 
-        physics = new CarPhysics(frame, off);
-        beamEntities.length = 0;
-        wheelEntities.length = 0;
+        Individual[] ranked = new Individual[population.length];
+        foreach (i, e; population)
+            ranked[i] = e;
+        sort!((a, b) => a.fitness > b.fitness)(ranked);
+
+        const n = min(cast(size_t) galleryTop, ranked.length);
+        const float firstX = (n - 1) * 0.5f * gallerySpacing;
+
+        foreach (i; 0 .. n)
+        {
+            auto f = develop(grammar, ranked[i].genotype);
+            if (f.isNull)
+                continue;
+            const float laneX = i * gallerySpacing - firstX;
+            drawBuggy(f.get, laneX);
+        }
+    }
+
+    /// Рисует каркас как статичные балки и колёса в своей полосе laneX.
+    private void drawBuggy(const Frame frame, float laneX)
+    {
+        const off = laneOffset(frame, laneX);
 
         foreach (b; frame.beams)
         {
@@ -224,7 +206,6 @@ class BuggyScene: Scene
             e.position = (a + b2) * 0.5f;
             e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
             e.scaling = Vector3f(b.radius, length, b.radius);
-            beamEntities ~= e;
         }
 
         foreach (anchor; frame.anchors)
@@ -233,70 +214,47 @@ class BuggyScene: Scene
             final switch (anchor.kind)
             {
                 case AnchorKind.wheel:
-                    addWheel(pos);
+                    addWheel(pos, matWheel);
                     break;
                 case AnchorKind.motorWheel:
-                    addDriveWheel(pos);
+                    addWheel(pos, matDriveWheel);
                     break;
             }
         }
     }
 
-    private void addWheel(const vec3 pos)
+    private void addWheel(const vec3 pos, Material mat)
     {
         auto e = addEntity(carRoot);
         e.drawable = meshWheel;
-        e.material = matWheel;
+        e.material = mat;
         e.position = pos;
         e.rotation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
-        wheelEntities ~= e;
     }
 
-    private void addDriveWheel(const vec3 pos)
+    /// Центрует каркас горизонтально по среднему, ставит на землю и
+    /// сдвигает в свою полосу вдоль X (в координатах машины).
+    private vec3 laneOffset(const Frame f, float laneX)
     {
-        auto e = addEntity(carRoot);
-        e.drawable = meshWheel;
-        e.material = matDriveWheel;
-        e.position = pos;
-        e.rotation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
-        wheelEntities ~= e;
-    }
+        vec3 c = vec3(0.0f);
+        foreach (n; f.nodes)
+            c += n.pos;
+        if (f.nodes.length > 0)
+            c /= f.nodes.length;
 
-    /// Фиксированный шаг физики с накоплением dt, затем синхронизация
-    /// трансформов сущностей с телами. Управление: W — газ вперёд, S — назад.
-    private void stepPhysics(double dt)
-    {
-        float throttle = 0.0f;
-        if (eventManager.keyDown[KEY_W])
-            throttle = 1.0f;
-        else if (eventManager.keyDown[KEY_S])
-            throttle = -1.0f;
+        float minZ = float.max;
+        foreach (a; f.anchors)
+            minZ = min(minZ, f.nodes[a.node].pos.z);
 
-        accumulator += dt;
-        if (accumulator > fixedDt * 8.0)
-            accumulator = fixedDt * 8.0;
-
-        while (accumulator >= fixedDt)
+        float lift = 0.0f;
+        if (minZ < float.max)
         {
-            physics.step(fixedDt, throttle);
-            accumulator -= fixedDt;
+            lift = 0.3f - minZ; // 0.3 — радиус колеса (physics_world.wheelRadius)
+            if (lift < 0.0f)
+                lift = 0.0f;
         }
 
-        auto bs = physics.beamStates();
-        foreach (i, e; beamEntities)
-            if (i < bs.length)
-            {
-                e.position = bs[i].position;
-                e.rotation = bs[i].orientation;
-            }
-
-        auto ws = physics.wheelStates();
-        foreach (i, e; wheelEntities)
-            if (i < ws.length)
-            {
-                e.position = ws[i].position;
-                e.rotation = ws[i].orientation;
-            }
+        return vec3(laneX - c.x, -c.y, lift);
     }
 }
 
