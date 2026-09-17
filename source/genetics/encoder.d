@@ -194,6 +194,8 @@ Genotype encodeTokens(Grammar gr, const Terminal!Tok[] tokens)
     size_t pi;
 
     gt.genes[findNT("frame").id] ~= 0u;
+    // Симметрия: энкодер пишет «без зеркала» (пустая продукция, ноль токенов).
+    gt.genes[findNT("symmetry").id] ~= 0u;
     gt.genes[findNT("startPos").id] ~= 0u;
 
     auto startX = findSampler("startX");
