@@ -26,6 +26,18 @@ class BuggyScene: Scene
 
     Entity carRoot;
 
+    /// Геометрия и материалы, переиспользуемые между кадрами мутаций:
+    /// создаются один раз, чтобы повторное нажатие M не накапливало
+    /// меши и материалы (dlib-память вне GC, иначе — утечка на каждый
+    /// кадр и крах после десятков нажатий).
+    Mesh meshBeam = null;
+    Mesh meshWheel = null;
+    Material matBeam;
+    Material matCross;
+    Material matAxial;
+    Material matWheel;
+    Material matDriveWheel;
+
     Grammar grammar;
     Random rnd;
     Buggy current;
@@ -53,6 +65,31 @@ class BuggyScene: Scene
 
         carRoot = addEntity();
         carRoot.rotation = rotationQuaternion(Vector3f(1, 0, 0), degtorad(-90.0f));
+
+        meshBeam = New!ShapeCylinder(1.0f, 1.0f, 8, assetManager);
+        meshWheel = New!ShapeTorus(0.2f, 0.1f, 16, 8, assetManager);
+
+        matBeam = addMaterial();
+        matBeam.baseColorFactor = Color4f(0.55f, 0.55f, 0.62f, 1.0f);
+        matBeam.metallicFactor = 0.7f;
+
+        matCross = addMaterial();
+        matCross.baseColorFactor = Color4f(0.9f, 0.85f, 0.15f, 1.0f);
+        matCross.metallicFactor = 0.7f;
+
+        matAxial = addMaterial();
+        matAxial.baseColorFactor = Color4f(0.2f, 0.8f, 0.25f, 1.0f);
+        matAxial.metallicFactor = 0.7f;
+
+        matWheel = addMaterial();
+        matWheel.baseColorFactor = Color4f(0.08f, 0.08f, 0.08f, 1.0f);
+        matWheel.roughnessFactor = 0.9f;
+        matWheel.metallicFactor = 0.0f;
+
+        matDriveWheel = addMaterial();
+        matDriveWheel.baseColorFactor = Color4f(0.6f, 0.1f, 0.1f, 1.0f);
+        matDriveWheel.roughnessFactor = 0.9f;
+        matDriveWheel.metallicFactor = 0.0f;
 
         currentGenome = encodeFrame(grammar, buggyFrame());
         auto frame = currentFrame();
@@ -127,26 +164,26 @@ class BuggyScene: Scene
 
     private void removeCar()
     {
+        Entity[] toRemove;
         foreach (e; carRoot.children)
+        {
+            toRemove ~= e;
+        }
+
+        // Снимаем детей с корня и из мира: иначе сущности навечно
+        // остаются в carRoot.children и с каждым нажатием M каркас
+        // накапливает десятки сущностей в сцене.
+        foreach (e; toRemove)
+        {
             removeEntity(e);
+            carRoot.removeChild(e);
+        }
     }
 
     private void buildCar(const Buggy car)
     {
         const full = car.full;
         const off = car.offset;
-
-        auto matBeam = addMaterial();
-        matBeam.baseColorFactor = Color4f(0.55f, 0.55f, 0.62f, 1.0f);
-        matBeam.metallicFactor = 0.7f;
-
-        auto matCross = addMaterial();
-        matCross.baseColorFactor = Color4f(0.9f, 0.85f, 0.15f, 1.0f);
-        matCross.metallicFactor = 0.7f;
-
-        auto matAxial = addMaterial();
-        matAxial.baseColorFactor = Color4f(0.2f, 0.8f, 0.25f, 1.0f);
-        matAxial.metallicFactor = 0.7f;
 
         foreach (b; full.beams)
         {
@@ -166,10 +203,11 @@ class BuggyScene: Scene
                 mat = matBeam;
 
             auto e = addEntity(carRoot);
-            e.drawable = New!ShapeCylinder(b.radius, length, 8, assetManager);
+            e.drawable = meshBeam;
             e.material = mat;
             e.position = (a + b2) * 0.5f;
             e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
+            e.scaling = Vector3f(b.radius, length, b.radius);
         }
 
         foreach (anchor; full.anchors)
@@ -190,8 +228,8 @@ class BuggyScene: Scene
     private void addWheel(const vec3 pos)
     {
         auto e = addEntity(carRoot);
-        e.drawable = New!ShapeTorus(0.2f, 0.1f, 16, 8, assetManager);
-        e.material = wheelMaterial();
+        e.drawable = meshWheel;
+        e.material = matWheel;
         e.position = pos;
         e.rotation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
     }
@@ -199,28 +237,10 @@ class BuggyScene: Scene
     private void addDriveWheel(const vec3 pos)
     {
         auto e = addEntity(carRoot);
-        e.drawable = New!ShapeTorus(0.2f, 0.1f, 16, 8, assetManager);
-        e.material = driveWheelMaterial();
+        e.drawable = meshWheel;
+        e.material = matDriveWheel;
         e.position = pos;
         e.rotation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
-    }
-
-    private Material wheelMaterial()
-    {
-        auto mat = addMaterial();
-        mat.baseColorFactor = Color4f(0.08f, 0.08f, 0.08f, 1.0f);
-        mat.roughnessFactor = 0.9f;
-        mat.metallicFactor = 0.0f;
-        return mat;
-    }
-
-    private Material driveWheelMaterial()
-    {
-        auto mat = addMaterial();
-        mat.baseColorFactor = Color4f(0.6f, 0.1f, 0.1f, 1.0f);
-        mat.roughnessFactor = 0.9f;
-        mat.metallicFactor = 0.0f;
-        return mat;
     }
 }
 
