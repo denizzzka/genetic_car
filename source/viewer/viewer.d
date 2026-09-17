@@ -249,9 +249,10 @@ class BuggyScene: Scene
         float lift = 0.0f;
         if (minZ < float.max)
         {
-            lift = 0.3f - minZ; // 0.3 — радиус колеса (physics_world.wheelRadius)
-            if (lift < 0.0f)
-                lift = 0.0f;
+            // 0.3 — радиус колеса (physics_world.wheelRadius). Всегда прижимаем
+            // низ самого низкого колеса к земле — даже если эволюция унесла
+            // каркас выше: иначе машины дрейфовали бы вверх и «улетали».
+            lift = 0.3f - minZ;
         }
 
         return vec3(laneX - c.x, -c.y, lift);
