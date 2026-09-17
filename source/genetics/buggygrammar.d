@@ -55,6 +55,15 @@ enum Tok
     /// Морфоген: показатель степени кривой градиента толщины
     /// (float, 0.5..4.0). Токен изымается из потока до интерпретации.
     taperPow,
+
+    /// Turtle: начальный заголовок построения (float, радианы). Дельты
+    /// `endNew`/`endNear` интерпретируются в системе заголовка: `coord` X —
+    /// вперёд по заголовку, `coord` Y — вправо от него, Z — вверх.
+    heading,
+
+    /// Turtle: приращение заголовка после балки (float, радианы).
+    /// Накапливается в общее направление построения.
+    turn,
 }
 
 private Terminal!Tok t(T)(Tok tok)
@@ -108,6 +117,8 @@ Grammar buggyGrammar()
     auto radius = new Sampler!Tok("radius", Tok.radius, 0.02f, 0.06f);
     auto taper = new Sampler!Tok("taper", Tok.taper, 0.4f, 1.0f);
     auto taperPow = new Sampler!Tok("taperPow", Tok.taperPow, 0.5f, 4.0f);
+    auto heading = new Sampler!Tok("heading", Tok.heading, -3.1416f, 3.1416f);
+    auto turn = new Sampler!Tok("turn", Tok.turn, -1.5708f, 1.5708f);
 
     auto startRef = nt("startRef", [
         new Production([marker(Tok.refLast)]),
@@ -115,7 +126,7 @@ Grammar buggyGrammar()
     ]);
 
     auto startPos = nt("startPos", [
-        new Production([startX, startY, startZ, taper, taperPow]),
+        new Production([startX, startY, startZ, taper, taperPow, heading]),
     ]);
 
     auto endRef = nt("endRef", [
@@ -129,7 +140,7 @@ Grammar buggyGrammar()
     ]);
 
     auto beam = nt("beam", [
-        new Production([startRef, endRef, radius, beamKind]),
+        new Production([startRef, endRef, radius, beamKind, turn]),
     ]);
 
     beamList_.productions = [
@@ -163,7 +174,8 @@ Grammar buggyGrammar()
     ]);
 
     auto symbols = [
-        start, startPos, startX, startY, startZ, taper, taperPow, beamList_, beam, startRef,
+        start, startPos, startX, startY, startZ, taper, taperPow, heading, turn,
+        beamList_, beam, startRef,
         idx, endRef, destX, destY, destZ, radius, beamKind,
         anchorMarker, anchorList_, anchor, anchorKind,
     ];
@@ -180,6 +192,10 @@ Grammar buggyGrammar()
  * создаёт новый узел на позиции старта + смещение, `endNear` — как `endNew`,
  * но растущий конец сливается с ближайшим существующим узлом в пределах
  * `mergeRadius` (так из правила роста сами возникают петли).
+ *
+ * Turtle: после первого узла читается начальный `heading`; дельты смещений
+ * интерпретируются в его системе (X — вперёд, Y — вправо, Z — вверх),
+ * а токены `turn` после каждой балки накапливают заголовок построения.
  *
  * Возврат — сам результат: `Nullable!Frame.isNull` означает ошибку разбора.
  */
@@ -198,7 +214,21 @@ Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
     result.nodes ~= Node(seed);
     size_t last = 0;
 
+    // Turtle: начальный заголовок построения (после морфоген-токенов,
+    // изъятых из потока). Дельты балок интерпретируются в его системе.
     size_t i = 3;
+    if (tokens.length <= i || tokens[i].tok != Tok.heading)
+        return Nullable!Frame.init;
+    float heading = tokens[i].f;
+    ++i;
+
+    // Дельта из локальной системы заголовка в мировую: X — вперёд по
+    // заголовку, Y — вправо от него, Z — вертикально вверх.
+    auto forward = (float dx, float dy, float dz) {
+        const c = cos(heading);
+        const s = sin(heading);
+        return vec3(c * dx - s * dy, s * dx + c * dy, dz);
+    };
     while (i < tokens.length && tokens[i].tok != Tok.anchors)
     {
         size_t start;
@@ -231,7 +261,7 @@ Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
                 auto dx = tokens[i + 1].f;
                 auto dy = tokens[i + 2].f;
                 auto dz = tokens[i + 3].f;
-                result.nodes ~= Node(result.nodes[start].pos + vec3(dx, dy, dz));
+                result.nodes ~= Node(result.nodes[start].pos + forward(dx, dy, dz));
                 end = result.nodes.length - 1;
                 last = end;
                 i += 4;
@@ -246,7 +276,7 @@ Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
                 auto tx = tokens[i + 1].f;
                 auto ty = tokens[i + 2].f;
                 auto tz = tokens[i + 3].f;
-                auto target = result.nodes[start].pos + vec3(tx, ty, tz);
+                auto target = result.nodes[start].pos + forward(tx, ty, tz);
                 // endNear — как endNew, но растущий конец сливается с ближайшим
                 // существующим узлом (кроме старта) в пределах mergeRadius.
                 // Из правила «расти до контакта» сами возникают петли и
@@ -292,6 +322,13 @@ Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
         if (tokens[i].tok != Tok.beamKind)
             return Nullable!Frame.init;
         auto beamKind = cast(BeamKind) tokens[i].i;
+        ++i;
+
+        // Turtle: поворот заголовка после балки — задаёт направление
+        // следующего роста. Накапливается в общий заголовок.
+        if (tokens[i].tok != Tok.turn)
+            return Nullable!Frame.init;
+        heading += tokens[i].f;
         ++i;
 
         result.beams ~= Beam(start, end, radius, beamKind);
@@ -505,6 +542,7 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
@@ -512,6 +550,7 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNear);
     t ~= new Terminal!Tok(Tok.coord, -0.95f);
@@ -519,6 +558,7 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
 
     auto f = frameFromTokens(t);
@@ -538,6 +578,7 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNear);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
@@ -545,12 +586,51 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
 
     auto f = frameFromTokens(t);
     assert(!f.isNull);
     assert(f.get.nodes.length == 2);
     assert(f.get.beams.length == 1);
+}
+
+unittest
+{
+    // Turtle: дельты интерпретируются в системе заголовка, а turn накапливает
+    // направление. Заголовок π/2 поворачивает дельту (1,0,0) в мировые (0,1,0).
+    Terminal!Tok[] t;
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.heading, 1.5707963f);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= new Terminal!Tok(Tok.coord, 1.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 1.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.anchors);
+
+    auto f = frameFromTokens(t);
+    assert(!f.isNull);
+    assert(f.get.nodes.length == 3);
+    const n1 = f.get.nodes[1].pos;
+    const n2 = f.get.nodes[2].pos;
+    assert(n1.x < 1e-4f && n1.y > 0.999f,
+        "заголовок π/2 должен развернуть дельту из оси X в ось Y");
+    assert(n2.x < -0.999f && n2.y > 0.999f,
+        "дельта (0,1,0) при заголовке π/2 уходит влево (-X)");
 }
 
 unittest

@@ -30,6 +30,8 @@ do
     // Нейтральный морфоген-градиент: taper == 1.0 не меняет геометрию.
     result ~= new Terminal!Tok(Tok.taper, 1.0f);
     result ~= new Terminal!Tok(Tok.taperPow, 1.0f);
+    // Нейтральный turtle: заголовок 0 — дельты остаются абсолютными.
+    result ~= new Terminal!Tok(Tok.heading, 0.0f);
 
     struct AdjEdge { size_t to; size_t beamIdx; }
     AdjEdge[][] adj;
@@ -87,6 +89,7 @@ do
 
                 result ~= new Terminal!Tok(Tok.radius, f.beams[e.beamIdx].radius);
                 result ~= new Terminal!Tok(Tok.beamKind, cast(int) f.beams[e.beamIdx].kind);
+                result ~= new Terminal!Tok(Tok.turn, 0.0f);
 
                 last = order[e.to];
                 queue ~= e.to;
@@ -105,6 +108,7 @@ do
         result ~= new Terminal!Tok(Tok.refIdx, cast(int) be.to);
         result ~= new Terminal!Tok(Tok.radius, f.beams[be.beamIdx].radius);
         result ~= new Terminal!Tok(Tok.beamKind, cast(int) f.beams[be.beamIdx].kind);
+        result ~= new Terminal!Tok(Tok.turn, 0.0f);
     }
 
     // Якоря (колёса) — после всех балок. Индекс узла кодируется в порядке
@@ -126,12 +130,13 @@ private size_t countBeams(const Terminal!Tok[] tokens, size_t start)
     while (i < tokens.length && tokens[i].tok != Tok.anchors)
     {
         i++; // startRef
-        if (tokens[i].tok == Tok.endNew)
+        if (tokens[i].tok == Tok.endNew || tokens[i].tok == Tok.endNear)
             i += 4;
         else
             i++; // refIdx
         i++; // radius
         i++; // beamKind
+        i++; // turn
         count++;
     }
     return count;
@@ -208,6 +213,10 @@ Genotype encodeTokens(Grammar gr, const Terminal!Tok[] tokens)
     assert(tokens[pi].tok == Tok.taperPow, "морфоген толщины: taperPow");
     gt.genes[taperPow.id] ~= encodeFloat(tokens[pi++].f, taperPow.min, taperPow.max);
 
+    auto heading = findSampler("heading");
+    assert(tokens[pi].tok == Tok.heading, "turtle: heading");
+    gt.genes[heading.id] ~= encodeFloat(tokens[pi++].f, heading.min, heading.max);
+
     auto beamList_ = findNT("beamList");
     auto beam = findNT("beam");
     auto startRef = findNT("startRef");
@@ -218,6 +227,7 @@ Genotype encodeTokens(Grammar gr, const Terminal!Tok[] tokens)
     auto destY = findSampler("destY");
     auto destZ = findSampler("destZ");
     auto radius = findSampler("radius");
+    auto turn = findSampler("turn");
 
     auto anchorMarker = findNT("anchorMarker");
     auto anchorList_ = findNT("anchorList");
@@ -261,6 +271,7 @@ Genotype encodeTokens(Grammar gr, const Terminal!Tok[] tokens)
 
         gt.genes[radius.id] ~= encodeFloat(tokens[pi++].f, radius.min, radius.max);
         gt.genes[beamKind_.id] ~= cast(uint) tokens[pi++].i;
+        gt.genes[turn.id] ~= encodeFloat(tokens[pi++].f, turn.min, turn.max);
     }
 
     // Якоря: маркер, затем по паре (anchorKind, refIdx) на колесо.
