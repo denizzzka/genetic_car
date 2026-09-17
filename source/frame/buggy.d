@@ -25,9 +25,9 @@ Frame buggyFrame()
         f.anchors ~= Anchor(nodeIdx, kind);
     }
 
-    // Узел 0 — мотор на оси симметрии (x == 0): он становится seed-узлом,
-    // через который зеркальные половины полного каркаса связаны.
-    const motor = node(vec3(0.00f, -0.05f, 0.50f));
+    // Узел 0 — seed-узел на оси симметрии (x == 0): через него зеркальные
+    // половины полного каркаса связаны.
+    const startPoint = node(vec3(0.00f, -0.05f, 0.50f));
 
     const railBack = node(vec3(0.50f, -1.10f, 0.18f));
     const railMidBack = node(vec3(0.50f, -0.72f, 0.18f));
@@ -102,9 +102,9 @@ Frame buggyFrame()
     beam(roofCenter, roofFront, crossRadius);
     beam(floorMid, floorFront, crossRadius, BeamKind.axial);
 
-    beam(motor, railMid, susRadius);
-    beam(motor, hoopTop, susRadius);
-    beam(motor, railMidBack, susRadius);
+    beam(startPoint, railMid, susRadius);
+    beam(startPoint, hoopTop, susRadius);
+    beam(startPoint, railMidBack, susRadius);
 
     beam(railFront, roofBack, crossRadius);
     beam(railBack, dashTop, crossRadius);
