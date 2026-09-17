@@ -285,9 +285,8 @@ Genotype encodeFrame(Grammar gr, const Frame f)
     return encodeTokens(gr, tokens);
 }
 
-/// Простейший стартовый геном: колесо на одном конце балки, моторное колесо
-/// на другом, плюс одна дополнительная балка — чтобы мутации могли менять
-/// структуру, а не только геометрию.
+/// Простейший стартовый геном: одна балка, колесо на одном конце, моторное
+/// колесо на другом
 Genotype startGenome(Grammar gr)
 {
     Frame f;
@@ -299,10 +298,8 @@ Genotype startGenome(Grammar gr)
 
     const wheel = node(vec3(0.6f, 0.7f, 0.3f));
     const motor = node(vec3(0.6f, -0.7f, 0.3f));
-    const top = node(vec3(0.6f, 0.0f, 0.9f));
 
     f.beams ~= Beam(wheel, motor, 0.05f);
-    f.beams ~= Beam(wheel, top, 0.03f);
     f.anchors ~= Anchor(wheel, AnchorKind.wheel);
     f.anchors ~= Anchor(motor, AnchorKind.motorWheel);
 
@@ -321,8 +318,8 @@ unittest
     auto may = develop(gr, genome);
     assert(!may.isNull, "стартовая хромосома должна развиваться");
     const f = may.get;
-    assert(f.nodes.length == 3);
-    assert(f.beams.length == 2);
+    assert(f.nodes.length == 2);
+    assert(f.beams.length == 1);
     assert(f.anchors.length == 2);
     assert(f.anchors[0].kind == AnchorKind.wheel && f.anchors[0].node == 0);
     assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 1);
@@ -361,4 +358,36 @@ unittest
     const avg = beamTotal / okCount;
     assert(avg >= 1 && avg <= 6,
         "одна мутация не должна обрушивать или раздувать каркас");
+}
+
+unittest
+{
+    import std.random: Random;
+
+    // Число балок и колёс не заложено в стартовый каркас: за 50 шагов
+    // мутации структура должна уметь вырасти, а не только менять геометрию.
+    auto gr = buggyGrammar();
+    auto genome = startGenome(gr);
+    auto rnd = Random(42);
+
+    const startBeams = develop(gr, genome).get.beams.length;
+    const startAnchors = develop(gr, genome).get.anchors.length;
+    bool grewBeams, grewAnchors;
+
+    foreach (_; 0 .. 50)
+    {
+        Genotype next;
+        if (!mutateStep(gr, genome, next, rnd))
+            continue;
+
+        auto f = develop(gr, next).get;
+        if (f.beams.length > startBeams)
+            grewBeams = true;
+        if (f.anchors.length > startAnchors)
+            grewAnchors = true;
+        genome = next;
+    }
+
+    assert(grewBeams, "балки должны уметь появляться");
+    assert(grewAnchors, "колёса должны уметь появляться");
 }

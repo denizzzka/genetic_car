@@ -134,23 +134,10 @@ class BuggyScene: Scene
         }
         else if (eventManager.keyDown[KEY_M])
         {
-            bool ok;
-            Frame f;
-            auto candidate = currentGenome;
-            foreach (_; 0 .. 100)
+            Genotype candidate;
+            if (mutateStep(grammar, currentGenome, candidate, rnd))
             {
-                candidate = currentGenome.dup;
-                mutate(candidate, 1 + uniform(0u, 3u, rnd), rnd);
-                auto may = develop(grammar, candidate);
-                if (!may.isNull)
-                {
-                    f = may.get;
-                    ok = true;
-                    break;
-                }
-            }
-            if (ok)
-            {
+                auto f = develop(grammar, candidate).get;
                 currentGenome = candidate;
                 removeCar();
                 current = new Buggy(f, groundOffset(f));
