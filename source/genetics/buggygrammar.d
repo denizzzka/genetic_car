@@ -34,20 +34,16 @@ private Terminal!Tok marker(Tok tok)
 }
 
 /**
- * Грамматика правой половины багги.
+ * Грамматика багги целиком.
  *
- * Первые три токена `coord` задают позицию seed-узла: x всегда 0 (узел на
- * плоскости симметрии), y и z — случайные. Затем идут балки, затем —
- * якоря (колёса). Узлы отдельно не генерируются: они появляются только как
- * концы балок. Каждая балка: старт — seed/последний созданный узел или
+ * Первые три токена `coord` задают позицию первого узла. Затем идут балки,
+ * затем — якоря (колёса). Узлы отдельно не генерируются: они появляются только
+ * как концы балок. Каждая балка: старт — первый/последний созданный узел или
  * существующий по индексу, конец — вновь создаваемый (старт + смещение) или
- * существующий по индексу. Связность правой половины сохраняется, т.к. новые
- * узлы прицепляются к старым, а seed на оси симметрии связывает зеркальные
- * половины полного каркаса (см. `mirrorClosure`, `isConnected`).
+ * существующий по индексу.
  *
  * Якоря генерируются после всех балок: это пара `anchorKind` + `refIdx`,
- * где `refIdx` ссылается на уже созданный узел. Якоря лежат на том же
- * уровне иерархии, что и балки (см. `HalfFrame.anchors`).
+ * где `refIdx` ссылается на уже созданный узел.
  */
 Grammar buggyGrammar()
 {
@@ -57,8 +53,9 @@ Grammar buggyGrammar()
     auto destX = new Sampler!Tok("destX", Tok.coord, -1.5f, 1.5f);
     auto destY = new Sampler!Tok("destY", Tok.coord, -1.5f, 1.5f);
     auto destZ = new Sampler!Tok("destZ", Tok.coord, -1.5f, 1.5f);
-    auto seedY = new Sampler!Tok("seedY", Tok.coord, -2.0f, 2.0f);
-    auto seedZ = new Sampler!Tok("seedZ", Tok.coord, -2.0f, 2.0f);
+    auto startX = new Sampler!Tok("startX", Tok.coord, -2.0f, 2.0f);
+    auto startY = new Sampler!Tok("startY", Tok.coord, -2.0f, 2.0f);
+    auto startZ = new Sampler!Tok("startZ", Tok.coord, -2.0f, 2.0f);
     auto radius = new Sampler!Tok("radius", Tok.radius, 0.02f, 0.06f);
 
     auto startRef = nt("startRef", [
@@ -66,12 +63,8 @@ Grammar buggyGrammar()
         new Production([idx]),
     ]);
 
-    auto seedPos = nt("seedPos", [
-        // X-координата seed-узла всегда 0: узел сажаем на плоскость
-        // симметрии (общий для обеих половин), чтобы зеркальные половины
-        // полного каркаса были связаны через него. Иначе связность правой
-        // половины не гарантирует связности зеркального замыкания.
-        new Production([t(Tok.coord, 0.0f), seedY, seedZ]),
+    auto startPos = nt("startPos", [
+        new Production([startX, startY, startZ]),
     ]);
 
     auto endRef = nt("endRef", [
@@ -81,8 +74,6 @@ Grammar buggyGrammar()
 
     auto beamKind = nt("beamKind", [
         new Production([t(Tok.beamKind, BeamKind.normal)]),
-        new Production([t(Tok.beamKind, BeamKind.cross)]),
-        new Production([t(Tok.beamKind, BeamKind.axial)]),
     ]);
 
     auto beam = nt("beam", [
@@ -116,31 +107,31 @@ Grammar buggyGrammar()
     ]);
 
     auto start = nt("frame", [
-        new Production([seedPos, beamList_, anchorMarker, anchorList_]),
+        new Production([startPos, beamList_, anchorMarker, anchorList_]),
     ]);
 
     auto symbols = [
-        start, seedPos, seedY, seedZ, beamList_, beam, startRef, idx,
-        endRef, destX, destY, destZ, radius, beamKind,
+        start, startPos, startX, startY, startZ, beamList_, beam, startRef,
+        idx, endRef, destX, destY, destZ, radius, beamKind,
         anchorMarker, anchorList_, anchor, anchorKind,
     ];
     return new Grammar(start, symbols);
 }
 
 /**
- * Разобрать терминалы в правую половину каркаса.
+ * Разобрать терминалы в каркас багги.
  *
- * Создаётся seed-узел, затем балки по порядку до маркера `Tok.anchors`,
+ * Создаётся первый узел, затем балки по порядку до маркера `Tok.anchors`,
  * затем якоря (каждая пара `anchorKind` + `refIdx` прикрепляет колесо
  * к уже созданному узлу). Токены `refLast` ссылаются на последний созданный
  * узел, `refIdx` — на существующий по номеру, `endNew` (со смещениями)
  * создаёт новый узел на позиции старта + смещение.
  */
-bool frameFromTokens(const Terminal!Tok[] tokens, out HalfFrame result)
+bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
 {
-    result = HalfFrame.init;
+    result = Frame.init;
 
-    // Первые три токена — абсолютная позиция seed-узла.
+    // Первые три токена — абсолютная позиция первого узла.
     if (tokens.length < 3)
         return false;
     if (tokens[0].tok != Tok.coord || tokens[1].tok != Tok.coord || tokens[2].tok != Tok.coord)
@@ -235,98 +226,46 @@ bool frameFromTokens(const Terminal!Tok[] tokens, out HalfFrame result)
     return true;
 }
 
-/// Структурная валидность правой половины каркаса: узлы в границах,
-/// без вырожденных балок, якоря — на валидных узлах. Связность полного
-/// (зеркального) каркаса не проверяется — см. `isValidFrame`.
-private bool isWellFormed(const HalfFrame f)
+/**
+ * Структурная валидность каркаса: узлы в границах, без вырожденных балок,
+ * якоря — на валидных узлах, каркас связен.
+ */
+Nullable!Frame isValidFrame(Frame f)
 {
     if (f.nodes.length == 0 || f.beams.length == 0)
-        return false;
-    // Правая половина каркаса: узлы не могут уходить на левую сторону
-    // (x < 0) — иначе зеркальное замыкание сломает инвариант половины.
-    foreach (n; f.nodes)
-        if (n.pos.x < -planeEpsilon)
-            return false;
+        return Nullable!Frame.init;
     foreach (b; f.beams)
     {
         if (b.a >= f.nodes.length || b.b >= f.nodes.length)
-            return false;
+            return Nullable!Frame.init;
         const pa = f.nodes[b.a].pos;
         const pb = f.nodes[b.b].pos;
         if (b.a == b.b || distance(pa, pb) < 1e-4f)
-            return false;
-
-        //TODO: Возможно надо переключать тип балкиесли она перестала удовлетворять критериям типа
-        const aOnPlane = isOnPlane(pa);
-        const bOnPlane = isOnPlane(pb);
-        final switch (b.kind)
-        {
-            case BeamKind.normal:
-                break;
-            case BeamKind.cross:
-                // Правый узел a (вне плоскости) к осевому b (x == 0),
-                // на тех же y, z — ровно так, как ожидает mirrorClosure.
-                if (aOnPlane || !bOnPlane)
-                    return false;
-                if (!isClose(pa.y, pb.y) || !isClose(pa.z, pb.z))
-                    return false;
-                break;
-            case BeamKind.axial:
-                // Оба конца на оси симметрии.
-                if (!aOnPlane || !bOnPlane)
-                    return false;
-                break;
-        }
+            return Nullable!Frame.init;
     }
 
-    // Якоря (колёса): валидный узел, не на оси симметрии.
-    // Дубли на одном узле допускаются — это вырожденный случай, который
+    // Дубли якорей на одном узле допускаются — это вырожденный случай, который
     // отсеется на этапе физики/фитнеса, а не на этапе синтаксиса.
     foreach (a; f.anchors)
-    {
         if (a.node >= f.nodes.length)
-            return false;
-        if (isOnPlane(f.nodes[a.node].pos))
-            return false;
-    }
+            return Nullable!Frame.init;
 
-    return true;
+    if (!isConnected(f))
+        return Nullable!Frame.init;
+    return Nullable!Frame(f);
 }
 
-/// Строит полный (зеркально замкнутый) каркас из правой половины и
-/// проверяет его валидность
-///
-/// Result: готовый полный каркас в случае успеха;
-/// `null` означает, что каркас невалиден.
-Nullable!FullFrame isValidFrame(const HalfFrame f)
-{
-    if (!isWellFormed(f))
-        return Nullable!FullFrame.init;
-    // Связность проверяется на полном (зеркальном) каркасе. Связность
-    // правой половины сама по себе не гарантирует, что mirrorClosure не
-    // распадётся на отдельные компоненты: cross-балка в полном каркасе
-    // соединяет правый узел со своим зеркалом, а осевой узел такой балки
-    // вообще не получает рёбер, поэтому «висящие» cross-трубы и разорванные
-    // пополам половины возможны даже при связной половине.
-    auto full = mirrorClosure(f);
-    if (!isConnected(full))
-        return Nullable!FullFrame.init;
-    return Nullable!FullFrame(full);
-}
-
-/// Расшифровать геном из грамматики багги в полный (зеркально замкнутый)
-/// каркас. Зеркальное замыкание выполняется один раз — результат сразу
-/// пригоден для построения модели. Значение-результат сам говорит об успехе:
-/// `Nullable!FullFrame.isNull` означает, что декодирование, разбор или
-/// валидация не прошли.
-Nullable!FullFrame develop(const Grammar gr, const Genotype g)
+/// Расшифровать геном из грамматики багги в готовый каркас багги.
+/// Значение-результат сам говорит об успехе: `Nullable!Frame.isNull`
+/// означает, что декодирование, разбор или валидация не прошли.
+Nullable!Frame develop(const Grammar gr, const Genotype g)
 {
     auto tokens = decode!Tok(gr, g);
     if (tokens is null)
-        return Nullable!FullFrame.init;
-    HalfFrame result;
+        return Nullable!Frame.init;
+    Frame result;
     if (!frameFromTokens(tokens, result))
-        return Nullable!FullFrame.init;
+        return Nullable!Frame.init;
     return isValidFrame(result);
 }
 
@@ -349,24 +288,17 @@ unittest
         ++decodeOk;
         assert(tokens.length > 0);
 
-        HalfFrame f;
+        Frame f;
         if (!frameFromTokens(tokens, f))
             continue;
 
         if (!isValidFrame(f).isNull)
-        {
             ++valid;
-            assert(f.nodes.length > 0);
-            assert(f.beams.length > 0);
-            assert(f.anchors.length > 0);
-        }
     }
 
     // Декодирование сходится почти всегда; значительная доля геномов даёт
     // валидный каркас (остальные отбрасываются самокоррекцией — ссылки на
-    // узлы, которых ещё нет, вырожденные балки, cross/axial вне оси).
-    // С непрерывными самплерами и проверкой связности зеркального каркаса
-    // доля валидных ~0.8% (см. scripts/probe.d).
+    // узлы, которых ещё нет, вырожденные балки).
     assert(decodeOk > 3000);
     assert(valid > 20);
 
@@ -379,40 +311,26 @@ unittest
 
 unittest
 {
-    // Половина связана, но зеркальное замыкание распадается: такой каркас
-    // обязан быть отброшен проверкой связности полного каркаса.
+    // Вырожденная балка и разорванный каркас отбрасываются.
+    Frame f;
+    f.nodes = [
+        Node(vec3(0.0f, 0.0f, 0.0f)),
+        Node(vec3(0.0f, 1.0f, 0.0f)),
+    ];
+    f.beams = [Beam(0, 0, 0.04f)];
+    f.anchors = [Anchor(0, AnchorKind.wheel)];
+    assert(isValidFrame(f).isNull);
 
-    // Висящая cross-труба: у off-plane узла только cross-балка к осевому.
-    {
-        HalfFrame f;
-        f.nodes = [
-            Node(vec3(0.3f, 0.0f, 0.0f)),
-            Node(vec3(0.0f, 0.0f, 0.0f)),
-        ];
-        f.beams = [Beam(0, 1, 0.04f, BeamKind.cross)];
-        assert(isValidFrame(f).isNull);
-    }
-
-    // Разорванные половины: обычная балка между двумя off-plane узлами,
-    // связующих cross/осевого узла нет.
-    {
-        HalfFrame f;
-        f.nodes = [
-            Node(vec3(0.3f, 0.0f, 0.0f)),
-            Node(vec3(0.3f, 1.0f, 0.0f)),
-        ];
-        f.beams = [Beam(0, 1, 0.04f, BeamKind.normal)];
-        assert(isValidFrame(f).isNull);
-    }
-
-    // Осевой узел-мост: связно и до, и после зеркального замыкания.
-    {
-        HalfFrame f;
-        f.nodes = [
-            Node(vec3(0.3f, 0.0f, 0.0f)),
-            Node(vec3(0.0f, 0.0f, 0.0f)),
-        ];
-        f.beams = [Beam(0, 1, 0.04f, BeamKind.normal)];
-        assert(!isValidFrame(f).isNull);
-    }
+    // Простейший валидный каркас: пара узлов с балкой и колёсами.
+    Frame g;
+    g.nodes = [
+        Node(vec3(0.6f, 0.7f, 0.3f)),
+        Node(vec3(0.6f, -0.7f, 0.3f)),
+    ];
+    g.beams = [Beam(0, 1, 0.05f)];
+    g.anchors = [
+        Anchor(0, AnchorKind.wheel),
+        Anchor(1, AnchorKind.motorWheel),
+    ];
+    assert(!isValidFrame(g).isNull);
 }

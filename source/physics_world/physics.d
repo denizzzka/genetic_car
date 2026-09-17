@@ -15,20 +15,33 @@ import frame.frame;
 
 unittest
 {
-    import frame.buggy;
     import std.math : isFinite;
 
-    const full = mirrorClosure(buggyFrame());
+    // Простейший багги: колесо, балка и моторное колесо на другом конце.
+    Frame frame;
+    size_t node(vec3 pos)
+    {
+        frame.nodes ~= Node(pos);
+        return frame.nodes.length - 1;
+    }
+
+    const wheel = node(vec3(0.6f, 0.7f, 0.3f));
+    const motor = node(vec3(0.6f, -0.7f, 0.3f));
+    const top = node(vec3(0.6f, 0.0f, 0.9f));
+    frame.beams ~= Beam(wheel, motor, 0.05f);
+    frame.beams ~= Beam(wheel, top, 0.03f);
+    frame.anchors ~= Anchor(wheel, AnchorKind.wheel);
+    frame.anchors ~= Anchor(motor, AnchorKind.motorWheel);
 
     // Подъём по Z, как в viewer: низ самого низкого колеса на z == 0.
     vec3 offset = vec3(0.0f);
     float minZ = float.max;
-    foreach (a; full.anchors)
-        if (full.nodes[a.node].z < minZ)
-            minZ = full.nodes[a.node].z;
+    foreach (a; frame.anchors)
+        if (frame.nodes[a.node].pos.z < minZ)
+            minZ = frame.nodes[a.node].pos.z;
     offset.z = wheelRadius - minZ;
 
-    auto physics = new CarPhysics(full, offset);
+    auto physics = new CarPhysics(frame, offset);
     scope (exit) physics.dispose();
 
     // ~10 секунд симуляции с газом — машина должна остаться на земле,
@@ -156,14 +169,14 @@ final class CarPhysics
     /// Тело земли: статичный бокс, верхняя грань на z == 0.
     private RigidBody ground;
 
-    /// Тела балок по индексам `FullFrame.beams` (null — вырожденная балка).
+    /// Тела балок по индексам `Frame.beams` (null — вырожденная балка).
     private RigidBody[] beamBodies;
 
-    /// Тела колёс по индексам `FullFrame.anchors` и признак ведущего колеса.
+    /// Тела колёс по индексам `Frame.anchors` и признак ведущего колеса.
     private RigidBody[] wheelBodies;
     private bool[] wheelDrive;
 
-    this(const FullFrame frame, const vec3 offset)
+    this(const Frame frame, const vec3 offset)
     {
         world = New!PhysicsWorld(null, 1000);
         world.gravity = Vector3f(0.0f, 0.0f, -9.80665f); // Z вверх
@@ -243,12 +256,12 @@ final class CarPhysics
         return res;
     }
 
-    private void buildBeams(const FullFrame frame, const vec3 offset)
+    private void buildBeams(const Frame frame, const vec3 offset)
     {
         foreach (i, b; frame.beams)
         {
-            const vec3 a = frame.nodes[b.a] + offset;
-            const vec3 b2 = frame.nodes[b.b] + offset;
+            const vec3 a = frame.nodes[b.a].pos + offset;
+            const vec3 b2 = frame.nodes[b.b].pos + offset;
             const vec3 dir = b2 - a;
             const float len = dir.length;
             if (len < 1e-5f)
@@ -279,7 +292,7 @@ final class CarPhysics
 
         foreach (node, inc; nodeBeams)
         {
-            const vec3 nodePos = frame.nodes[node] + offset;
+            const vec3 nodePos = frame.nodes[node].pos + offset;
             foreach (m; 0 .. inc.length)
                 foreach (n; m + 1 .. inc.length)
                 {
@@ -295,14 +308,14 @@ final class CarPhysics
         }
     }
 
-    private void buildWheels(const FullFrame frame, const vec3 offset)
+    private void buildWheels(const Frame frame, const vec3 offset)
     {
         wheelBodies.length = frame.anchors.length;
         wheelDrive.length = frame.anchors.length;
 
         foreach (i, a; frame.anchors)
         {
-            const vec3 nodePos = frame.nodes[a.node] + offset;
+            const vec3 nodePos = frame.nodes[a.node].pos + offset;
 
             auto wheel = world.addDynamicBody(nodePos, 0.0f);
             // Ось цилиндра (локальный Y) — вдоль поперечной оси машины X.

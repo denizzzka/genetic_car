@@ -1,13 +1,12 @@
 module genetics.encoder;
 
-import std.math : fabs;
 import dlib.math.vector;
 import frame.frame;
 import genetics.sge;
 import genetics.buggygrammar;
 
 /**
- * HalfFrame -> token plan (same terminals frameFromTokens expects).
+ * Frame -> token plan (same terminals frameFromTokens expects).
  *
  * BFS from node 0 builds a spanning tree: tree edge -> endNew + delta,
  * back edge -> refIdx of both endpoints.  "last" tracks the creation-order
@@ -15,14 +14,10 @@ import genetics.buggygrammar;
  * BFS (а не DFS) выбирает короткие рёбра остовного дерева, чтобы дельты
  * попадали в диапазон самплеров destX/destY/destZ.
  */
-Terminal!Tok[] frameToTokens(const HalfFrame f)
+Terminal!Tok[] frameToTokens(const Frame f)
 in
 {
     assert(f.nodes.length > 0);
-    // Seed-узел (корень обхода) обязан лежать на плоскости симметрии:
-    // декодер всегда создаёт seed с x == 0, и только тогда зеркальное
-    // замыкание получается связным (см. isConnected).
-    assert(isOnPlane(f.nodes[0].pos), "seed-узел должен лежать на плоскости симметрии");
 }
 do
 {
@@ -190,17 +185,17 @@ Genotype encodeTokens(Grammar gr, const Terminal!Tok[] tokens)
     size_t pi;
 
     gt.genes[findNT("frame").id] ~= 0u;
-    gt.genes[findNT("seedPos").id] ~= 0u;
+    gt.genes[findNT("startPos").id] ~= 0u;
 
-    auto seedY = findSampler("seedY");
-    auto seedZ = findSampler("seedZ");
-    // X-координата seed-узла всегда 0 (см. грамматику buggyGrammar) и
-    // не кодируется отдельным геном.
-    assert(tokens[pi].tok == Tok.coord, "seed x coord");
-    assert(fabs(tokens[pi].f) <= planeEpsilon, "seed должен лежать на плоскости симметрии");
-    pi++;
-    gt.genes[seedY.id] ~= encodeFloat(tokens[pi++].f, seedY.min, seedY.max);
-    gt.genes[seedZ.id] ~= encodeFloat(tokens[pi++].f, seedZ.min, seedZ.max);
+    auto startX = findSampler("startX");
+    auto startY = findSampler("startY");
+    auto startZ = findSampler("startZ");
+    assert(tokens[pi].tok == Tok.coord, "позиция первого узла: x");
+    gt.genes[startX.id] ~= encodeFloat(tokens[pi++].f, startX.min, startX.max);
+    assert(tokens[pi].tok == Tok.coord, "позиция первого узла: y");
+    gt.genes[startY.id] ~= encodeFloat(tokens[pi++].f, startY.min, startY.max);
+    assert(tokens[pi].tok == Tok.coord, "позиция первого узла: z");
+    gt.genes[startZ.id] ~= encodeFloat(tokens[pi++].f, startZ.min, startZ.max);
 
     auto beamList_ = findNT("beamList");
     auto beam = findNT("beam");
@@ -284,117 +279,66 @@ Genotype encodeTokens(Grammar gr, const Terminal!Tok[] tokens)
     return gt;
 }
 
-Genotype encodeFrame(Grammar gr, const HalfFrame f)
+Genotype encodeFrame(Grammar gr, const Frame f)
 {
     auto tokens = frameToTokens(f);
     return encodeTokens(gr, tokens);
 }
 
-unittest
+/// Простейший стартовый геном: колесо на одном конце балки, моторное колесо
+/// на другом, плюс одна дополнительная балка — чтобы мутации могли менять
+/// структуру, а не только геометрию.
+Genotype startGenome(Grammar gr)
 {
-    import frame.buggy : buggyFrame;
-    import std.random : Random;
-
-    auto gr = buggyGrammar();
-    const f = buggyFrame();
-
-    auto tokens = frameToTokens(f);
-    assert(tokens.length > 3);
-    assert(tokens[0].tok == Tok.coord);
-    assert(tokens[1].tok == Tok.coord);
-    assert(tokens[2].tok == Tok.coord);
-
-    auto gt = encodeTokens(gr, tokens);
-    assert(gt.genes.length == gr.symbols.length);
-
-    auto decoded = decode!Tok(gr, gt);
-    assert(decoded !is null, "decode must succeed");
-    assert(decoded.length == tokens.length);
-
-    HalfFrame f2;
-    assert(frameFromTokens(decoded, f2), "frameFromTokens must succeed");
-    assert(!isValidFrame(f2).isNull, "decoded frame must be valid");
-    assert(f.nodes.length == f2.nodes.length);
-    assert(f.beams.length == f2.beams.length);
-
-    // Точность: геометрия совпадает (учитываем перестановку индексов узлов,
-    // вызванную порядком создания при декодировании), в пределах planeEpsilon.
-    bool[] nodeUsed = new bool[f2.nodes.length];
-    size_t[] idx = new size_t[f.nodes.length];
-    foreach (i, n; f.nodes)
+    Frame f;
+    size_t node(vec3 pos)
     {
-        bool found;
-        foreach (j, ref n2; f2.nodes)
-        {
-            if (nodeUsed[j])
-                continue;
-            if (distance(n.pos, n2.pos) <= planeEpsilon)
-            {
-                idx[i] = j;
-                nodeUsed[j] = true;
-                found = true;
-                break;
-            }
-        }
-        assert(found, "node not found in roundtrip");
+        f.nodes ~= Node(pos);
+        return f.nodes.length - 1;
     }
 
-    bool[] beamUsed = new bool[f2.beams.length];
-    foreach (b1; f.beams)
-    {
-        bool found;
-        foreach (bi, b2; f2.beams)
-        {
-            if (beamUsed[bi])
-                continue;
-            const iA = idx[b1.a];
-            const iB = idx[b1.b];
-            const bool fwd = b2.a == iA && b2.b == iB;
-            const bool rev = b2.a == iB && b2.b == iA;
-            if ((fwd || rev) && fabs(b2.radius - b1.radius) <= planeEpsilon
-                && b2.kind == b1.kind)
-            {
-                beamUsed[bi] = true;
-                found = true;
-                break;
-            }
-        }
-        assert(found, "beam not found in roundtrip");
-    }
+    const wheel = node(vec3(0.6f, 0.7f, 0.3f));
+    const motor = node(vec3(0.6f, -0.7f, 0.3f));
+    const top = node(vec3(0.6f, 0.0f, 0.9f));
 
-    // Якоря округло возвращаются: тот же тип и тот же узел (по idx-отображению).
-    assert(f.anchors.length == f2.anchors.length);
-    bool[] anchorUsed = new bool[f2.anchors.length];
-    foreach (a1; f.anchors)
-    {
-        bool found;
-        foreach (ai, a2; f2.anchors)
-        {
-            if (anchorUsed[ai])
-                continue;
-            if (a2.kind == a1.kind && a2.node == idx[a1.node])
-            {
-                anchorUsed[ai] = true;
-                found = true;
-                break;
-            }
-        }
-        assert(found, "anchor not found in roundtrip");
-    }
+    f.beams ~= Beam(wheel, motor, 0.05f);
+    f.beams ~= Beam(wheel, top, 0.03f);
+    f.anchors ~= Anchor(wheel, AnchorKind.wheel);
+    f.anchors ~= Anchor(motor, AnchorKind.motorWheel);
 
-    auto rnd = Random(1);
-    mutate(gt, 1, rnd);
-    assert(gt.genes.length == gr.symbols.length);
+    return encodeFrame(gr, f);
 }
 
 unittest
 {
-    import frame.buggy : buggyFrame;
-    import std.random;
-    import std.typecons : Nullable;
+    import std.random : Random;
 
     auto gr = buggyGrammar();
-    auto genome = encodeFrame(gr, buggyFrame());
+    auto genome = startGenome(gr);
+    assert(genome.genes.length == gr.symbols.length);
+
+    // Стартовая хромосома развивается в простейший каркас.
+    auto may = develop(gr, genome);
+    assert(!may.isNull, "стартовая хромосома должна развиваться");
+    const f = may.get;
+    assert(f.nodes.length == 3);
+    assert(f.beams.length == 2);
+    assert(f.anchors.length == 2);
+    assert(f.anchors[0].kind == AnchorKind.wheel && f.anchors[0].node == 0);
+    assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 1);
+    assert(f.totalBeamLength > 0.0f);
+
+    auto rnd = Random(1);
+    mutate(genome, 1, rnd);
+    assert(genome.genes.length == gr.symbols.length);
+}
+
+unittest
+{
+    import std.random;
+
+    auto gr = buggyGrammar();
+    auto genome = startGenome(gr);
     auto rnd = Random(3);
 
     // Мутация малого числа кодонов (1-3) в подавляющем большинстве случаев
@@ -413,9 +357,8 @@ unittest
     }
 
     assert(okCount > 100, "большинство точечных мутаций должны развиваться в валидный каркас");
-    // Балки считаются в полном (зеркально замкнутом) каркасе — примерно вдвое
-    // больше правой половины.
+    // Число балок живёт в узком диапазоне вокруг стартового.
     const avg = beamTotal / okCount;
-    assert(avg >= 20 && avg <= 140,
+    assert(avg >= 1 && avg <= 6,
         "одна мутация не должна обрушивать или раздувать каркас");
 }

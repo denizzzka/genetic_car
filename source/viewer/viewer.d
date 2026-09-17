@@ -8,7 +8,6 @@ import std.random;
 import std.typecons : Nullable;
 import car.car;
 import frame.frame;
-import frame.buggy;
 import genetics;
 import physics_world;
 
@@ -35,8 +34,6 @@ class BuggyScene: Scene
     Mesh meshBeam = null;
     Mesh meshWheel = null;
     Material matBeam;
-    Material matCross;
-    Material matAxial;
     Material matWheel;
     Material matDriveWheel;
 
@@ -85,14 +82,6 @@ class BuggyScene: Scene
         matBeam.baseColorFactor = Color4f(0.55f, 0.55f, 0.62f, 1.0f);
         matBeam.metallicFactor = 0.7f;
 
-        matCross = addMaterial();
-        matCross.baseColorFactor = Color4f(0.9f, 0.85f, 0.15f, 1.0f);
-        matCross.metallicFactor = 0.7f;
-
-        matAxial = addMaterial();
-        matAxial.baseColorFactor = Color4f(0.2f, 0.8f, 0.25f, 1.0f);
-        matAxial.metallicFactor = 0.7f;
-
         matWheel = addMaterial();
         matWheel.baseColorFactor = Color4f(0.08f, 0.08f, 0.08f, 1.0f);
         matWheel.roughnessFactor = 0.9f;
@@ -103,7 +92,7 @@ class BuggyScene: Scene
         matDriveWheel.roughnessFactor = 0.9f;
         matDriveWheel.metallicFactor = 0.0f;
 
-        currentGenome = encodeFrame(grammar, buggyFrame());
+        currentGenome = startGenome(grammar);
         auto frame = currentFrame();
         current = new Buggy(frame, groundOffset(frame));
         buildCar(current);
@@ -124,7 +113,7 @@ class BuggyScene: Scene
         GC.addRange(cast(void*)this, __traits(classInstanceSize, BuggyScene));
     }
 
-    private FullFrame currentFrame()
+    private Frame currentFrame()
     {
         auto may = develop(grammar, currentGenome);
         assert(!may.isNull, "encoded buggy frame must develop");
@@ -137,7 +126,7 @@ class BuggyScene: Scene
 
         if (eventManager.keyDown[KEY_R])
         {
-            currentGenome = encodeFrame(grammar, buggyFrame());
+            currentGenome = startGenome(grammar);
             removeCar();
             auto frame = currentFrame();
             current = new Buggy(frame, groundOffset(frame));
@@ -146,7 +135,7 @@ class BuggyScene: Scene
         else if (eventManager.keyDown[KEY_M])
         {
             bool ok;
-            FullFrame f;
+            Frame f;
             auto candidate = currentGenome;
             foreach (_; 0 .. 100)
             {
@@ -175,25 +164,23 @@ class BuggyScene: Scene
 
     /// Компенсирующее смещение, приводящее каркас к началу координат.
     ///
-    /// Горизонтально (X, Y) каркас центрируется — смещение по X безопасно:
-    /// полный каркас симметричен относительно x == 0, а сдвиг всей
-    /// конструкции симметрии не нарушает. Вертикально (Z) каркас
-    /// поднимается так, чтобы нижняя точка самого низкого колеса
+    /// Горизонтально (X, Y) каркас центрируется по среднему узлов. Вертикально
+    /// (Z) каркас поднимается так, чтобы нижняя точка самого низкого колеса
     /// легла на землю (z == 0 в координатах машины). Иначе из-за
     /// центрирования по средней высоте машина наполовину в земле.
-    private vec3 groundOffset(const FullFrame f)
+    private vec3 groundOffset(const Frame f)
     {
         vec3 c = vec3(0.0f);
 
         foreach (n; f.nodes)
-            c += n;
+            c += n.pos;
 
         if (f.nodes.length > 0)
             c /= f.nodes.length;
 
         float minZ = float.max;
         foreach (a; f.anchors)
-            minZ = min(minZ, f.nodes[a.node].z);
+            minZ = min(minZ, f.nodes[a.node].pos.z);
 
         float lift = wheelRadius - minZ;
         if (lift < 0.0f)
@@ -228,42 +215,34 @@ class BuggyScene: Scene
 
     private void buildCar(const Buggy car)
     {
-        const full = car.full;
+        const frame = car.frame;
         const off = car.offset;
 
-        physics = new CarPhysics(full, off);
+        physics = new CarPhysics(frame, off);
         beamEntities.length = 0;
         wheelEntities.length = 0;
 
-        foreach (b; full.beams)
+        foreach (b; frame.beams)
         {
-            const a = full.nodes[b.a] + off;
-            const b2 = full.nodes[b.b] + off;
+            const a = frame.nodes[b.a].pos + off;
+            const b2 = frame.nodes[b.b].pos + off;
             const dir = b2 - a;
             const float length = dir.length;
             if (length < 1e-5f)
                 continue;
 
-            Material mat;
-            if (b.kind == BeamKind.cross)
-                mat = matCross;
-            else if (b.kind == BeamKind.axial)
-                mat = matAxial;
-            else
-                mat = matBeam;
-
             auto e = addEntity(carRoot);
             e.drawable = meshBeam;
-            e.material = mat;
+            e.material = matBeam;
             e.position = (a + b2) * 0.5f;
             e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
             e.scaling = Vector3f(b.radius, length, b.radius);
             beamEntities ~= e;
         }
 
-        foreach (anchor; full.anchors)
+        foreach (anchor; frame.anchors)
         {
-            const pos = full.nodes[anchor.node] + off;
+            const pos = frame.nodes[anchor.node].pos + off;
             final switch (anchor.kind)
             {
                 case AnchorKind.wheel:
