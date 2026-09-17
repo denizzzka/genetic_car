@@ -44,7 +44,7 @@ struct Anchor
 enum BeamKind { normal, cross, axial }
 
 /**
- * Балка: пара индексов узлов в `Frame.nodes`.
+ * Балка: пара индексов узлов в `HalfFrame.nodes`.
  *
  * `cross` — балка, строго перпендикулярная плоскости симметрии. Соединяет
  * правый узел `a` (`x > 0`) с осевым узлом `b` (`x == 0`), у которого те же
@@ -64,7 +64,7 @@ struct Beam
  * Половина каркаса (правая сторона).
  * Полный каркас строится зеркальным замыканием, см. `mirrorClosure`.
  */
-struct Frame
+struct HalfFrame
 {
     Node[] nodes;
     Beam[] beams;
@@ -130,7 +130,7 @@ bool isOnPlane(const vec3 p)
  * Якоря (колёса) разворачиваются аналогично: якорь на осевом узле
  * остаётся один, на правом — дублируется зеркально.
  */
-FullFrame mirrorClosure(const Frame frame)
+FullFrame mirrorClosure(const HalfFrame frame)
 {
     FullFrame full;
     full.right.length = frame.nodes.length;
@@ -289,7 +289,7 @@ bool isSymmetric(const FullFrame full)
 unittest
 {
     // Узлы половины: два колесных якоря справа, момент на оси, свободный узел.
-    Frame frame;
+    HalfFrame frame;
     frame.nodes = [
         Node(vec3(0.6f,  1.0f, 0.3f)),  // переднее правое колесо
         Node(vec3(0.6f, -1.0f, 0.3f)),  // заднее правое колесо
@@ -372,7 +372,7 @@ unittest
 unittest
 {
     // Балка целиком на оси симметрии существует в одном экземпляре.
-    Frame frame;
+    HalfFrame frame;
     frame.nodes = [
         Node(vec3(0.0f,  1.0f, 0.5f)),
         Node(vec3(0.0f, -1.0f, 0.5f)),
@@ -393,7 +393,7 @@ unittest
 {
     // Cross-балка: правый узел a (x > 0) и осевой узел b (x == 0)
     // на тех же y,z. Разворачивается в одну прямую трубу (x,y,z) -> (-x,y,z).
-    Frame frame;
+    HalfFrame frame;
     frame.nodes = [
         Node(vec3(0.6f, 1.0f, 0.3f)),
         Node(vec3(0.0f, 1.0f, 0.3f)),
@@ -419,7 +419,7 @@ unittest
 unittest
 {
     // Якорь на осевом узле не дублируется.
-    Frame frame;
+    HalfFrame frame;
     frame.nodes = [
         Node(vec3(0.0f, 0.0f, 0.5f)),
     ];
@@ -437,7 +437,7 @@ unittest
 unittest
 {
     // Пустой каркас — тривиально симметричен и корректен.
-    const full = mirrorClosure(Frame.init);
+    const full = mirrorClosure(HalfFrame.init);
     assert(full.nodes.length == 0);
     assert(full.beams.length == 0);
     assert(full.anchors.length == 0);
@@ -454,7 +454,7 @@ unittest
     // узлу 1. Половина связана, но в полном каркасе cross-труба висит
     // отдельным компонентом (r0–l0), а осевой узел 1 не получает рёбер.
     {
-        Frame f;
+        HalfFrame f;
         f.nodes = [
             Node(vec3(0.3f, 0.0f, 0.0f)),
             Node(vec3(0.0f, 0.0f, 0.0f)),
@@ -466,7 +466,7 @@ unittest
     // Прецедент Б: без cross-балок и общих осевых узлов зеркальные
     // половины соединены только внутри себя, но не друг с другом.
     {
-        Frame f;
+        HalfFrame f;
         f.nodes = [
             Node(vec3(0.3f, 0.0f, 0.0f)),
             Node(vec3(0.3f, 1.0f, 0.0f)),
@@ -477,7 +477,7 @@ unittest
 
     // Осевой узел-мост: обе половины и весь каркас остаются связными.
     {
-        Frame f;
+        HalfFrame f;
         f.nodes = [
             Node(vec3(0.3f, 0.0f, 0.0f)),
             Node(vec3(0.0f, 0.0f, 0.0f)),

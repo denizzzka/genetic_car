@@ -5,9 +5,9 @@ import std.range : walkLength;
 import dlib.math.vector;
 import frame.frame;
 
-Frame buggyFrame()
+HalfFrame buggyFrame()
 {
-    Frame f;
+    HalfFrame f;
 
     size_t node(vec3 pos)
     {
@@ -114,12 +114,12 @@ Frame buggyFrame()
     return f;
 }
 
-size_t anchorCount(const Frame f)
+size_t anchorCount(const HalfFrame f)
 {
     return f.anchors.length;
 }
 
-size_t planeNodeCount(const Frame f)
+size_t planeNodeCount(const HalfFrame f)
 {
     return f.nodes.filter!(n => isOnPlane(n.pos)).walkLength();
 }

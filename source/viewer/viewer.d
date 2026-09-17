@@ -112,7 +112,7 @@ class BuggyScene: Scene
         GC.addRange(cast(void*)this, __traits(classInstanceSize, BuggyScene));
     }
 
-    private Frame currentFrame()
+    private FullFrame currentFrame()
     {
         auto may = develop(grammar, currentGenome);
         assert(!may.isNull, "encoded buggy frame must develop");
@@ -134,7 +134,7 @@ class BuggyScene: Scene
         else if (eventManager.keyDown[KEY_M])
         {
             bool ok;
-            Frame f;
+            FullFrame f;
             auto candidate = currentGenome;
             foreach (_; 0 .. 100)
             {
@@ -161,12 +161,12 @@ class BuggyScene: Scene
     /// Компенсирующее смещение, приводящее каркас к началу координат.
     /// Сдвиг по X безопасен: полный каркас симметричен относительно
     /// x == 0, а смещение всей конструкции не нарушает этой симметрии.
-    private vec3 centerOffset(const Frame f)
+    private vec3 centerOffset(const FullFrame f)
     {
         vec3 c = vec3(0.0f);
 
         foreach (n; f.nodes)
-            c += n.pos;
+            c += n;
 
         if (f.nodes.length > 0)
             c /= f.nodes.length;

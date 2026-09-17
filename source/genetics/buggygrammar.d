@@ -47,7 +47,7 @@ private Terminal!Tok marker(Tok tok)
  *
  * Якоря генерируются после всех балок: это пара `anchorKind` + `refIdx`,
  * где `refIdx` ссылается на уже созданный узел. Якоря лежат на том же
- * уровне иерархии, что и балки (см. `Frame.anchors`).
+ * уровне иерархии, что и балки (см. `HalfFrame.anchors`).
  */
 Grammar buggyGrammar()
 {
@@ -136,9 +136,9 @@ Grammar buggyGrammar()
  * узел, `refIdx` — на существующий по номеру, `endNew` (со смещениями)
  * создаёт новый узел на позиции старта + смещение.
  */
-bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
+bool frameFromTokens(const Terminal!Tok[] tokens, out HalfFrame result)
 {
-    result = Frame.init;
+    result = HalfFrame.init;
 
     // Первые три токена — абсолютная позиция seed-узла.
     if (tokens.length < 3)
@@ -235,9 +235,10 @@ bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
     return true;
 }
 
-/// Минимальная проверка каркаса: узлы в границах, без вырожденных балок,
-/// весь (в т.ч. зеркальный) каркас — один связный граф, якоря — на валидных узлах.
-bool isValidFrame(const Frame f)
+/// Структурная валидность правой половины каркаса: узлы в границах,
+/// без вырожденных балок, якоря — на валидных узлах. Связность полного
+/// (зеркального) каркаса не проверяется — см. `isValidFrame`.
+private bool isWellFormed(const HalfFrame f)
 {
     if (f.nodes.length == 0 || f.beams.length == 0)
         return false;
@@ -289,31 +290,43 @@ bool isValidFrame(const Frame f)
             return false;
     }
 
+    return true;
+}
+
+/// Минимальная проверка каркаса: узлы в границах, без вырожденных балок,
+/// весь (в т.ч. зеркальный) каркас — один связный граф, якоря — на валидных узлах.
+bool isValidFrame(const HalfFrame f)
+{
+    if (!isWellFormed(f))
+        return false;
     // Связность проверяется на полном (зеркальном) каркасе. Связность
     // правой половины сама по себе не гарантирует, что mirrorClosure не
     // распадётся на отдельные компоненты: cross-балка в полном каркасе
     // соединяет правый узел со своим зеркалом, а осевой узел такой балки
     // вообще не получает рёбер, поэтому «висящие» cross-трубы и разорванные
     // пополам половины возможны даже при связной половине.
-    if (!isConnected(mirrorClosure(f)))
-        return false;
-    return true;
+    return isConnected(mirrorClosure(f));
 }
 
-/// Расшифровать геном из грамматики багги в кадр (фенотип).
-/// Значение-результат сам говорит об успехе: `Nullable!Frame.isNull`
-/// означает, что декодирование, разбор или валидация не прошли.
-Nullable!Frame develop(const Grammar gr, const Genotype g)
+/// Расшифровать геном из грамматики багги в полный (зеркально замкнутый)
+/// каркас. Зеркальное замыкание выполняется один раз — результат сразу
+/// пригоден для построения модели. Значение-результат сам говорит об успехе:
+/// `Nullable!FullFrame.isNull` означает, что декодирование, разбор или
+/// валидация не прошли.
+Nullable!FullFrame develop(const Grammar gr, const Genotype g)
 {
     auto tokens = decode!Tok(gr, g);
     if (tokens is null)
-        return Nullable!Frame.init;
-    Frame result;
+        return Nullable!FullFrame.init;
+    HalfFrame result;
     if (!frameFromTokens(tokens, result))
-        return Nullable!Frame.init;
-    if (!isValidFrame(result))
-        return Nullable!Frame.init;
-    return Nullable!Frame(result);
+        return Nullable!FullFrame.init;
+    if (!isWellFormed(result))
+        return Nullable!FullFrame.init;
+    auto full = mirrorClosure(result);
+    if (!isConnected(full))
+        return Nullable!FullFrame.init;
+    return Nullable!FullFrame(full);
 }
 
 unittest
@@ -335,7 +348,7 @@ unittest
         ++decodeOk;
         assert(tokens.length > 0);
 
-        Frame f;
+        HalfFrame f;
         if (!frameFromTokens(tokens, f))
             continue;
 
@@ -370,7 +383,7 @@ unittest
 
     // Висящая cross-труба: у off-plane узла только cross-балка к осевому.
     {
-        Frame f;
+        HalfFrame f;
         f.nodes = [
             Node(vec3(0.3f, 0.0f, 0.0f)),
             Node(vec3(0.0f, 0.0f, 0.0f)),
@@ -382,7 +395,7 @@ unittest
     // Разорванные половины: обычная балка между двумя off-plane узлами,
     // связующих cross/осевого узла нет.
     {
-        Frame f;
+        HalfFrame f;
         f.nodes = [
             Node(vec3(0.3f, 0.0f, 0.0f)),
             Node(vec3(0.3f, 1.0f, 0.0f)),
@@ -393,7 +406,7 @@ unittest
 
     // Осевой узел-мост: связно и до, и после зеркального замыкания.
     {
-        Frame f;
+        HalfFrame f;
         f.nodes = [
             Node(vec3(0.3f, 0.0f, 0.0f)),
             Node(vec3(0.0f, 0.0f, 0.0f)),

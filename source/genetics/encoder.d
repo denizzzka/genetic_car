@@ -7,7 +7,7 @@ import genetics.sge;
 import genetics.buggygrammar;
 
 /**
- * Frame -> token plan (same terminals frameFromTokens expects).
+ * HalfFrame -> token plan (same terminals frameFromTokens expects).
  *
  * BFS from node 0 builds a spanning tree: tree edge -> endNew + delta,
  * back edge -> refIdx of both endpoints.  "last" tracks the creation-order
@@ -15,7 +15,7 @@ import genetics.buggygrammar;
  * BFS (а не DFS) выбирает короткие рёбра остовного дерева, чтобы дельты
  * попадали в диапазон самплеров destX/destY/destZ.
  */
-Terminal!Tok[] frameToTokens(const Frame f)
+Terminal!Tok[] frameToTokens(const HalfFrame f)
 in
 {
     assert(f.nodes.length > 0);
@@ -284,7 +284,7 @@ Genotype encodeTokens(Grammar gr, const Terminal!Tok[] tokens)
     return gt;
 }
 
-Genotype encodeFrame(Grammar gr, const Frame f)
+Genotype encodeFrame(Grammar gr, const HalfFrame f)
 {
     auto tokens = frameToTokens(f);
     return encodeTokens(gr, tokens);
@@ -311,7 +311,7 @@ unittest
     assert(decoded !is null, "decode must succeed");
     assert(decoded.length == tokens.length);
 
-    Frame f2;
+    HalfFrame f2;
     assert(frameFromTokens(decoded, f2), "frameFromTokens must succeed");
     assert(isValidFrame(f2), "decoded frame must be valid");
     assert(f.nodes.length == f2.nodes.length);
@@ -413,7 +413,9 @@ unittest
     }
 
     assert(okCount > 100, "большинство точечных мутаций должны развиваться в валидный каркас");
+    // Балки считаются в полном (зеркально замкнутом) каркасе — примерно вдвое
+    // больше правой половины.
     const avg = beamTotal / okCount;
-    assert(avg >= 10 && avg <= 70,
+    assert(avg >= 20 && avg <= 140,
         "одна мутация не должна обрушивать или раздувать каркас");
 }
