@@ -203,6 +203,52 @@ FullFrame mirrorClosure(const Frame frame)
 }
 
 /**
+ * Проверка связности полного каркаса: все узлы достижимы из узла 0 по балкам.
+ *
+ * Нужна именно после `mirrorClosure`, потому что связность правой половины
+ * не гарантирует связности зеркального замыкания. Cross-балка в полном
+ * каркасе соединяет правый узел со своим зеркалом, а не с осевым узлом
+ * (см. `mirrorClosure`), поэтому узел, у которого одни лишь cross-балки,
+ * превращается в отдельный «висящий» компонент. А без cross-балок и без
+ * общего осевого узла зеркальные половины вообще не соединены между собой.
+ */
+bool isConnected(const FullFrame full)
+{
+    if (full.nodes.length == 0)
+        return true;
+
+    bool[] visited = new bool[full.nodes.length];
+    size_t[] stack = [0];
+    visited[0] = true;
+
+    while (stack.length > 0)
+    {
+        const n = stack[$ - 1];
+        stack.length -= 1;
+        foreach (b; full.beams)
+        {
+            size_t next;
+            if (b.a == n)
+                next = b.b;
+            else if (b.b == n)
+                next = b.a;
+            else
+                continue;
+            if (next < visited.length && !visited[next])
+            {
+                visited[next] = true;
+                stack ~= next;
+            }
+        }
+    }
+
+    foreach (v; visited)
+        if (!v)
+            return false;
+    return true;
+}
+
+/**
  * Проверка того, что для каждой балки полного каркаса в нём же есть
  * её зеркальное отражение. Балка на оси симметрии — собственное отражение.
  */
@@ -396,4 +442,47 @@ unittest
     assert(full.beams.length == 0);
     assert(full.anchors.length == 0);
     assert(isSymmetric(full));
+    assert(isConnected(full));
+}
+
+unittest
+{
+    // Связность полного каркаса: связность правой половины не гарантирует
+    // связности зеркального замыкания.
+
+    // Прецедент А: у off-plane узла 0 единственная балка — cross к осевому
+    // узлу 1. Половина связана, но в полном каркасе cross-труба висит
+    // отдельным компонентом (r0–l0), а осевой узел 1 не получает рёбер.
+    {
+        Frame f;
+        f.nodes = [
+            Node(vec3(0.3f, 0.0f, 0.0f)),
+            Node(vec3(0.0f, 0.0f, 0.0f)),
+        ];
+        f.beams = [Beam(0, 1, 0.04f, BeamKind.cross)];
+        assert(!isConnected(mirrorClosure(f)), "висящая cross-труба не должна быть связной");
+    }
+
+    // Прецедент Б: без cross-балок и общих осевых узлов зеркальные
+    // половины соединены только внутри себя, но не друг с другом.
+    {
+        Frame f;
+        f.nodes = [
+            Node(vec3(0.3f, 0.0f, 0.0f)),
+            Node(vec3(0.3f, 1.0f, 0.0f)),
+        ];
+        f.beams = [Beam(0, 1, 0.04f, BeamKind.normal)];
+        assert(!isConnected(mirrorClosure(f)), "разорванные половины не должны быть связными");
+    }
+
+    // Осевой узел-мост: обе половины и весь каркас остаются связными.
+    {
+        Frame f;
+        f.nodes = [
+            Node(vec3(0.3f, 0.0f, 0.0f)),
+            Node(vec3(0.0f, 0.0f, 0.0f)),
+        ];
+        f.beams = [Beam(0, 1, 0.04f, BeamKind.normal)];
+        assert(isConnected(mirrorClosure(f)));
+    }
 }

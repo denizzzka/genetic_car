@@ -9,14 +9,20 @@ import genetics.buggygrammar;
 /**
  * Frame -> token plan (same terminals frameFromTokens expects).
  *
- * DFS from node 0 builds a spanning tree: tree edge -> endNew + delta,
+ * BFS from node 0 builds a spanning tree: tree edge -> endNew + delta,
  * back edge -> refIdx of both endpoints.  "last" tracks the creation-order
  * index of the most recently endNew'd node, same as in the decoder.
+ * BFS (а не DFS) выбирает короткие рёбра остовного дерева, чтобы дельты
+ * попадали в диапазон самплеров destX/destY/destZ.
  */
 Terminal!Tok[] frameToTokens(const Frame f)
 in
 {
     assert(f.nodes.length > 0);
+    // Seed-узел (корень обхода) обязан лежать на плоскости симметрии:
+    // декодер всегда создаёт seed с x == 0, и только тогда зеркальное
+    // замыкание получается связным (см. isConnected).
+    assert(isOnPlane(f.nodes[0].pos), "seed-узел должен лежать на плоскости симметрии");
 }
 do
 {
@@ -48,8 +54,16 @@ do
     struct BackEdge { size_t from, to; size_t beamIdx; }
     BackEdge[] backEdges;
 
-    void dfs(size_t u)
+    // Обход в ширину вместо глубины: BFS-дерево обходит узлы по коротким
+    // рёбрам, и дельты (u -> v) почти всегда попадают в диапазон самплеров
+    // destX/destY/destZ (иначе длинное ребро остовного дерева не удалось бы
+    // закодировать, и roundtrip потерял бы геометрию).
+    size_t[] queue = [0];
+    while (queue.length > 0)
     {
+        const u = queue[0];
+        queue = queue[1 .. $];
+
         foreach (ref e; adj[u])
         {
             if (beamEmitted[e.beamIdx])
@@ -76,14 +90,12 @@ do
                 result ~= new Terminal!Tok(Tok.beamKind, cast(int) f.beams[e.beamIdx].kind);
 
                 last = order[e.to];
-                dfs(e.to);
+                queue ~= e.to;
             }
             else
                 backEdges ~= BackEdge(order[u], order[e.to], e.beamIdx);
         }
     }
-
-    dfs(0);
 
     foreach (v; visited)
         assert(v, "frame must be connected from node 0");
@@ -180,10 +192,13 @@ Genotype encodeTokens(Grammar gr, const Terminal!Tok[] tokens)
     gt.genes[findNT("frame").id] ~= 0u;
     gt.genes[findNT("seedPos").id] ~= 0u;
 
-    auto seedX = findSampler("seedX");
     auto seedY = findSampler("seedY");
     auto seedZ = findSampler("seedZ");
-    gt.genes[seedX.id] ~= encodeFloat(tokens[pi++].f, seedX.min, seedX.max);
+    // X-координата seed-узла всегда 0 (см. грамматику buggyGrammar) и
+    // не кодируется отдельным геном.
+    assert(tokens[pi].tok == Tok.coord, "seed x coord");
+    assert(fabs(tokens[pi].f) <= planeEpsilon, "seed должен лежать на плоскости симметрии");
+    pi++;
     gt.genes[seedY.id] ~= encodeFloat(tokens[pi++].f, seedY.min, seedY.max);
     gt.genes[seedZ.id] ~= encodeFloat(tokens[pi++].f, seedZ.min, seedZ.max);
 
