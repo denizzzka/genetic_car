@@ -127,16 +127,18 @@ Grammar buggyGrammar()
  * к уже созданному узлу). Токены `refLast` ссылаются на последний созданный
  * узел, `refIdx` — на существующий по номеру, `endNew` (со смещениями)
  * создаёт новый узел на позиции старта + смещение.
+ *
+ * Возврат — сам результат: `Nullable!Frame.isNull` означает ошибку разбора.
  */
-bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
+Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
 {
-    result = Frame.init;
+    Frame result;
 
     // Первые три токена — абсолютная позиция первого узла.
     if (tokens.length < 3)
-        return false;
+        return Nullable!Frame.init;
     if (tokens[0].tok != Tok.coord || tokens[1].tok != Tok.coord || tokens[2].tok != Tok.coord)
-        return false;
+        return Nullable!Frame.init;
     auto seed = vec3(tokens[0].f, tokens[1].f, tokens[2].f);
     result.nodes ~= Node(seed);
     size_t last = 0;
@@ -154,11 +156,11 @@ bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
             case Tok.refIdx:
                 start = tokens[i].i;
                 if (start >= result.nodes.length)
-                    return false;
+                    return Nullable!Frame.init;
                 ++i;
                 break;
             default:
-                return false;
+                return Nullable!Frame.init;
         }
 
         size_t end;
@@ -166,11 +168,11 @@ bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
         {
             case Tok.endNew:
                 if (i + 3 >= tokens.length)
-                    return false;
+                    return Nullable!Frame.init;
                 if (tokens[i + 1].tok != Tok.coord
                     || tokens[i + 2].tok != Tok.coord
                     || tokens[i + 3].tok != Tok.coord)
-                    return false;
+                    return Nullable!Frame.init;
                 auto dx = tokens[i + 1].f;
                 auto dy = tokens[i + 2].f;
                 auto dz = tokens[i + 3].f;
@@ -182,20 +184,20 @@ bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
             case Tok.refIdx:
                 end = tokens[i].i;
                 if (end >= result.nodes.length)
-                    return false;
+                    return Nullable!Frame.init;
                 ++i;
                 break;
             default:
-                return false;
+                return Nullable!Frame.init;
         }
 
         if (tokens[i].tok != Tok.radius)
-            return false;
+            return Nullable!Frame.init;
         auto radius = tokens[i].f;
         ++i;
 
         if (tokens[i].tok != Tok.beamKind)
-            return false;
+            return Nullable!Frame.init;
         auto beamKind = cast(BeamKind) tokens[i].i;
         ++i;
 
@@ -203,19 +205,19 @@ bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
     }
 
     if (i >= tokens.length)
-        return true;
+        return Nullable!Frame(result);
 
     // Маркер `Tok.anchors` — переход к якорям.
     ++i;
     while (i < tokens.length)
     {
         if (tokens[i].tok != Tok.anchorKind)
-            return false;
+            return Nullable!Frame.init;
         auto kind = cast(AnchorKind) tokens[i].i;
         ++i;
 
         if (i >= tokens.length || tokens[i].tok != Tok.refIdx)
-            return false;
+            return Nullable!Frame.init;
         // Индекс узла, как и кодоны SGE, заворачивается по числу узлов:
         // случайный индекс за пределами каркаса прижимается к существующему узлу,
         // а не роняет весь кадр.
@@ -224,7 +226,7 @@ bool frameFromTokens(const Terminal!Tok[] tokens, out Frame result)
 
         result.anchors ~= Anchor(n, kind);
     }
-    return true;
+    return Nullable!Frame(result);
 }
 
 /**
@@ -264,10 +266,10 @@ Nullable!Frame develop(const Grammar gr, const Genotype g)
     auto tokens = decode!Tok(gr, g);
     if (tokens is null)
         return Nullable!Frame.init;
-    Frame result;
-    if (!frameFromTokens(tokens, result))
+    auto frame = frameFromTokens(tokens);
+    if (frame.isNull)
         return Nullable!Frame.init;
-    return isValidFrame(result);
+    return isValidFrame(frame.get);
 }
 
 /**
@@ -279,13 +281,14 @@ Nullable!Frame develop(const Grammar gr, const Genotype g)
  * изменил структуру: иначе редкая структурная правка тонет среди
  * геометрических, и каркас никогда не растёт.
  *
- * `result` — валидный мутант; возвращает false, если подходящий не нашёлся.
+ * Возврат — сам результат: `Nullable!Genotype.isNull` означает, что подходящий
+ * мутант не нашёлся.
  */
-bool mutateStep(const Grammar gr, const Genotype genome, out Genotype result, ref Random rnd)
+Nullable!Genotype mutateStep(const Grammar gr, const Genotype genome, ref Random rnd)
 {
     const current = develop(gr, genome);
     if (current.isNull)
-        return false;
+        return Nullable!Genotype.init;
 
     const structural = uniform(0.0f, 1.0f, rnd) < 0.25f;
     foreach (_; 0 .. 100)
@@ -304,10 +307,9 @@ bool mutateStep(const Grammar gr, const Genotype genome, out Genotype result, re
             && may.get.anchors.length == current.get.anchors.length)
             continue;
 
-        result = candidate;
-        return true;
+        return Nullable!Genotype(candidate);
     }
-    return false;
+    return Nullable!Genotype.init;
 }
 
 unittest
@@ -329,11 +331,11 @@ unittest
         ++decodeOk;
         assert(tokens.length > 0);
 
-        Frame f;
-        if (!frameFromTokens(tokens, f))
+        auto f = frameFromTokens(tokens);
+        if (f.isNull)
             continue;
 
-        if (!isValidFrame(f).isNull)
+        if (!isValidFrame(f.get).isNull)
             ++valid;
     }
 

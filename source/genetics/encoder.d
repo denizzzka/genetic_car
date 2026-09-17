@@ -376,16 +376,16 @@ unittest
 
     foreach (_; 0 .. 50)
     {
-        Genotype next;
-        if (!mutateStep(gr, genome, next, rnd))
+        auto next = mutateStep(gr, genome, rnd);
+        if (next.isNull)
             continue;
 
-        auto f = develop(gr, next).get;
+        auto f = develop(gr, next.get).get;
         if (f.beams.length > startBeams)
             grewBeams = true;
         if (f.anchors.length > startAnchors)
             grewAnchors = true;
-        genome = next;
+        genome = next.get;
     }
 
     assert(grewBeams, "балки должны уметь появляться");

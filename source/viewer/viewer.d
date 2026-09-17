@@ -134,11 +134,11 @@ class BuggyScene: Scene
         }
         else if (eventManager.keyDown[KEY_M])
         {
-            Genotype candidate;
-            if (mutateStep(grammar, currentGenome, candidate, rnd))
+            auto candidate = mutateStep(grammar, currentGenome, rnd);
+            if (!candidate.isNull)
             {
-                auto f = develop(grammar, candidate).get;
-                currentGenome = candidate;
+                auto f = develop(grammar, candidate.get).get;
+                currentGenome = candidate.get;
                 removeCar();
                 current = new Buggy(f, groundOffset(f));
                 buildCar(current);
