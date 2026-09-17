@@ -98,6 +98,18 @@ class BuggyScene: Scene
 
         auto ePlane = addEntity();
         ePlane.drawable = New!ShapePlane(10.0f, 10.0f, 1, assetManager);
+
+        /*
+        BuggyScene is dlib-allocated (New!), so the GC can't see
+        references to objects (grammar, currentGenome, current) stored
+        in its fields. After enough GC pressure, these objects get
+        collected, and the next access SIGSEGVs.
+
+        It is need to register the scene's memory as a GC range so
+        the GC scans its fields for pointers.
+        */
+        import core.memory: GC;
+        GC.addRange(cast(void*)this, __traits(classInstanceSize, BuggyScene));
     }
 
     private Frame currentFrame()
