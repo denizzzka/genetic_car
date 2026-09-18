@@ -45,6 +45,11 @@ enum float targetFootprintLong = 3.0f;
 enum float targetFootprintShort = 2.0f;
 enum float footprintTolerance = 1.0f;
 
+/// Целевая высота габаритного параллелепипеда каркаса: заполнение объёма
+/// вверх (размах узлов по Z) и допуск.
+enum float targetFrameHeight = 2.5f;
+enum float frameHeightTolerance = 0.5f;
+
 /// Оценочная фитнес-функция каркаса (без физики).
 ///
 /// Возвращает 0 для физически невыполнимых каркасов и значение в (0,1]
@@ -57,7 +62,8 @@ enum float footprintTolerance = 1.0f;
 ///   - плоскостность колёс по высоте;
 ///   - компактность — наказание за декоративные тупиковые балки;
 ///   - баланс ведущих колёс по сторонам;
-///   - габариты — footprint колёс близок к 2×3 м (без привязки к осям).
+///   - габариты — footprint колёс;
+///   - заполнение высоты — размах узлов каркаса по Z.
 float buggyFitness(const Frame f)
 {
     // ---- Гейт: физическая выполнимость ----
@@ -132,6 +138,10 @@ float buggyFitness(const Frame f)
     const float phiFootprint = exp(-((dims[0] - targetFootprintLong) / footprintTolerance) ^^ 2)
         * exp(-((dims[1] - targetFootprintShort) / footprintTolerance) ^^ 2);
 
+    // Заполнение высоты: размах узлов каркаса по Z (не только колёс).
+    const float height = frameZRange(f);
+    const float phiHeight = exp(-((height - targetFrameHeight) / frameHeightTolerance) ^^ 2);
+
     const float nodeSym = symmetryRatio(f);
     const float wheelSym = wheelSymmetry(f);
     const float phiSym = 0.5f + 0.5f * (0.5f * (nodeSym + wheelSym));
@@ -153,7 +163,7 @@ float buggyFitness(const Frame f)
     const float phiDrive = 0.5f + 0.5f * motorBalance(f);
 
     return phiSym * phiRigid * phiStab * phiAxis * phiFlat * phiCompact * phiDrive
-        * phiFootprint;
+        * phiFootprint * phiHeight;
 }
 
 /// Доля узлов, у которых есть зеркальный партнёр через плоскость X=0.
@@ -253,6 +263,22 @@ size_t cyclomaticNumber(const Frame f)
     // μ = E - V + c ⩾ 0: в каждой компоненте E ≥ V_c - 1 (петли дают прирост).
     const ptrdiff_t mu = cast(ptrdiff_t) f.beams.length + cast(ptrdiff_t) comps - cast(ptrdiff_t) V;
     return mu > 0 ? cast(size_t) mu : 0;
+}
+
+/// Вертикальный размах всех узлов каркаса (габаритная высота параллелепипеда).
+float frameZRange(const Frame f)
+{
+    if (f.nodes.length == 0)
+        return 0.0f;
+
+    float lo = f.nodes[0].pos.z;
+    float hi = f.nodes[0].pos.z;
+    foreach (n; f.nodes)
+    {
+        lo = min(lo, n.pos.z);
+        hi = max(hi, n.pos.z);
+    }
+    return hi - lo;
 }
 
 /// Диагональ ограничивающего бокса всех узлов.
@@ -446,6 +472,23 @@ unittest
         "обе машины физически выполнимы");
     assert(symFitness > asymFitness,
         "зеркальность колёс и каркаса даёт прирост фитнеса");
+
+    // Заполнение высоты: каркас с вертикальным размахом ближе к габаритной
+    // высоте оценивается выше плоского той же колёсной базы.
+    const float flat = buggyFitness(symmetricBuggyFrame());
+    const float tall = buggyFitness(tallBuggyFrame());
+    assert(tall > 0.0f, "высокий каркас физически выполним");
+    assert(tall > flat, "поощрение заполнения высоты габаритного параллелепипеда");
+}
+
+/// Симметричная машина, дополненная вертикальной надстройкой: тот же footprint,
+/// но размах узлов по Z ближе к целевой высоте 2.5 м.
+private Frame tallBuggyFrame()
+{
+    Frame f = symmetricBuggyFrame();
+    f.nodes ~= Node(vec3(0.0f, 0.0f, 2.5f));
+    f.beams ~= Beam(0, f.nodes.length - 1, 0.045f); // от центра (узел 0) вверх
+    return f;
 }
 
 unittest
