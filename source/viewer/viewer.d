@@ -54,6 +54,8 @@ class BuggyScene: Scene
         rnd = Random(42);
         // Гибридная оценка: статический гейт + 3 секунды физического заезда.
         evolutionConfig.simulateSeconds = 3.0;
+        // Виден ли ход заездов в stdout (по особам и поколениям).
+        evolutionConfig.logPhysics = true;
 
         auto camera = addCamera();
         auto freeview = New!FreeviewComponent(eventManager, camera);

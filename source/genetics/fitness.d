@@ -213,6 +213,21 @@ enum double physicsSettleSeconds = 1.0;   ///< успокоение осадки
 enum float physicsWheelBelow = -0.1f;     ///< колесо глубже этого — провал
 enum float physicsWheelLift = 0.1f;       ///< колесо выше этого — переворот/съезд
 
+/// Итог физического заезда одной машины.
+///
+/// Помимо мультипликатора `score` в фитнес отдаёт телеметрию для вывода:
+/// фактический достигнутый спуск (`descent`), сколько было колёс/балок и что
+/// оборвало заезд (`why`), если `survived` ложно.
+struct PhysicsResult
+{
+    float score = 0.0f;    // вклад в фитнес: (0..1]; 0 — не доехала
+    bool survived = false; // заезд дошёл до конца, не развалившись
+    double descent = 0.0;  // достигнутый спуск по курсу (-Y), м
+    size_t wheels = 0;     // выставленное число колёс
+    size_t beams = 0;      // выставленное число балок
+    string why = "";       // причина обрыва (пусто — успех)
+}
+
 /// Физический слой оценки: пассивный спуск с горки `physicsSlopeDeg`.
 ///
 /// Силу тяжести наклоняют (`setSlopeDeg`), земля остаётся плоской; колёса на
@@ -222,10 +237,16 @@ enum float physicsWheelLift = 0.1f;       ///< колесо выше этого 
 /// провалилось под землю, зависло (переворот, съезд) или каркас разлетелся —
 /// заезд обрывается, счёт 0. Симуляция строится на `BuggyPhysics` отдельно,
 /// фитнес только читает её наружу.
-float physicsFitness(Frame frame, double seconds)
+PhysicsResult physicsRun(Frame frame, double seconds)
 {
+    PhysicsResult r;
+    r.wheels = frame.anchors.length;
+
     if (frame.anchors.length < 2)
-        return 0.0f;
+    {
+        r.why = "объект с одним колесом";
+        return r;
+    }
 
     auto physics = new BuggyPhysics(frame);
     scope (exit) physics.dispose();
@@ -238,7 +259,12 @@ float physicsFitness(Frame frame, double seconds)
 
     auto wheels = physics.wheelStates();
     if (wheels.length == 0)
-        return 0.0f;
+    {
+        r.why = "не осталось колёс после усадки";
+        return r;
+    }
+    r.beams = physics.beamStates().length;
+
     double startY = 0.0;
     foreach (s; wheels)
         startY += s.position.y;
@@ -252,22 +278,47 @@ float physicsFitness(Frame frame, double seconds)
 
         wheels = physics.wheelStates();
         if (wheels.length == 0)
-            return 0.0f;
+        {
+            r.why = "не осталось колёс";
+            break;
+        }
+
+        bool broken = false;
         foreach (s; wheels)
         {
             if (!isFinite(s.position.x) || !isFinite(s.position.y)
                 || !isFinite(s.position.z))
-                return 0.0f;                       // каркас разлетелся
+            {
+                r.why = "каркас разлетелся";
+                broken = true;
+                break;
+            }
             if (s.position.z < physicsWheelBelow)
-                return 0.0f;                       // провалилось под землю
+            {
+                r.why = "колесо провалилось под землю";
+                broken = true;
+                break;
+            }
             if (s.position.z > wheelRadius + physicsWheelLift)
-                return 0.0f;                       // зависло: переворот/съезд
+            {
+                r.why = "машина перевернулась";
+                broken = true;
+                break;
+            }
         }
+        if (broken)
+            break;
 
         foreach (s; physics.beamStates())
             if (!isFinite(s.position.x) || !isFinite(s.position.y)
                 || !isFinite(s.position.z))
-                return 0.0f;
+            {
+                r.why = "балка разлетелась";
+                broken = true;
+                break;
+            }
+        if (broken)
+            break;
 
         double curY = 0.0;
         foreach (s; wheels)
@@ -277,8 +328,20 @@ float physicsFitness(Frame frame, double seconds)
         farthest = max(farthest, downhill);
     }
 
+    r.descent = farthest;
+    if (r.why.length != 0)
+        return r;
+
     const double target = physicsNominalSpeed * seconds;
-    return clamp(cast(float)(farthest / target), 0.0f, 1.0f);
+    r.survived = true;
+    r.score = clamp(cast(float)(farthest / target), 0.0f, 1.0f);
+    return r;
+}
+
+/// Мультипликатор фитнеса из физического заезда — краткая форма `physicsRun`.
+float physicsFitness(Frame frame, double seconds)
+{
+    return physicsRun(frame, seconds).score;
 }
 
 /// Доля узлов, у которых есть зеркальный партнёр через плоскость X=0.

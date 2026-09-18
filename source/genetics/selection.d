@@ -2,6 +2,7 @@ module genetics.selection;
 
 import std.algorithm : sort, min, max;
 import std.random;
+import std.stdio : writefln;
 
 import genetics.sge;
 import genetics.buggygrammar;
@@ -28,6 +29,11 @@ struct EvolutionConfig
     /// 0 — оценка только статикой (быстрая; для тестов и поколения 0).
     /// > 0 — гибрид: статика как гейт, затем симуляция.
     double simulateSeconds = 0.0;
+
+    /// Печатать в stdout итоги физического заезда по каждой особи
+    /// (`physicsRun`) и сводку best/mean по каждому поколению `evolve`.
+    /// По умолчанию тихо — включается во вьюере для наблюдения за эволюцией.
+    bool logPhysics = false;
 }
 
 /// Поколение 0: идентичные копии закодированного дефолтного багги.
@@ -53,7 +59,7 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
 {
     Individual[] res;
     res.reserve(pop.length);
-    foreach (g; pop)
+    foreach (i, g; pop)
     {
         float fit = 0.0f;
         auto may = develop(gr, g);
@@ -61,11 +67,26 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
         {
             fit = buggyFitness(may.get.frame, may.get.ast);
             if (fit > 0.0f && params.simulateSeconds > 0.0)
-                fit *= physicsFitness(may.get.frame, params.simulateSeconds);
+            {
+                auto run = physicsRun(may.get.frame, params.simulateSeconds);
+                fit *= run.score;
+                if (params.logPhysics)
+                    logPhysicsIndividual(i, fit, run);
+            }
         }
         res ~= Individual(g, fit);
     }
     return res;
+}
+
+private void logPhysicsIndividual(size_t idx, float finalFit, const PhysicsResult run)
+{
+    if (run.survived)
+        writefln("  #%d fit=%.4f score=%.3f roll=%.1fm wheels=%d beams=%d",
+            idx, finalFit, run.score, run.descent, run.wheels, run.beams);
+    else
+        writefln("  #%d FAILED (%s) roll=%.1fm wheels=%d beams=%d",
+            idx, run.why, run.descent, run.wheels, run.beams);
 }
 
 /**
@@ -77,10 +98,13 @@ Individual[] evolve(const Grammar gr, Individual[] pop,
     size_t generations, ref Random rnd, EvolutionConfig params = EvolutionConfig.init)
 {
     auto cur = pop;
-    foreach (_; 0 .. generations)
+    foreach (gen; 0 .. generations)
     {
         auto children = buildNextGeneration(gr, cur, params, rnd);
         cur = evaluatePopulation(gr, children, params);
+        if (params.logPhysics)
+            writefln("gen %2d: best=%.4f mean=%.4f",
+                gen + 1, bestFitness(cur), meanFitness(cur));
     }
     return cur;
 }
