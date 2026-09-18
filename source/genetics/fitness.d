@@ -8,6 +8,7 @@ import dlib.math.vector;
 
 import frame.frame;
 import genetics.buggyast;
+import physics_world;
 
 /*
  * Статическая фитнес-функция — суррогат физики.
@@ -202,6 +203,85 @@ float buggyFitness(const Frame f, const Ast ast)
 
     return phiSym * phiRigid * phiCoM * phiAxis * phiFlat * phiCompact * phiDrive
         * phiFootprint * phiHeight * phiGauge;
+}
+
+/// Параметры заезда (физический слой оценки).
+enum double physicsDt = 1.0 / 60.0;       ///< шаг симуляции (стабильный dt)
+enum float physicsNominalSpeed = 2.0f;    ///< м/с фитнеса — дистанция-норма
+enum float physicsSlopeDeg = 25.0f;       ///< уклон «горки» (наклон вектора g)
+enum double physicsSettleSeconds = 1.0;   ///< успокоение осадки перед стартом
+enum float physicsWheelBelow = -0.1f;     ///< колесо глубже этого — провал
+enum float physicsWheelLift = 0.1f;       ///< колесо выше этого — переворот/съезд
+
+/// Физический слой оценки: пассивный спуск с горки `physicsSlopeDeg`.
+///
+/// Силу тяжести наклоняют (`setSlopeDeg`), земля остаётся плоской; колёса на
+/// осях катятся сами, газовая тяга не участвует. Счёт — продвижение центра
+/// колёс BНИЗ по курсу (-Y) за `seconds` секунд, нормированное
+/// на `physicsNominalSpeed·seconds` → (0,1]. Живучесть: любое колесо
+/// провалилось под землю, зависло (переворот, съезд) или каркас разлетелся —
+/// заезд обрывается, счёт 0. Симуляция принадлежит `Buggy`, фитнес только
+/// читает её наружу.
+float physicsFitness(Frame frame, double seconds)
+{
+    if (frame.anchors.length < 2)
+        return 0.0f;
+
+    auto buggy = new Buggy(frame, vec3(0.0f));
+    scope (exit) buggy.disposePhysics();
+    buggy.createPhysics();
+    if (buggy.physics is null)
+        return 0.0f;
+
+    buggy.physics.setSlopeDeg(physicsSlopeDeg);
+    buggy.physics.settle(physicsDt,
+        cast(int)(physicsSettleSeconds / physicsDt));
+
+    const size_t steps = cast(size_t)(seconds / physicsDt);
+
+    auto wheels = buggy.physics.wheelStates();
+    if (wheels.length == 0)
+        return 0.0f;
+    double startY = 0.0;
+    foreach (s; wheels)
+        startY += s.position.y;
+    startY /= wheels.length;
+
+    // Продвижение по спуску — максимум дистанции, преодолённой вниз (-Y).
+    double farthest = 0.0;
+    foreach (_; 0 .. steps)
+    {
+        buggy.step(physicsDt, 0.0f);
+
+        wheels = buggy.physics.wheelStates();
+        if (wheels.length == 0)
+            return 0.0f;
+        foreach (s; wheels)
+        {
+            if (!isFinite(s.position.x) || !isFinite(s.position.y)
+                || !isFinite(s.position.z))
+                return 0.0f;                       // каркас разлетелся
+            if (s.position.z < physicsWheelBelow)
+                return 0.0f;                       // провалилось под землю
+            if (s.position.z > wheelRadius + physicsWheelLift)
+                return 0.0f;                       // зависло: переворот/съезд
+        }
+
+        foreach (s; buggy.physics.beamStates())
+            if (!isFinite(s.position.x) || !isFinite(s.position.y)
+                || !isFinite(s.position.z))
+                return 0.0f;
+
+        double curY = 0.0;
+        foreach (s; wheels)
+            curY += s.position.y;
+        curY /= wheels.length;
+        const double downhill = startY - curY;     // +Y — вверх по склону
+        farthest = max(farthest, downhill);
+    }
+
+    const double target = physicsNominalSpeed * seconds;
+    return clamp(cast(float)(farthest / target), 0.0f, 1.0f);
 }
 
 /// Доля узлов, у которых есть зеркальный партнёр через плоскость X=0.
@@ -710,6 +790,19 @@ unittest
         "ЦТ выше — ближе к целевому положению");
     assert(comCentering(f, high) > comCentering(f, side),
         "ЦТ ближе к центру footprint — лучше");
+}
+
+unittest
+{
+    // Физический слой: заезд простейшего багги конечен, счёт нормирован
+    // в (0,1] и не зависит от статики. Пустой каркас — ровно 0.
+    const p = physicsFitness(symmetricBuggyFrame(), 1.0);
+    assert(isFinite(p) && p >= 0.0f && p <= 1.0f,
+        "счёт заезда нормирован и не разлетается");
+
+    Frame empty;
+    assert(physicsFitness(empty, 1.0) == 0.0f,
+        "каркас без колёс не выезжает из нуля");
 }
 
 /// Симметричная машина, дополненная вертикальной надстройкой: тот же footprint,

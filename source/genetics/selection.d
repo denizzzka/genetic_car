@@ -23,6 +23,11 @@ struct EvolutionConfig
     size_t eliteCount = 5;
     size_t mutateHits = 3;
     size_t generationsPerPress = 100;
+
+    /// Длительность физического заезда в секундах при оценке особи.
+    /// 0 — оценка только статикой (быстрая; для тестов и поколения 0).
+    /// > 0 — гибрид: статика как гейт, затем симуляция.
+    double simulateSeconds = 0.0;
 }
 
 /// Поколение 0: идентичные копии закодированного дефолтного багги.
@@ -40,8 +45,11 @@ Genotype[] seedPopulation(Grammar gr, size_t n)
     return pop;
 }
 
-/// Оценка популяции: develop + buggyFitness. Неразвиваемый геном — 0.
-Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop)
+/// Оценка популяции: develop + buggyFitness (статический гейт) и, если
+/// конфиг задаёт заезд, физический слой поверх: `fit *= physicsFitness`.
+/// Неразвиваемый геном — 0.
+Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
+    const EvolutionConfig params = EvolutionConfig.init)
 {
     Individual[] res;
     res.reserve(pop.length);
@@ -50,7 +58,11 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop)
         float fit = 0.0f;
         auto may = develop(gr, g);
         if (!may.isNull)
+        {
             fit = buggyFitness(may.get.frame, may.get.ast);
+            if (fit > 0.0f && params.simulateSeconds > 0.0)
+                fit *= physicsFitness(may.get.frame, params.simulateSeconds);
+        }
         res ~= Individual(g, fit);
     }
     return res;
@@ -68,7 +80,7 @@ Individual[] evolve(const Grammar gr, Individual[] pop,
     foreach (_; 0 .. generations)
     {
         auto children = buildNextGeneration(gr, cur, params, rnd);
-        cur = evaluatePopulation(gr, children);
+        cur = evaluatePopulation(gr, children, params);
     }
     return cur;
 }
@@ -175,6 +187,30 @@ unittest
         10, rnd2);
     assert(bestFitness(evolved2) == bestFitness(evolved),
         "отбор детерминирован при фиксированном зерне");
+}
+
+unittest
+{
+    // Физический слой в цикле отбора: оценка и эволюция с simulateSeconds
+    // должны быть конечными и не разваливаться. Величина счёта зависит от
+    // каркаса — здесь важно отсутствие NaN/разлёта по поколениям.
+    import std.stdio : writeln;
+    import std.math : isFinite;
+    auto gr = buggyGrammar();
+    auto pop = seedPopulation(gr, 8);
+    EvolutionConfig cfg;
+    cfg.populationSize = 8;
+    cfg.simulateSeconds = 2.0;
+    auto e0 = evaluatePopulation(gr, pop, cfg);
+    foreach (x; e0)
+        assert(isFinite(x.fitness) && x.fitness >= 0.0f, "физика в оценке конечна");
+    auto rnd = Random(7);
+    auto e1 = evolve(gr, e0, 5, rnd, cfg);
+    const float b = bestFitness(e1);
+    const float m = meanFitness(e1);
+    writeln("PHYS gen5 best=", b, " mean=", m);
+    assert(isFinite(b) && isFinite(m) && b >= 0.0f && m >= 0.0f,
+        "физический цикл отбора конечен");
 }
 
 unittest

@@ -52,6 +52,8 @@ class BuggyScene: Scene
         eventManager.trackUpDownState = true;
         grammar = buggyGrammar();
         rnd = Random(42);
+        // Гибридная оценка: статический гейт + 3 секунды физического заезда.
+        evolutionConfig.simulateSeconds = 3.0;
 
         auto camera = addCamera();
         auto freeview = New!FreeviewComponent(eventManager, camera);
