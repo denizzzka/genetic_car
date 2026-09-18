@@ -527,9 +527,13 @@ Nullable!Frame frameFromAst(const Ast ast)
     return Nullable!Frame(result);
 }
 
+enum float minBeamLength = 0.05f;
+enum float maxBeamLength = 3.0f;
+
 /**
  * Структурная валидность каркаса: узлы в границах, без вырожденных балок,
- * якоря — на валидных узлах, каркас связен.
+ * все балки в допустимом диапазоне длин, якоря — на валидных узлах,
+ * каркас связен.
  */
 Nullable!Frame isValidFrame(Frame f)
 {
@@ -539,9 +543,10 @@ Nullable!Frame isValidFrame(Frame f)
     {
         if (b.a >= f.nodes.length || b.b >= f.nodes.length)
             return Nullable!Frame.init;
-        const pa = f.nodes[b.a].pos;
-        const pb = f.nodes[b.b].pos;
-        if (b.a == b.b || distance(pa, pb) < 1e-4f)
+        if (b.a == b.b)
+            return Nullable!Frame.init;
+        const len = distance(f.nodes[b.a].pos, f.nodes[b.b].pos);
+        if (len < minBeamLength || len > maxBeamLength)
             return Nullable!Frame.init;
     }
 
@@ -1046,4 +1051,34 @@ unittest
         Anchor(1, AnchorKind.motorWheel),
     ];
     assert(!isValidFrame(g).isNull);
+}
+
+unittest
+{
+    // Длины балок ограничены: минимум 5 см, максимум 3 метра.
+    Frame tooShort;
+    tooShort.nodes = [Node(vec3(0.0f, 0.0f, 0.0f)), Node(vec3(0.04f, 0.0f, 0.0f))];
+    tooShort.beams = [Beam(0, 1, 0.04f)];
+    tooShort.anchors = [Anchor(0, AnchorKind.wheel)];
+    assert(4.0f < 100.0f * minBeamLength, "балка короче 5 см");
+    assert(isValidFrame(tooShort).isNull, "балка короче 5 см — невалидный каркас");
+
+    // Ровно 5 см — на границе допустимого.
+    Frame exactMin;
+    exactMin.nodes = [Node(vec3(0.0f, 0.0f, 0.0f)), Node(vec3(minBeamLength, 0.0f, 0.0f))];
+    exactMin.beams = [Beam(0, 1, 0.04f)];
+    exactMin.anchors = [Anchor(0, AnchorKind.wheel), Anchor(1, AnchorKind.wheel)];
+    assert(!isValidFrame(exactMin).isNull, "балка ровно 5 см — на границе, валидна");
+
+    Frame tooLong;
+    tooLong.nodes = [Node(vec3(0.0f, 0.0f, 0.0f)), Node(vec3(3.5f, 0.0f, 0.0f))];
+    tooLong.beams = [Beam(0, 1, 0.04f)];
+    tooLong.anchors = [Anchor(0, AnchorKind.wheel)];
+    assert(isValidFrame(tooLong).isNull, "балка длиннее 3 м — невалидный каркас");
+
+    Frame exactMax;
+    exactMax.nodes = [Node(vec3(0.0f, 0.0f, 0.0f)), Node(vec3(maxBeamLength, 0.0f, 0.0f))];
+    exactMax.beams = [Beam(0, 1, 0.04f)];
+    exactMax.anchors = [Anchor(0, AnchorKind.wheel), Anchor(1, AnchorKind.wheel)];
+    assert(!isValidFrame(exactMax).isNull, "балка ровно 3 м — на границе, валидна");
 }
