@@ -1,4 +1,4 @@
-module car.car;
+module physics_world.car;
 
 import dlib.math.vector;
 import frame.frame;
