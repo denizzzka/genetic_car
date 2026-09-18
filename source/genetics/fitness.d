@@ -63,7 +63,9 @@ enum float frameHeightTolerance = 0.5f;
 ///   - компактность — наказание за декоративные тупиковые балки;
 ///   - баланс ведущих колёс по сторонам;
 ///   - габариты — footprint колёс;
-///   - заполнение высоты — размах узлов каркаса по Z.
+///   - заполнение высоты — размах узлов каркаса по Z;
+///   - габаритный параллелепипед — штраф за узлы за пределами
+///     (колёсный AABB по XY + высота от земли до целевой).
 float buggyFitness(const Frame f)
 {
     // ---- Гейт: физическая выполнимость ----
@@ -168,8 +170,24 @@ float buggyFitness(const Frame f)
 
     const float phiDrive = 0.5f + 0.5f * motorBalance(f);
 
+    // Балки за габаритом: доля узлов за пределами параллелепипеда
+    // (колёсный AABB по XY + от земли до целевой высоты по Z)
+    // гасит фитнес экспоненциально — параллелепипед не должен
+    // обрастать лишними элементами за пределами габарита.
+    float nodesOutsideGauge = 0;
+    foreach (n; f.nodes)
+    {
+        const bool inX = n.pos.x >= xmin - epsFlat && n.pos.x <= xmax + epsFlat;
+        const bool inY = n.pos.y >= ymin - epsFlat && n.pos.y <= ymax + epsFlat;
+        const bool inZ = n.pos.z >= groundZ - epsFlat && n.pos.z <= groundZ + targetFrameHeight + epsFlat;
+        if (!(inX && inY && inZ))
+            nodesOutsideGauge += 1.0f;
+    }
+    const float gaugeViolation = nodesOutsideGauge / cast(float) f.nodes.length;
+    const float phiGauge = exp(-3.0f * gaugeViolation);
+
     return phiSym * phiRigid * phiStab * phiAxis * phiFlat * phiCompact * phiDrive
-        * phiFootprint * phiHeight;
+        * phiFootprint * phiHeight * phiGauge;
 }
 
 /// Доля узлов, у которых есть зеркальный партнёр через плоскость X=0.
@@ -501,6 +519,21 @@ unittest
     const float tall = buggyFitness(tallBuggyFrame());
     assert(tall > 0.0f, "высокий каркас физически выполним");
     assert(tall > flat, "поощрение заполнения высоты габаритного параллелепипеда");
+
+    // Балки за габаритом: идентичные каркасы, отличающиеся только одним узлом
+    // (внутри колёсного AABB против выступающего наружу), — выступающий
+    // получает меньший фитнес. deadRatio у обоих одинаков (1/7), отличие — phiGauge.
+    Frame inside = symmetricBuggyFrame();
+    inside.nodes ~= Node(vec3(0.3f, 0.0f, 0.4f));
+    inside.beams ~= Beam(0, inside.nodes.length - 1, 0.04f);
+    Frame outside = symmetricBuggyFrame();
+    outside.nodes ~= Node(vec3(1.5f, 0.0f, 0.4f));
+    outside.beams ~= Beam(0, outside.nodes.length - 1, 0.04f);
+    assert(outside.nodes[$ - 1].pos.x > 0.7f + epsFlat,
+        "узел теста обязан выступать за X AABB колёс (0.7)");
+    assert(buggyFitness(inside) > 0.0f && buggyFitness(outside) > 0.0f);
+    assert(buggyFitness(inside) > buggyFitness(outside),
+        "балка за пределами габаритного параллелепипеда должна понижать фитнес");
 }
 
 /// Симметричная машина, дополненная вертикальной надстройкой: тот же footprint,
