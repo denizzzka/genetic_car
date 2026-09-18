@@ -44,7 +44,7 @@ class BuggyScene: Scene
     EvolutionConfig evolutionConfig;
 
     enum size_t galleryTop = 5;
-    enum float gallerySpacing = 3.0f;
+    enum float gallerySpacing = 4.0f;
 
     override void afterLoad()
     {

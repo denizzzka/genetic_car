@@ -236,6 +236,10 @@ Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
     if (tokens[i].tok != Tok.coord || tokens[i + 1].tok != Tok.coord || tokens[i + 2].tok != Tok.coord)
         return Nullable!Frame.init;
     auto seed = vec3(tokens[i].f, tokens[i + 1].f, tokens[i + 2].f);
+    // При зеркалировании старт прижимается к плоскости X == 0: иначе две
+    // половинки каркаса разъединяются и валидация связности его выбрасывает.
+    if (mirror)
+        seed.x = 0.0f;
     i += 3;
 
     // Таблица зеркальных узлов: node -> его отражение относительно X == 0.
@@ -776,8 +780,8 @@ unittest
 
 unittest
 {
-    // Симметрия со стартом вне плоскости даёт две разъединённые половины —
-    // такой каркас отбрасывается валидацией связности.
+    // Симметрия со стартом вне плоскости: старт прижимается к X == 0,
+    // каркас остаётся связным, а не разваливается на две половины.
     Terminal!Tok[] t;
     t ~= new Terminal!Tok(Tok.mirror);
     t ~= new Terminal!Tok(Tok.coord, 0.3f);
@@ -796,9 +800,10 @@ unittest
 
     auto f = frameFromTokens(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == 4);
-    assert(isValidFrame(f.get).isNull,
-        "разъединённые половины не проходят проверку связности");
+    assert(f.get.nodes.length == 3,
+        "старт на плоскости, каждое ответвление — парой (узел, зеркало)");
+    assert(!isValidFrame(f.get).isNull,
+        "старт на плоскости держит обе половины связными");
 }
 
 unittest
