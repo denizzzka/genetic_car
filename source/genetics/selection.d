@@ -20,9 +20,9 @@ struct EvolutionConfig
 {
     size_t populationSize = 100;
     size_t tournamentSize = 2;
-    size_t eliteCount = 1;
+    size_t eliteCount = 5;
     size_t mutateHits = 3;
-    size_t generationsPerPress = 50;
+    size_t generationsPerPress = 100;
 }
 
 /// Поколение 0: идентичные копии закодированного дефолтного багги.
