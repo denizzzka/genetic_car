@@ -406,7 +406,7 @@ unittest
 {
     import genetics.sge;
     import genetics.buggygrammar;
-    import genetics.encoder;
+    import genetics.initial_data;
 
     // Стартовый закодированный багги — правдоподобный каркас.
     auto grammar = buggyGrammar();

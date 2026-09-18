@@ -5,7 +5,7 @@ import std.random;
 
 import genetics.sge;
 import genetics.buggygrammar;
-import genetics.encoder;
+import genetics.initial_data;
 import genetics.fitness;
 
 /// Отобранный индивид: геном и его фитнес (0 — невалидный/неразвиваемый).
