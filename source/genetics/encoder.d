@@ -309,25 +309,59 @@ Genotype encodeFrame(Grammar gr, const Frame f)
     return encodeTokens(gr, tokens);
 }
 
-/// Простейший стартовый геном: одна балка, колесо на одном конце, моторное
-/// колесо на другом
+/// Стартовый геном
 Genotype startGenome(Grammar gr)
 {
-    Frame f;
-    size_t node(vec3 pos)
+    auto gt = new Genotype(gr.symbols.length);
+
+    uint u(float v, float mn, float mx)
     {
-        f.nodes ~= Node(pos);
-        return f.nodes.length - 1;
+        double t = (cast(double) v - mn) / (cast(double) mx - mn);
+        if (t < 0.0) t = 0.0;
+        if (t > 1.0) t = 1.0;
+        return cast(uint)(t * cast(double) uint.max);
     }
 
-    const wheel = node(vec3(0.6f, 0.7f, 0.3f));
-    const motor = node(vec3(0.6f, -0.7f, 0.3f));
+    auto symId = (string name) {
+        foreach (sym; gr.symbols)
+            if (sym.name == name)
+                return sym.id;
+        assert(false);
+    };
+    auto set = (string name, uint[] vals) {
+        gt.genes[symId(name)] = vals;
+    };
 
-    f.beams ~= Beam(wheel, motor, 0.05f);
-    f.anchors ~= Anchor(wheel, AnchorKind.wheel);
-    f.anchors ~= Anchor(motor, AnchorKind.motorWheel);
+    const mid = cast(uint)(uint.max / 2);
 
-    return encodeFrame(gr, f);
+    set("frame", [0u]);
+    set("symmetry", [0u]);
+    set("startPos", [0u]);
+    set("startX", [u(0.0f, -2.0f, 2.0f)]);
+    set("startY", [u(0.0f, -2.0f, 2.0f)]);
+    set("startZ", [u(0.3f, -2.0f, 2.0f)]);
+    set("taper", [u(1.0f, 0.4f, 1.0f)]);
+    set("taperPow", [u(1.0f, 0.5f, 4.0f)]);
+    set("heading", [mid]);
+
+    set("beamList", [1u]);
+    set("beam", [0u]);
+    set("startRef", [0u]);
+    set("endRef", [0u]);
+    set("destX", [mid]);
+    set("destY", [u(-1.2f, -1.5f, 1.5f)]);
+    set("destZ", [mid]);
+    set("radius", [u(0.05f, 0.02f, 0.06f)]);
+    set("beamKind", [0u]);
+    set("turn", [mid]);
+
+    set("anchorMarker", [0u]);
+    set("anchorList", [0u, 1u]);
+    set("anchor", [0u, 0u]);
+    set("anchorKind", [0u, 1u]);
+    set("idx", [0u, 1u]);
+
+    return gt;
 }
 
 unittest
