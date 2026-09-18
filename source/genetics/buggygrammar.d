@@ -6,12 +6,13 @@ import std.typecons: Nullable;
 import dlib.math.vector;
 import frame.frame;
 import genetics.sge;
+import genetics.buggyast;
 
 /**
  * Терминалы грамматики багги — «команды развития», которые `decode` выводит
- * из генома, а `frameFromTokens` выполняет в порядке следования, строя каркас
- * от первого узла. Часть токенов несёт значение (float/int в `payload`),
- * часть — пустые маркеры.
+ * из генома. `buildAst` собирает из них дерево, `frameFromAst` выполняет
+ * в порядке следования, строя каркас от первого узла. Часть токенов несёт
+ * значение (float/int в `payload`), часть — пустые маркеры.
  */
 enum Tok
 {
@@ -223,51 +224,176 @@ Grammar buggyGrammar()
 }
 
 /**
- * Разобрать терминалы в каркас багги.
+ * Построить AST развития из потока терминалов.
  *
- * Создаётся первый узел, затем сегменты по порядку до маркера `Tok.anchors`,
- * затем якоря (каждая пара `anchorKind` + `refIdx` прикрепляет колесо
- * к уже созданному узлу). Токены `refLast` ссылаются на последний созданный
- * узел, `refIdx` — на существующий по номеру, `endNew` (со смещениями)
- * создаёт новый узел на позиции старта + смещение, `endNear` — как `endNew`,
- * но растущий конец сливается с ближайшим существующим узлом в пределах
- * `mergeRadius` (так из правила роста сами возникают петли).
- *
- * Turtle: после первого узла читается начальный `heading`; дельты смещений
- * интерпретируются в его системе (X — вперёд, Y — вправо, Z — вверх),
- * а токены `turn` после каждой балки накапливают заголовок построения.
- *
- * Сегменты: каждый начинается маркером `Tok.segStart` (один сегмент —
- * модульное целое). При `Tok.fork` сегмент раздваивается: ось — X
- * стартового узла сегмента (а не мировая X == 0), и каждая балка рождает
- * пару (таблица `forkOf`; узлы на оси — собственное зеркало). Радиус
- * twin-балки масштабируется в `1 + forkDelta`, что позволяет эволюции
- * растаскивать стороны относительно друг друга. Без `Tok.fork` сегмент —
- * медианная одиночная структура («глаз по центру»).
- *
- * Возврат — сам результат: `Nullable!Frame.isNull` означает ошибку разбора.
+ * Дерево хранит все параметры грамматики без геометрии: startPos (seed,
+ * heading, морфоген taper/taperPow), сегменты (fork, forkDelta, балки),
+ * балки (старт/конец как типизированные рефы, радиус, turn) и якоря.
+ * Геометрия здесь не строится — это этап разбора, а не интерпретации.
  */
-Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
+Nullable!Ast buildAst(const Terminal!Tok[] tokens)
+{
+    Ast ast;
+    size_t i = 0;
+
+    if (i + 2 >= tokens.length)
+        return Nullable!Ast.init;
+    if (tokens[i].tok != Tok.coord || tokens[i + 1].tok != Tok.coord || tokens[i + 2].tok != Tok.coord)
+        return Nullable!Ast.init;
+    ast.seed = vec3(tokens[i].f, tokens[i + 1].f, tokens[i + 2].f);
+    i += 3;
+
+    // Морфоген-градиент толщины — параметры каркаса, читаются из startPos.
+    if (i < tokens.length && tokens[i].tok == Tok.taper)
+    {
+        ast.taper = tokens[i].f;
+        ++i;
+    }
+    if (i < tokens.length && tokens[i].tok == Tok.taperPow)
+    {
+        ast.taperPow = tokens[i].f;
+        ++i;
+    }
+
+    if (tokens.length <= i || tokens[i].tok != Tok.heading)
+        return Nullable!Ast.init;
+    ast.heading = tokens[i].f;
+    ++i;
+
+    while (i < tokens.length && tokens[i].tok != Tok.anchors)
+    {
+        if (tokens[i].tok != Tok.segStart)
+            return Nullable!Ast.init;
+        ++i;
+
+        SegmentAst seg;
+        if (i < tokens.length && tokens[i].tok == Tok.fork)
+        {
+            seg.fork = true;
+            ++i;
+        }
+
+        if (i >= tokens.length || tokens[i].tok != Tok.forkDelta)
+            return Nullable!Ast.init;
+        seg.forkDelta = tokens[i].f;
+        ++i;
+
+        while (i < tokens.length && tokens[i].tok != Tok.segStart
+            && tokens[i].tok != Tok.anchors)
+        {
+            BeamAst b;
+            switch (tokens[i].tok)
+            {
+                case Tok.refLast:
+                    b.start.kind = StartRefKind.last;
+                    ++i;
+                    break;
+                case Tok.refIdx:
+                    b.start.kind = StartRefKind.idx;
+                    b.start.idx = tokens[i].i;
+                    ++i;
+                    break;
+                default:
+                    return Nullable!Ast.init;
+            }
+
+            switch (tokens[i].tok)
+            {
+                case Tok.endNew:
+                    if (i + 3 >= tokens.length)
+                        return Nullable!Ast.init;
+                    if (tokens[i + 1].tok != Tok.coord
+                        || tokens[i + 2].tok != Tok.coord
+                        || tokens[i + 3].tok != Tok.coord)
+                        return Nullable!Ast.init;
+                    b.end.kind = EndRefKind.newNode;
+                    b.end.delta = vec3(tokens[i + 1].f, tokens[i + 2].f, tokens[i + 3].f);
+                    i += 4;
+                    break;
+                case Tok.endNear:
+                    if (i + 3 >= tokens.length)
+                        return Nullable!Ast.init;
+                    if (tokens[i + 1].tok != Tok.coord
+                        || tokens[i + 2].tok != Tok.coord
+                        || tokens[i + 3].tok != Tok.coord)
+                        return Nullable!Ast.init;
+                    b.end.kind = EndRefKind.nearNode;
+                    b.end.delta = vec3(tokens[i + 1].f, tokens[i + 2].f, tokens[i + 3].f);
+                    i += 4;
+                    break;
+                case Tok.refIdx:
+                    b.end.kind = EndRefKind.idx;
+                    b.end.idx = tokens[i].i;
+                    ++i;
+                    break;
+                default:
+                    return Nullable!Ast.init;
+            }
+
+            if (tokens[i].tok != Tok.radius)
+                return Nullable!Ast.init;
+            b.radius = tokens[i].f;
+            ++i;
+
+            if (tokens[i].tok != Tok.beamKind)
+                return Nullable!Ast.init;
+            b.kind = cast(BeamKind) tokens[i].i;
+            ++i;
+
+            if (tokens[i].tok != Tok.turn)
+                return Nullable!Ast.init;
+            b.turn = tokens[i].f;
+            ++i;
+
+            seg.beams ~= b;
+        }
+        ast.segments ~= seg;
+    }
+
+    if (i >= tokens.length)
+        return Nullable!Ast(ast);
+
+    // Якоря: пара `anchorKind` + `refIdx` (индекс узла, заворачивается по
+    // числу узлов в интерпретаторе — синтаксис тут ничего не решает).
+    ++i;
+    while (i < tokens.length)
+    {
+        if (tokens[i].tok != Tok.anchorKind)
+            return Nullable!Ast.init;
+        auto kind = cast(AnchorKind) tokens[i].i;
+        ++i;
+
+        if (i >= tokens.length || tokens[i].tok != Tok.refIdx)
+            return Nullable!Ast.init;
+        AnchorAst a;
+        a.kind = kind;
+        a.idx = tokens[i].i;
+        ++i;
+
+        ast.anchors ~= a;
+    }
+    return Nullable!Ast(ast);
+}
+
+/**
+ * Построить геометрию каркаса из AST.
+ *
+ * Исполнитель «глупо» выполняет решения дерева: читает turtle-заголовок,
+ * разрешает рефы, при раздвоенном сегменте рождает узлы парой вокруг оси
+ * сегмента (X его стартового узла), масштабирует радиусы морфоген-градиентом
+ * и дублирует балки/якоря в twin. Вся семантика — fork, ось, морфоген,
+ * turtle — зафиксирована в AST.
+ */
+Nullable!Frame frameFromAst(const Ast ast)
 {
     enum float mergeRadius = 0.15f;
 
     Frame result;
 
-    // Абсолютная позиция первого узла (без зеркалирования — это медиана).
-    size_t i = 0;
-    if (i + 2 >= tokens.length)
-        return Nullable!Frame.init;
-    if (tokens[i].tok != Tok.coord || tokens[i + 1].tok != Tok.coord || tokens[i + 2].tok != Tok.coord)
-        return Nullable!Frame.init;
-    auto seed = vec3(tokens[i].f, tokens[i + 1].f, tokens[i + 2].f);
-    i += 3;
-
-    // Таблица пар: node -> его twin относительно оси раздвоения сегмента.
-    // Узлы на оси являются собственным зеркалом; узлы одиночных сегментов
-    // тоже, а значит не дублируются.
+    // Таблица пар: node -> его twin вокруг оси раздвоения сегмента.
     size_t[] forkOf;
 
-    // Создание узла; при раздвоении сегмента — пара (узел, twin) вокруг оси.
+    // Узел; при раздвоении сегмента — пара (узел, twin) вокруг оси.
     auto addNode = (vec3 target, bool fork, float axis) {
         result.nodes ~= Node(target);
         const n = result.nodes.length - 1;
@@ -287,113 +413,71 @@ Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
         return n;
     };
 
-    size_t last = addNode(seed, false, 0.0f);
+    size_t last = addNode(ast.seed, false, 0.0f);
 
-    // Turtle: начальный заголовок построения (после морфоген-токенов,
-    // изъятых из потока). Дельты балок интерпретируются в его системе.
-    if (tokens.length <= i || tokens[i].tok != Tok.heading)
-        return Nullable!Frame.init;
-    float heading = tokens[i].f;
-    ++i;
-
-    // Дельта из локальной системы заголовка в мировую: X — вперёд по
-    // заголовку, Y — вправо от него, Z — вертикально вверх.
+    float heading = ast.heading;
     auto forward = (float dx, float dy, float dz) {
         const c = cos(heading);
         const s = sin(heading);
         return vec3(c * dx - s * dy, s * dx + c * dy, dz);
     };
 
-    // Сегменты: каждый начинается `segStart`, затем необязательный `fork`,
-    // затем `forkDelta` (коэффициент асимметрии пары), затем балки.
-    while (i < tokens.length && tokens[i].tok != Tok.anchors)
+    size_t nBeams;
+    foreach (seg; ast.segments)
+        nBeams += seg.beams.length;
+
+    size_t j;
+    foreach (seg; ast.segments)
     {
-        if (tokens[i].tok != Tok.segStart)
-            return Nullable!Frame.init;
-        ++i;
-
-        bool fork = false;
-        if (i < tokens.length && tokens[i].tok == Tok.fork)
-        {
-            fork = true;
-            ++i;
-        }
-
-        if (i >= tokens.length || tokens[i].tok != Tok.forkDelta)
-            return Nullable!Frame.init;
-        float forkDelta = tokens[i].f;
-        ++i;
-
-        // Ось раздвоения — X стартового узла сегмента (первой балки).
         bool haveAxis = false;
         float axis = 0.0f;
 
-        while (i < tokens.length && tokens[i].tok != Tok.segStart
-            && tokens[i].tok != Tok.anchors)
+        foreach (b; seg.beams)
         {
             size_t start;
-            switch (tokens[i].tok)
+            final switch (b.start.kind)
             {
-                case Tok.refLast:
+                case StartRefKind.last:
                     start = last;
-                    ++i;
                     break;
-                case Tok.refIdx:
-                    start = tokens[i].i;
+                case StartRefKind.idx:
+                    start = b.start.idx;
                     if (start >= result.nodes.length)
                         return Nullable!Frame.init;
-                    ++i;
                     break;
-                default:
-                    return Nullable!Frame.init;
             }
 
-            if (fork && !haveAxis)
+            if (seg.fork && !haveAxis)
             {
                 axis = result.nodes[start].pos.x;
                 haveAxis = true;
             }
 
             size_t end;
-            switch (tokens[i].tok)
+            final switch (b.end.kind)
             {
-                case Tok.endNew:
-                    if (i + 3 >= tokens.length)
-                        return Nullable!Frame.init;
-                    if (tokens[i + 1].tok != Tok.coord
-                        || tokens[i + 2].tok != Tok.coord
-                        || tokens[i + 3].tok != Tok.coord)
-                        return Nullable!Frame.init;
-                    auto dx = tokens[i + 1].f;
-                    auto dy = tokens[i + 2].f;
-                    auto dz = tokens[i + 3].f;
-                    auto target = result.nodes[start].pos + forward(dx, dy, dz);
-                    end = addNode(target, fork, axis);
+                case EndRefKind.newNode:
+                {
+                    auto target = result.nodes[start].pos
+                        + forward(b.end.delta.x, b.end.delta.y, b.end.delta.z);
+                    end = addNode(target, seg.fork, axis);
                     last = end;
-                    i += 4;
                     break;
-                case Tok.endNear:
-                    if (i + 3 >= tokens.length)
-                        return Nullable!Frame.init;
-                    if (tokens[i + 1].tok != Tok.coord
-                        || tokens[i + 2].tok != Tok.coord
-                        || tokens[i + 3].tok != Tok.coord)
-                        return Nullable!Frame.init;
-                    auto tx = tokens[i + 1].f;
-                    auto ty = tokens[i + 2].f;
-                    auto tz = tokens[i + 3].f;
-                    auto target2 = result.nodes[start].pos + forward(tx, ty, tz);
-                    // endNear — как endNew, но растущий конец сливается с ближайшим
-                    // существующим узлом (кроме старта) в пределах mergeRadius.
-                    // Из правила «расти до контакта» сами возникают петли и
-                    // самосборка каркаса.
+                }
+                case EndRefKind.nearNode:
+                {
+                    auto target = result.nodes[start].pos
+                        + forward(b.end.delta.x, b.end.delta.y, b.end.delta.z);
+                    // Растущий конец сливается с ближайшим существующим узлом
+                    // (кроме старта) в пределах mergeRadius — так сами возникают
+                    // петли и самосборка каркаса.
                     size_t best = size_t.max;
                     auto bestD = mergeRadius;
                     foreach (n; 0 .. result.nodes.length)
                     {
                         if (n == start)
                             continue;
-                        const d = distance(result.nodes[n].pos, target2);
+                        const d = distance(result.nodes[n].pos, target);
                         if (d < bestD)
                         {
                             bestD = d;
@@ -403,71 +487,42 @@ Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
                     if (best != size_t.max)
                         end = best;
                     else
-                        end = addNode(target2, fork, axis);
+                        end = addNode(target, seg.fork, axis);
                     last = end;
-                    i += 4;
                     break;
-                case Tok.refIdx:
-                    end = tokens[i].i;
+                }
+                case EndRefKind.idx:
+                    end = b.end.idx;
                     if (end >= result.nodes.length)
                         return Nullable!Frame.init;
-                    ++i;
                     break;
-                default:
-                    return Nullable!Frame.init;
             }
 
-            if (tokens[i].tok != Tok.radius)
-                return Nullable!Frame.init;
-            auto radius = tokens[i].f;
-            ++i;
+            // Морфоген-градиент толщины: порядок построения балки -> радиус.
+            float radius = b.radius;
+            if (nBeams >= 2)
+            {
+                const frac = cast(float) j / (nBeams - 1);
+                radius *= 1.0f + (ast.taper - 1.0f) * pow(frac, ast.taperPow);
+            }
+            ++j;
 
-            if (tokens[i].tok != Tok.beamKind)
-                return Nullable!Frame.init;
-            auto beamKind = cast(BeamKind) tokens[i].i;
-            ++i;
-
-            // Turtle: поворот заголовка после балки — задаёт направление
-            // следующего роста. Накапливается в общий заголовок.
-            if (tokens[i].tok != Tok.turn)
-                return Nullable!Frame.init;
-            heading += tokens[i].f;
-            ++i;
-
-            // Раздвоенная балка дублируется в twin вокруг оси сегмента:
-            // правило роста, а не копия координат — правка дельт меняет обе
-            // ветви разом, а forkDelta растаскивает их радиусы.
-            result.beams ~= Beam(start, end, radius, beamKind);
-            if (fork && !(forkOf[start] == start && forkOf[end] == end))
+            // Пары: балка и её twin, radius twin-балки растаскивается forkDelta.
+            result.beams ~= Beam(start, end, radius, b.kind);
+            if (seg.fork && !(forkOf[start] == start && forkOf[end] == end))
                 result.beams ~= Beam(forkOf[start], forkOf[end],
-                    radius * (1.0f + forkDelta), beamKind);
+                    radius * (1.0f + seg.forkDelta), b.kind);
+
+            heading += b.turn;
         }
     }
 
-    if (i >= tokens.length)
-        return Nullable!Frame(result);
-
-    // Маркер `Tok.anchors` — переход к якорям.
-    ++i;
-    while (i < tokens.length)
+    foreach (a; ast.anchors)
     {
-        if (tokens[i].tok != Tok.anchorKind)
-            return Nullable!Frame.init;
-        auto kind = cast(AnchorKind) tokens[i].i;
-        ++i;
-
-        if (i >= tokens.length || tokens[i].tok != Tok.refIdx)
-            return Nullable!Frame.init;
-        // Индекс узла, как и кодоны SGE, заворачивается по числу узлов:
-        // случайный индекс за пределами каркаса прижимается к существующему узлу,
-        // а не роняет весь кадр.
-        auto n = cast(size_t) tokens[i].i % result.nodes.length;
-        ++i;
-
-        // Якорь дублируется на twin-узел раздвоенного сегмента.
-        result.anchors ~= Anchor(n, kind);
+        auto n = cast(size_t) a.idx % result.nodes.length;
+        result.anchors ~= Anchor(n, a.kind);
         if (forkOf[n] != n)
-            result.anchors ~= Anchor(forkOf[n], kind);
+            result.anchors ~= Anchor(forkOf[n], a.kind);
     }
     return Nullable!Frame(result);
 }
@@ -509,62 +564,22 @@ Nullable!Frame develop(const Grammar gr, const Genotype g)
     auto tokens = decode!Tok(gr, g);
     if (tokens is null)
         return Nullable!Frame.init;
-    auto frame = frameFromTokens(applyMorph(tokens));
+    auto ast = buildAst(tokens);
+    if (ast.isNull)
+        return Nullable!Frame.init;
+    auto frame = frameFromAst(ast.get);
     if (frame.isNull)
         return Nullable!Frame.init;
     return isValidFrame(frame.get);
 }
 
-/**
- * Морфоген-градиент толщины: радиус каждой балки масштабируется вдоль
- * порядка построения. Первая балка не меняется, последняя — в `taper` раз,
- * промежуточные — по степенному закону `1 + (taper - 1) * frac^taperPow`,
- * где `frac = j / (n - 1)`. Параметры градиента читаются из токенов
- * `Tok.taper` / `Tok.taperPow` (по одному на каркас, задаются в `startPos`)
- * и из потока убираются, чтобы интерпретатор их не видел. Нейтральный
- * вариант (taper == 1.0) не меняет геометрию.
- */
-private Terminal!Tok[] applyMorph(Terminal!Tok[] tokens)
+/// Токены -> AST -> геометрия (для тестов и пробников).
+Nullable!Frame toFrame(const Terminal!Tok[] tokens)
 {
-    float taper = 1.0f;
-    float taperPow = 1.0f;
-
-    Terminal!Tok[] rest;
-    foreach (tok; tokens)
-    {
-        switch (tok.tok)
-        {
-            case Tok.taper:
-                taper = tok.f;
-                continue;
-            case Tok.taperPow:
-                taperPow = tok.f;
-                continue;
-            default:
-                rest ~= tok;
-        }
-    }
-    if (rest.length == tokens.length)
-        return rest;
-
-    size_t n;
-    foreach (tok; rest)
-        if (tok.tok == Tok.radius)
-            ++n;
-    if (n < 2)
-        return rest;
-
-    size_t j;
-    foreach (i, ref tok; rest)
-    {
-        if (tok.tok != Tok.radius)
-            continue;
-        const frac = cast(float) j / (n - 1);
-        const factor = 1.0f + (taper - 1.0f) * pow(frac, taperPow);
-        rest[i] = new Terminal!Tok(Tok.radius, tok.f * factor);
-        ++j;
-    }
-    return rest;
+    auto ast = buildAst(tokens);
+    if (ast.isNull)
+        return Nullable!Frame.init;
+    return frameFromAst(ast.get);
 }
 
 /**
@@ -626,7 +641,7 @@ unittest
         ++decodeOk;
         assert(tokens.length > 0);
 
-        auto f = frameFromTokens(applyMorph(tokens));
+        auto f = toFrame(tokens);
         if (f.isNull)
             continue;
 
@@ -676,7 +691,7 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
 
-    auto f = frameFromTokens(t);
+    auto f = toFrame(t);
     assert(!f.isNull);
     assert(f.get.nodes.length == 2,
         "endNear должен слиться с узлом 0, а не создавать новый");
@@ -706,7 +721,7 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
 
-    auto f = frameFromTokens(t);
+    auto f = toFrame(t);
     assert(!f.isNull);
     assert(f.get.nodes.length == 2);
     assert(f.get.beams.length == 1);
@@ -741,7 +756,7 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
 
-    auto f = frameFromTokens(t);
+    auto f = toFrame(t);
     assert(!f.isNull);
     assert(f.get.nodes.length == 3);
     const n1 = f.get.nodes[1].pos;
@@ -750,6 +765,51 @@ unittest
         "заголовок π/2 должен развернуть дельту из оси X в ось Y");
     assert(n2.x < -0.999f && n2.y > 0.999f,
         "дельта (0,1,0) при заголовке π/2 уходит влево (-X)");
+}
+
+unittest
+{
+    // AST: структура грамматики видна без геометрии — сегмент, рефы, якоря.
+    Terminal!Tok[] t;
+    t ~= new Terminal!Tok(Tok.coord, 0.5f);
+    t ~= new Terminal!Tok(Tok.coord, -0.25f);
+    t ~= new Terminal!Tok(Tok.coord, 0.1f);
+    t ~= new Terminal!Tok(Tok.taper, 0.6f);
+    t ~= new Terminal!Tok(Tok.taperPow, 2.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.3f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.fork);
+    t ~= new Terminal!Tok(Tok.forkDelta, 0.05f);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNear);
+    t ~= new Terminal!Tok(Tok.coord, 1.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.05f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.7f);
+    t ~= new Terminal!Tok(Tok.anchors);
+    t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.motorWheel);
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 3);
+
+    auto ast = buildAst(t);
+    assert(!ast.isNull);
+    assert(abs(ast.get.seed.x - 0.5f) < 1e-6f && abs(ast.get.seed.y + 0.25f) < 1e-6f);
+    assert(ast.get.taper == 0.6f && ast.get.taperPow == 2.0f);
+    assert(abs(ast.get.heading - 0.3f) < 1e-6f);
+
+    assert(ast.get.segments.length == 1);
+    const seg = ast.get.segments[0];
+    assert(seg.fork && abs(seg.forkDelta - 0.05f) < 1e-6f);
+    assert(seg.beams.length == 1);
+    assert(seg.beams[0].start.kind == StartRefKind.last);
+    assert(seg.beams[0].end.kind == EndRefKind.nearNode);
+    assert(abs(seg.beams[0].end.delta.x - 1.0f) < 1e-6f);
+    assert(abs(seg.beams[0].turn - 0.7f) < 1e-6f);
+
+    assert(ast.get.anchors.length == 1);
+    assert(ast.get.anchors[0].kind == AnchorKind.motorWheel);
+    assert(ast.get.anchors[0].idx == 3);
 }
 
 unittest
@@ -785,7 +845,7 @@ unittest
     t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.wheel);
     t ~= new Terminal!Tok(Tok.refIdx, cast(int) 1);
 
-    auto f = frameFromTokens(t);
+    auto f = toFrame(t);
     assert(!f.isNull);
     assert(f.get.nodes.length == 5,
         "каждый узел раздвоенного сегмента (кроме оси) рождается парой с twin");
@@ -837,7 +897,7 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
 
-    auto f = frameFromTokens(t);
+    auto f = toFrame(t);
     assert(!f.isNull);
     assert(f.get.nodes.length == 3);
     const n1 = f.get.nodes[1].pos;
@@ -871,7 +931,7 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
 
-    auto f = frameFromTokens(t);
+    auto f = toFrame(t);
     assert(!f.isNull);
     assert(f.get.nodes.length == 3,
         "внеосевой старт: ветвь (1.3) + twin (2*0.3-1.3) вокруг оси 0.3");
@@ -906,7 +966,7 @@ unittest
     t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.motorWheel);
     t ~= new Terminal!Tok(Tok.refIdx, cast(int) 1);
 
-    auto f = frameFromTokens(t);
+    auto f = toFrame(t);
     assert(!f.isNull);
     assert(f.get.nodes.length == 2);
     assert(f.get.beams.length == 1);
@@ -917,13 +977,16 @@ unittest
 unittest
 {
     // Морфоген-градиент: радиус балок масштабируется вдоль порядка
-    // построения (0.5 в конце), морфоген-токены убираются из потока.
+    // построения (0.5 в конце); параметры живут в AST.
     Terminal!Tok[] t;
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.taper, 0.5f);
     t ~= new Terminal!Tok(Tok.taperPow, 1.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
     foreach (_; 0 .. 2)
     {
         t ~= new Terminal!Tok(Tok.refLast);
@@ -933,27 +996,22 @@ unittest
         t ~= new Terminal!Tok(Tok.coord, 0.0f);
         t ~= new Terminal!Tok(Tok.radius, 0.06f);
         t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+        t ~= new Terminal!Tok(Tok.turn, 0.0f);
     }
     t ~= new Terminal!Tok(Tok.anchors);
 
-    auto m = applyMorph(t);
-    size_t r;
-    foreach (tok; m)
-        if (tok.tok == Tok.radius)
-        {
-            if (r == 0)
-                assert(tok.f == 0.06f, "первая балка не меняется");
-            else
-                assert(tok.f == 0.03f, "последняя балка сужается в taper раз");
-            ++r;
-        }
-    assert(r == 2);
+    auto ast = buildAst(t);
+    assert(!ast.isNull);
+    assert(ast.get.taper == 0.5f && ast.get.taperPow == 1.0f,
+        "морфоген читается в AST, а не тонет в потоке");
 
-    size_t morph;
-    foreach (tok; m)
-        if (tok.tok == Tok.taper || tok.tok == Tok.taperPow)
-            ++morph;
-    assert(morph == 0, "морфоген-токены убираются из потока");
+    auto f = frameFromAst(ast.get);
+    assert(!f.isNull);
+    assert(f.get.beams.length == 2);
+    assert(abs(f.get.beams[0].radius - 0.06f) < 1e-5f,
+        "первая балка не меняется");
+    assert(abs(f.get.beams[1].radius - 0.03f) < 1e-5f,
+        "последняя балка сужается в taper раз");
 }
 
 unittest
