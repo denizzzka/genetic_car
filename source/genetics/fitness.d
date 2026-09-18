@@ -124,6 +124,12 @@ float buggyFitness(const Frame f)
     if (clearance < minClearance || clearance > maxClearance)
         return 0.0f;
 
+    // Балки не должны торчать ниже колёс: ни один узел каркаса не опускается
+    // под плоскость земли. Допуск epsFlat прощает касание, но не проникновение.
+    foreach (n; f.nodes)
+        if (n.pos.z < groundZ - epsFlat)
+            return 0.0f;
+
     // Центр масс горизонтально — внутри опорного многоугольника колёс.
     if (com.x < xmin - epsFlat || com.x > xmax + epsFlat)
         return 0.0f;
@@ -464,6 +470,22 @@ unittest
     split.beams ~= Beam(2, 3, 0.04f);
     assert(!isConnected(split));
     assert(buggyFitness(split) == 0.0f);
+
+    // Балки, торчащие ниже колёс: узел опускается под плоскость земли
+    // (под нижнюю точку колёс) — физическая отбраковка.
+    Frame underGround = symmetricBuggyFrame();
+    underGround.nodes ~= Node(vec3(0.0f, 0.0f, -1.0f));
+    underGround.beams ~= Beam(0, underGround.nodes.length - 1, 0.04f);
+    assert(buggyFitness(underGround) == 0.0f,
+        "балка ниже уровня земли должна отбраковываться");
+
+    // Тот же каркас с узлом, лишь касающимся земли (допуск), — не отбраковка.
+    Frame boundary = symmetricBuggyFrame();
+    // Нижняя точка колёс: zmin колёс = 0.25 -> земля 0.25 - 0.3 = -0.05.
+    boundary.nodes ~= Node(vec3(0.0f, 0.0f, -0.05f));
+    boundary.beams ~= Beam(0, boundary.nodes.length - 1, 0.04f);
+    assert(buggyFitness(boundary) > 0.0f,
+        "касание плоскости земли в пределах допуска не отбраковывается");
 
     // Симметричная машина должна оцениваться выше асимметричной той же формы.
     const float symFitness = buggyFitness(symmetricBuggyFrame());
