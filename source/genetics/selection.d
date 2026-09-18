@@ -15,17 +15,14 @@ struct Individual
     float fitness;
 }
 
-/// Параметры отбора.
-///
-/// Значения подобраны так, чтобы витрина из топ-5 оставалась разнообразной:
-/// слабый турнир (2) и мизерная элита (1) не дают популяции схлопнуться в
-/// клоны одной особи, а мутация покрупнее (3 кодона) продолжает разведку.
-struct SelectionParams
+/// Параметры эволюции — единая точка настройки
+struct EvolutionConfig
 {
-    size_t populationSize = 20;
+    size_t populationSize = 100;
     size_t tournamentSize = 2;
     size_t eliteCount = 1;
     size_t mutateHits = 3;
+    size_t generationsPerPress = 50;
 }
 
 /// Поколение 0: идентичные копии закодированного дефолтного багги.
@@ -65,19 +62,19 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop)
  * поколения; исходная не меняется.
  */
 Individual[] evolve(const Grammar gr, Individual[] pop,
-    size_t generations, ref Random rnd, SelectionParams params = SelectionParams.init)
+    size_t generations, ref Random rnd, EvolutionConfig params = EvolutionConfig.init)
 {
     auto cur = pop;
     foreach (_; 0 .. generations)
     {
-        auto children = buildNextGeneration(cur, params, rnd);
+        auto children = buildNextGeneration(gr, cur, params, rnd);
         cur = evaluatePopulation(gr, children);
     }
     return cur;
 }
 
-private Genotype[] buildNextGeneration(Individual[] pop,
-    const SelectionParams p, ref Random rnd)
+private Genotype[] buildNextGeneration(const Grammar gr, Individual[] pop,
+    const EvolutionConfig p, ref Random rnd)
 {
     Genotype[] next;
     next.reserve(p.populationSize);
@@ -98,7 +95,17 @@ private Genotype[] buildNextGeneration(Individual[] pop,
         const pa = ranked[tournament(ranked, p.tournamentSize, rnd)].genotype;
         const pb = ranked[tournament(ranked, p.tournamentSize, rnd)].genotype;
         auto child = crossover(pa, pb, rnd);
-        mutate(child, p.mutateHits, rnd);
+
+        // Шаг мутации — mutateStep: с вероятностью 25% это индел — единственный
+        // оператор, меняющий число балок и колёс. Раньше звался только mutate,
+        // геномы не меняли длину, и эволюция лишь сдвигала геометрию фиксированного
+        // скелета. mutateStep принимает кандидата только если индел реально изменил
+        // структуру; если подходящий шаг не нашёлся — запасной точечный mutate.
+        auto may = mutateStep(gr, child, rnd);
+        if (may.isNull)
+            mutate(child, p.mutateHits, rnd);
+        else
+            child = may.get;
         next ~= child;
     }
     return next;
@@ -150,9 +157,17 @@ unittest
     // Элитизм: лучший фитнес не падает при эволюции.
     auto rnd = Random(7);
     auto evolved = evolve(gr, pop, 10, rnd);
-    assert(evolved.length == 20, "популяция не меняет размер");
+    assert(evolved.length == EvolutionConfig.init.populationSize,
+        "поколение строится по EvolutionConfig.populationSize");
     assert(bestFitness(evolved) >= f0 - 1e-6f,
         "элитизм гарантирует не хуже исходного лучшего");
+
+    // Иная популяция по явному конфигу.
+    EvolutionConfig cfg;
+    cfg.populationSize = 20;
+    auto rnd3 = Random(7);
+    auto evolved3 = evolve(gr, pop, 10, rnd3, cfg);
+    assert(evolved3.length == 20, "явный конфиг задаёт размер поколения");
 
     // Тот же посев и та же последовательность — тот же результат.
     auto rnd2 = Random(7);
@@ -160,4 +175,31 @@ unittest
         10, rnd2);
     assert(bestFitness(evolved2) == bestFitness(evolved),
         "отбор детерминирован при фиксированном зерне");
+}
+
+unittest
+{
+    // Структурные мутации подключены в цикл отбора (mutateStep): число
+    // балок и колёс обязано уметь расти за поколения, а не только менять
+    // геометрию фиксированного скелета.
+    auto gr = buggyGrammar();
+    const startBeams = 2;
+    const startAnchors = 2;
+    auto rnd = Random(11);
+    auto pop = evaluatePopulation(gr, seedPopulation(gr, 20));
+    auto evolved = evolve(gr, pop, 8, rnd);
+
+    bool grewBeams, grewAnchors;
+    foreach (e; evolved)
+    {
+        auto may = develop(gr, e.genotype);
+        if (may.isNull)
+            continue;
+        if (may.get.beams.length > startBeams)
+            grewBeams = true;
+        if (may.get.anchors.length > startAnchors)
+            grewAnchors = true;
+    }
+    assert(grewBeams, "число балок должно уметь расти через инделы");
+    assert(grewAnchors, "число колёс должно уметь расти через инделы");
 }

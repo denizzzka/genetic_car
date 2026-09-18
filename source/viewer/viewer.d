@@ -41,10 +41,9 @@ class BuggyScene: Scene
     Individual[] population;
     size_t generation;
 
-    /// Объём популяции, размер витрины и поколений за нажатие G.
-    enum size_t populationSize = 20;
+    EvolutionConfig evolutionConfig;
+
     enum size_t galleryTop = 5;
-    enum size_t generationsPerPress = 10;
     enum float gallerySpacing = 3.0f;
 
     override void afterLoad()
@@ -110,7 +109,7 @@ class BuggyScene: Scene
     /// Новое 0-е поколение: идентичные копии закодированного багги.
     private void resetPopulation()
     {
-        population = evaluatePopulation(grammar, seedPopulation(grammar, populationSize));
+        population = evaluatePopulation(grammar, seedPopulation(grammar, evolutionConfig.populationSize));
         generation = 0;
     }
 
@@ -126,8 +125,8 @@ class BuggyScene: Scene
         }
         else if (eventManager.keyDown[KEY_G])
         {
-            population = evolve(grammar, population, generationsPerPress, rnd);
-            generation += generationsPerPress;
+            population = evolve(grammar, population, evolutionConfig.generationsPerPress, rnd, evolutionConfig);
+            generation += evolutionConfig.generationsPerPress;
             buildGallery();
             logGeneration();
         }
