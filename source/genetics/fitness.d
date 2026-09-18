@@ -7,6 +7,7 @@ import std.typecons : Tuple, tuple;
 import dlib.math.vector;
 
 import frame.frame;
+import genetics.buggyast;
 
 /*
  * Статическая фитнес-функция — суррогат физики.
@@ -67,6 +68,11 @@ enum float frameHeightTolerance = 0.5f;
 ///   - габаритный параллелепипед — штраф за узлы за пределами
 ///     (колёсный AABB по XY + высота от земли до целевой).
 float buggyFitness(const Frame f)
+{
+    return buggyFitness(f, Ast.init);
+}
+
+float buggyFitness(const Frame f, const Ast ast)
 {
     // ---- Гейт: физическая выполнимость ----
     if (f.nodes.length == 0 || f.beams.length == 0)
@@ -152,7 +158,10 @@ float buggyFitness(const Frame f)
 
     const float nodeSym = symmetryRatio(f);
     const float wheelSym = wheelSymmetry(f);
-    const float phiSym = 0.5f + 0.5f * (0.5f * (nodeSym + wheelSym));
+    const float pairSym = beamMassSymmetry(f);
+    const float forkSym = forkRadiusSymmetry(ast);
+    const float base = 0.5f * nodeSym + 0.3f * wheelSym + 0.2f * pairSym;
+    const float phiSym = (0.5f + 0.5f * base) * forkSym;
 
     const size_t cycles = cyclomaticNumber(f); // μ = E - V + c
     const float phiRigid = 0.5f + 0.5f * (1.0f - exp(-0.4f * cast(float) cycles));
@@ -262,6 +271,95 @@ float wheelSymmetry(const Frame f)
     }
 
     return cast(float) matched / f.anchors.length;
+}
+
+/// Доля массы балок, зеркально парных с балкой того же радиуса (по массе
+/// `r²·len`), включая самосимметричные: балку на плоскости и балку,
+/// пересекающую плоскость своими зеркальными концами. Штрафует и позиционную,
+/// и радиальную (след `forkDelta`) асимметрию.
+float beamMassSymmetry(const Frame f)
+{
+    if (f.beams.length == 0)
+        return 1.0f;
+
+    const float diag = aabbDiagonal(f);
+    const float eps = max(0.02f * diag, 1e-3f);
+
+    float mass(size_t i) {
+        const vec3 a = f.nodes[f.beams[i].a].pos;
+        const vec3 c = f.nodes[f.beams[i].b].pos;
+        return f.beams[i].radius * f.beams[i].radius * (c - a).length;
+    }
+
+    bool[] used = new bool[f.beams.length];
+    float total = 0.0f, matched = 0.0f;
+
+    foreach (i; 0 .. f.beams.length)
+    {
+        const float m = mass(i);
+        total += m;
+        if (used[i])
+        {
+            matched += m;
+            continue;
+        }
+
+        const vec3 a = f.nodes[f.beams[i].a].pos;
+        const vec3 c = f.nodes[f.beams[i].b].pos;
+        const vec3 ma = vec3(-a.x, a.y, a.z);
+        const vec3 mc = vec3(-c.x, c.y, c.z);
+
+        if ((distance(a, ma) < eps && distance(c, mc) < eps)
+            || (distance(a, mc) < eps && distance(c, ma) < eps))
+        {
+            used[i] = true;
+            matched += m;
+            continue;
+        }
+
+        size_t best = f.beams.length;
+        float bestD = eps;
+        foreach (j; 0 .. f.beams.length)
+        {
+            if (j == i || used[j])
+                continue;
+            if (abs(f.beams[j].radius - f.beams[i].radius) > 0.02f * f.beams[i].radius + 1e-4f)
+                continue;
+            const vec3 da = f.nodes[f.beams[j].a].pos;
+            const vec3 dc = f.nodes[f.beams[j].b].pos;
+            const float d1 = distance(da, ma) + distance(dc, mc);
+            const float d2 = distance(da, mc) + distance(dc, ma);
+            if (min(d1, d2) < bestD)
+            {
+                bestD = min(d1, d2);
+                best = j;
+            }
+        }
+        if (best < f.beams.length)
+        {
+            used[i] = used[best] = true;
+            matched += m;
+        }
+    }
+
+    return total > 0.0f ? matched / total : 1.0f;
+}
+
+/// Радиальная симметрия fork-пар из AST: 1 при нулевом разбросе `|forkDelta|`.
+/// На пустом AST (синтетические каркасы без генома) — нейтрально 1.
+float forkRadiusSymmetry(const Ast ast)
+{
+    float sum = 0.0f;
+    size_t n = 0;
+    foreach (s; ast.segments)
+        if (s.fork)
+        {
+            sum += abs(s.forkDelta);
+            n += 1;
+        }
+    if (n == 0)
+        return 1.0f;
+    return exp(-3.0f * sum / n);
 }
 
 /// Цикломатическое число графа балок μ = E - V + c (число независимых петель).
@@ -534,6 +632,33 @@ unittest
     assert(buggyFitness(inside) > 0.0f && buggyFitness(outside) > 0.0f);
     assert(buggyFitness(inside) > buggyFitness(outside),
         "балка за пределами габаритного параллелепипеда должна понижать фитнес");
+}
+
+unittest
+{
+    // Парность массы: симметричный багги полностью парен, асимметричный — нет.
+    assert(beamMassSymmetry(symmetricBuggyFrame()) > 0.99f,
+        "симметричный багги — полная зеркальная парность массы");
+    assert(beamMassSymmetry(asymmetricBuggyFrame()) < 0.99f,
+        "асимметричный багги не имеет пары части массы");
+}
+
+unittest
+{
+    // forkDelta из AST: тот же каркас, но AST сообщает о радиальном разбросе
+    // fork-пары — ненулевой |forkDelta| снижает фитнес. Пустой AST нейтрален.
+    const base = buggyFitness(symmetricBuggyFrame());
+    assert(base > 0.0f);
+
+    Ast a0;
+    a0.segments ~= SegmentAst(true, 0.0f, 0.0f, []);
+    Ast aD;
+    aD.segments ~= SegmentAst(true, 0.1f, 0.0f, []);
+
+    const f0 = buggyFitness(symmetricBuggyFrame(), a0);
+    const fD = buggyFitness(symmetricBuggyFrame(), aD);
+    assert(abs(f0 - base) < 1e-6f, "нулевой |forkDelta| не меняет фитнес");
+    assert(fD < f0, "ненулевой |forkDelta| штрафует асимметрию fork-пары");
 }
 
 /// Симметричная машина, дополненная вертикальной надстройкой: тот же footprint,

@@ -5,6 +5,7 @@ import std.random;
 
 import genetics.sge;
 import genetics.buggygrammar;
+import genetics.buggyast;
 import genetics.initial_data;
 import genetics.fitness;
 
@@ -48,9 +49,10 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop)
     foreach (g; pop)
     {
         float fit = 0.0f;
-        auto may = develop(gr, g);
+        Ast ast;
+        auto may = develop(gr, g, ast);
         if (!may.isNull)
-            fit = buggyFitness(may.get);
+            fit = buggyFitness(may.get, ast);
         res ~= Individual(g, fit);
     }
     return res;

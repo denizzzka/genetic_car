@@ -559,18 +559,28 @@ Nullable!Frame isValidFrame(Frame f)
 /// Расшифровать геном из грамматики багги в готовый каркас багги.
 /// Значение-результат сам говорит об успехе: `Nullable!Frame.isNull`
 /// означает, что декодирование, разбор или валидация не прошли.
-Nullable!Frame develop(const Grammar gr, const Genotype g)
+/// Расшифровать геном в каркас и вернуть наружу построенное дерево `ast`.
+/// Одноаргументная версия может использовать внутренний AST без раскрытия.
+Nullable!Frame develop(const Grammar gr, const Genotype g, out Ast ast)
 {
+    ast = Ast.init;
     auto tokens = decode!Tok(gr, g);
     if (tokens is null)
         return Nullable!Frame.init;
-    auto ast = buildAst(tokens);
-    if (ast.isNull)
+    auto mayAst = buildAst(tokens);
+    if (mayAst.isNull)
         return Nullable!Frame.init;
-    auto frame = frameFromAst(ast.get);
+    ast = mayAst.get;
+    auto frame = frameFromAst(ast);
     if (frame.isNull)
         return Nullable!Frame.init;
     return isValidFrame(frame.get);
+}
+
+Nullable!Frame develop(const Grammar gr, const Genotype g)
+{
+    Ast ignored;
+    return develop(gr, g, ignored);
 }
 
 /// Токены -> AST -> геометрия (для тестов и пробников).
