@@ -35,7 +35,6 @@ Genotype startGenome(Grammar gr)
     const mid = cast(uint)(uint.max / 2);
 
     set("frame", [0u]);
-    set("symmetry", [0u]);
     set("startPos", [0u]);
     set("startX", [u(0.0f, -2.0f, 2.0f)]);
     set("startY", [u(0.0f, -2.0f, 2.0f)]);
@@ -43,6 +42,14 @@ Genotype startGenome(Grammar gr)
     set("taper", [u(1.0f, 0.4f, 1.0f)]);
     set("taperPow", [u(1.0f, 0.5f, 4.0f)]);
     set("heading", [mid]);
+
+    // Один одиночный (медианный) сегмент без раздвоения: из него эволюция
+    // либо вырастит пару ветвей (сегмент раздвоится — «лишняя пара
+    // конечностей»), либо добавит ещё сегменты.
+    set("segmentList", [1u]);
+    set("segment", [0u]);
+    set("segMode", [0u]);
+    set("forkDelta", [mid]);
 
     set("beamList", [1u]);
     set("beam", [0u]);

@@ -15,9 +15,21 @@ import genetics.sge;
  */
 enum Tok
 {
-    /// Маркер симметрии: включает зеркалирование каркаса относительно
-    /// плоскости X == 0. Первый токен в потоке, до позиции первого узла.
-    mirror,
+    /// Маркер начала сегмента: ограничивает группу балок, строящихся как
+    /// одно модульное целое. Каждый сегмент сам решает, раздваиваться ли.
+    segStart,
+
+    /// Маркер раздвоения сегмента: если стоит после `segStart`, каждая балка
+    /// сегмента рождает пару (twin) относительно оси сегмента — X стартового
+    /// узла сегмента (не мировой X == 0). Ось дают локальные пары конечностей;
+    /// пустой маркер — медианная одиночная структура («глаз по центру»).
+    fork,
+
+    /// Коэффициент асимметрии пары (float, ±0.1): радиус twin-балки
+    /// масштабируется в `1 + forkDelta` раз. Нулевое значение — пара
+    /// зеркально-точная, отбор может эволюционировать направленную
+    /// асимметрию между сторонами (как клешни краба).
+    forkDelta,
 
     /// Начало балки: ссылка на последний созданный узел (маркер без значения).
     refLast,
@@ -90,7 +102,8 @@ private NonTerminal nt(string name, Production[] productions)
 /// Маркерный токен без значения
 private Terminal!Tok marker(Tok tok)
 {
-    assert(tok == Tok.refLast || tok == Tok.endNew || tok == Tok.endNear || tok == Tok.mirror);
+    assert(tok == Tok.refLast || tok == Tok.endNew || tok == Tok.endNear
+        || tok == Tok.segStart || tok == Tok.fork || tok == Tok.anchors);
 
     return new Terminal!Tok(tok);
 }
@@ -98,26 +111,40 @@ private Terminal!Tok marker(Tok tok)
 /**
  * Грамматика багги целиком.
  *
- * Первый токен — необязательный маркер `Tok.mirror` (билатеральная симметрия
- * относительно X == 0). Затем три токена `coord` задают позицию первого узла,
- * потом — балки, затем — якоря (колёса). Узлы отдельно не генерируются: они
- * появляются только как концы балок. Каждая балка: старт — первый/последний
- * созданный узел или существующий по индексу, конец — вновь создаваемый
- * (старт + смещение) или существующий по индексу.
+ * Каркас — последовательность сегментов, модульных групп балок. Каждый
+ * сегмент начинается маркером `segStart`, за ним идёт необязательный
+ * `Tok.fork` (раздвоение) и `forkDelta` — коэффициент асимметрии пары.
+ * Узлы отдельно не генерируются: они появляются только как концы балок.
+ * Каждая балка: старт — первый/последний созданный узел или существующий
+ * по индексу, конец — вновь создаваемый (старт + смещение) или существующий
+ * по индексу.
  *
  * Якоря генерируются после всех балок: это пара `anchorKind` + `refIdx`,
  * где `refIdx` ссылается на уже созданный узел.
  */
 Grammar buggyGrammar()
 {
+    auto segmentList_ = nt("segmentList", null);
     auto beamList_ = nt("beamList", null);
 
-    // Симметрия выбирается первой продукцией `frame`: пустая — без зеркала,
-    // маркер `Tok.mirror` — билатеральное зеркалирование относительно X == 0.
-    auto symmetry = nt("symmetry", [
+    // Раздвоение сегмента: пустая продукция — медианная одиночная структура
+    // («глаз по центру»), маркер `Tok.fork` — пара ветвей вокруг локальной
+    // оси (X стартового узла сегмента).
+    auto segMode = nt("segMode", [
         new Production([]),
-        new Production([marker(Tok.mirror)]),
+        new Production([marker(Tok.fork)]),
     ]);
+
+    auto forkDelta = new Sampler!Tok("forkDelta", Tok.forkDelta, -0.1f, 0.1f);
+
+    auto segment = nt("segment", [
+        new Production([marker(Tok.segStart), segMode, forkDelta, beamList_]),
+    ]);
+
+    segmentList_.productions = [
+        new Production([segment, segmentList_]),
+        new Production([segment]),
+    ];
 
     auto idx = new Sampler!Tok("idx", Tok.refIdx, 64);
     auto destX = new Sampler!Tok("destX", Tok.coord, -1.5f, 1.5f);
@@ -182,11 +209,12 @@ Grammar buggyGrammar()
     ]);
 
     auto start = nt("frame", [
-        new Production([symmetry, startPos, beamList_, anchorMarker, anchorList_]),
+        new Production([startPos, segmentList_, anchorMarker, anchorList_]),
     ]);
 
     auto symbols = [
-        start, symmetry, startPos, startX, startY, startZ, taper, taperPow, heading, turn,
+        start, startPos, startX, startY, startZ, taper, taperPow, heading, turn,
+        segmentList_, segment, segMode, forkDelta,
         beamList_, beam, startRef,
         idx, endRef, destX, destY, destZ, radius, beamKind,
         anchorMarker, anchorList_, anchor, anchorKind,
@@ -197,7 +225,7 @@ Grammar buggyGrammar()
 /**
  * Разобрать терминалы в каркас багги.
  *
- * Создаётся первый узел, затем балки по порядку до маркера `Tok.anchors`,
+ * Создаётся первый узел, затем сегменты по порядку до маркера `Tok.anchors`,
  * затем якоря (каждая пара `anchorKind` + `refIdx` прикрепляет колесо
  * к уже созданному узлу). Токены `refLast` ссылаются на последний созданный
  * узел, `refIdx` — на существующий по номеру, `endNew` (со смещениями)
@@ -209,10 +237,13 @@ Grammar buggyGrammar()
  * интерпретируются в его системе (X — вперёд, Y — вправо, Z — вверх),
  * а токены `turn` после каждой балки накапливают заголовок построения.
  *
- * Симметрия: маркер `Tok.mirror` в начале потока включает зеркалирование
- * относительно плоскости X == 0. Каждый узел создаётся парой с отражением
- * (таблица `mirrorOf`; узлы на плоскости — собственное зеркало), каждая
- * балка дублируется в зеркальную, а каждый якорь — в зеркальный.
+ * Сегменты: каждый начинается маркером `Tok.segStart` (один сегмент —
+ * модульное целое). При `Tok.fork` сегмент раздваивается: ось — X
+ * стартового узла сегмента (а не мировая X == 0), и каждая балка рождает
+ * пару (таблица `forkOf`; узлы на оси — собственное зеркало). Радиус
+ * twin-балки масштабируется в `1 + forkDelta`, что позволяет эволюции
+ * растаскивать стороны относительно друг друга. Без `Tok.fork` сегмент —
+ * медианная одиночная структура («глаз по центру»).
  *
  * Возврат — сам результат: `Nullable!Frame.isNull` означает ошибку разбора.
  */
@@ -222,51 +253,41 @@ Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
 
     Frame result;
 
-    // Первый токен — необязательный маркер симметрии, затем — абсолютная
-    // позиция первого узла.
+    // Абсолютная позиция первого узла (без зеркалирования — это медиана).
     size_t i = 0;
-    bool mirror = false;
-    if (i < tokens.length && tokens[i].tok == Tok.mirror)
-    {
-        mirror = true;
-        ++i;
-    }
     if (i + 2 >= tokens.length)
         return Nullable!Frame.init;
     if (tokens[i].tok != Tok.coord || tokens[i + 1].tok != Tok.coord || tokens[i + 2].tok != Tok.coord)
         return Nullable!Frame.init;
     auto seed = vec3(tokens[i].f, tokens[i + 1].f, tokens[i + 2].f);
-    // При зеркалировании старт прижимается к плоскости X == 0: иначе две
-    // половинки каркаса разъединяются и валидация связности его выбрасывает.
-    if (mirror)
-        seed.x = 0.0f;
     i += 3;
 
-    // Таблица зеркальных узлов: node -> его отражение относительно X == 0.
-    // Узлы на плоскости отражения являются собственным зеркалом.
-    size_t[] mirrorOf;
+    // Таблица пар: node -> его twin относительно оси раздвоения сегмента.
+    // Узлы на оси являются собственным зеркалом; узлы одиночных сегментов
+    // тоже, а значит не дублируются.
+    size_t[] forkOf;
 
-    // Создание узла; при активном зеркалировании — пара (узел, зеркало).
-    auto addNode = (vec3 target) {
+    // Создание узла; при раздвоении сегмента — пара (узел, twin) вокруг оси.
+    auto addNode = (vec3 target, bool fork, float axis) {
         result.nodes ~= Node(target);
         const n = result.nodes.length - 1;
-        if (mirror && abs(target.x) >= 1e-4f)
+        if (fork && abs(target.x - axis) >= 1e-4f)
         {
-            result.nodes ~= Node(vec3(-target.x, target.y, target.z));
+            result.nodes ~= Node(vec3(2.0f * axis - target.x, target.y, target.z));
             const nm = result.nodes.length - 1;
-            mirrorOf.length = result.nodes.length;
-            mirrorOf[n] = nm;
-            mirrorOf[nm] = n;
+            forkOf.length = result.nodes.length;
+            forkOf[n] = nm;
+            forkOf[nm] = n;
         }
         else
         {
-            mirrorOf.length = result.nodes.length;
-            mirrorOf[n] = n;
+            forkOf.length = result.nodes.length;
+            forkOf[n] = n;
         }
         return n;
     };
 
-    size_t last = addNode(seed);
+    size_t last = addNode(seed, false, 0.0f);
 
     // Turtle: начальный заголовок построения (после морфоген-токенов,
     // изъятых из потока). Дельты балок интерпретируются в его системе.
@@ -282,110 +303,145 @@ Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
         const s = sin(heading);
         return vec3(c * dx - s * dy, s * dx + c * dy, dz);
     };
+
+    // Сегменты: каждый начинается `segStart`, затем необязательный `fork`,
+    // затем `forkDelta` (коэффициент асимметрии пары), затем балки.
     while (i < tokens.length && tokens[i].tok != Tok.anchors)
     {
-        size_t start;
-        switch (tokens[i].tok)
+        if (tokens[i].tok != Tok.segStart)
+            return Nullable!Frame.init;
+        ++i;
+
+        bool fork = false;
+        if (i < tokens.length && tokens[i].tok == Tok.fork)
         {
-            case Tok.refLast:
-                start = last;
-                ++i;
-                break;
-            case Tok.refIdx:
-                start = tokens[i].i;
-                if (start >= result.nodes.length)
-                    return Nullable!Frame.init;
-                ++i;
-                break;
-            default:
-                return Nullable!Frame.init;
+            fork = true;
+            ++i;
         }
 
-        size_t end;
-        switch (tokens[i].tok)
+        if (i >= tokens.length || tokens[i].tok != Tok.forkDelta)
+            return Nullable!Frame.init;
+        float forkDelta = tokens[i].f;
+        ++i;
+
+        // Ось раздвоения — X стартового узла сегмента (первой балки).
+        bool haveAxis = false;
+        float axis = 0.0f;
+
+        while (i < tokens.length && tokens[i].tok != Tok.segStart
+            && tokens[i].tok != Tok.anchors)
         {
-            case Tok.endNew:
-                if (i + 3 >= tokens.length)
+            size_t start;
+            switch (tokens[i].tok)
+            {
+                case Tok.refLast:
+                    start = last;
+                    ++i;
+                    break;
+                case Tok.refIdx:
+                    start = tokens[i].i;
+                    if (start >= result.nodes.length)
+                        return Nullable!Frame.init;
+                    ++i;
+                    break;
+                default:
                     return Nullable!Frame.init;
-                if (tokens[i + 1].tok != Tok.coord
-                    || tokens[i + 2].tok != Tok.coord
-                    || tokens[i + 3].tok != Tok.coord)
-                    return Nullable!Frame.init;
-                auto dx = tokens[i + 1].f;
-                auto dy = tokens[i + 2].f;
-                auto dz = tokens[i + 3].f;
-                auto target = result.nodes[start].pos + forward(dx, dy, dz);
-                end = addNode(target);
-                last = end;
-                i += 4;
-                break;
-            case Tok.endNear:
-                if (i + 3 >= tokens.length)
-                    return Nullable!Frame.init;
-                if (tokens[i + 1].tok != Tok.coord
-                    || tokens[i + 2].tok != Tok.coord
-                    || tokens[i + 3].tok != Tok.coord)
-                    return Nullable!Frame.init;
-                auto tx = tokens[i + 1].f;
-                auto ty = tokens[i + 2].f;
-                auto tz = tokens[i + 3].f;
-                auto target = result.nodes[start].pos + forward(tx, ty, tz);
-                // endNear — как endNew, но растущий конец сливается с ближайшим
-                // существующим узлом (кроме старта) в пределах mergeRadius.
-                // Из правила «расти до контакта» сами возникают петли и
-                // самосборка каркаса.
-                size_t best = size_t.max;
-                auto bestD = mergeRadius;
-                foreach (n; 0 .. result.nodes.length)
-                {
-                    if (n == start)
-                        continue;
-                    const d = distance(result.nodes[n].pos, target);
-                    if (d < bestD)
+            }
+
+            if (fork && !haveAxis)
+            {
+                axis = result.nodes[start].pos.x;
+                haveAxis = true;
+            }
+
+            size_t end;
+            switch (tokens[i].tok)
+            {
+                case Tok.endNew:
+                    if (i + 3 >= tokens.length)
+                        return Nullable!Frame.init;
+                    if (tokens[i + 1].tok != Tok.coord
+                        || tokens[i + 2].tok != Tok.coord
+                        || tokens[i + 3].tok != Tok.coord)
+                        return Nullable!Frame.init;
+                    auto dx = tokens[i + 1].f;
+                    auto dy = tokens[i + 2].f;
+                    auto dz = tokens[i + 3].f;
+                    auto target = result.nodes[start].pos + forward(dx, dy, dz);
+                    end = addNode(target, fork, axis);
+                    last = end;
+                    i += 4;
+                    break;
+                case Tok.endNear:
+                    if (i + 3 >= tokens.length)
+                        return Nullable!Frame.init;
+                    if (tokens[i + 1].tok != Tok.coord
+                        || tokens[i + 2].tok != Tok.coord
+                        || tokens[i + 3].tok != Tok.coord)
+                        return Nullable!Frame.init;
+                    auto tx = tokens[i + 1].f;
+                    auto ty = tokens[i + 2].f;
+                    auto tz = tokens[i + 3].f;
+                    auto target2 = result.nodes[start].pos + forward(tx, ty, tz);
+                    // endNear — как endNew, но растущий конец сливается с ближайшим
+                    // существующим узлом (кроме старта) в пределах mergeRadius.
+                    // Из правила «расти до контакта» сами возникают петли и
+                    // самосборка каркаса.
+                    size_t best = size_t.max;
+                    auto bestD = mergeRadius;
+                    foreach (n; 0 .. result.nodes.length)
                     {
-                        bestD = d;
-                        best = n;
+                        if (n == start)
+                            continue;
+                        const d = distance(result.nodes[n].pos, target2);
+                        if (d < bestD)
+                        {
+                            bestD = d;
+                            best = n;
+                        }
                     }
-                }
-                if (best != size_t.max)
-                    end = best;
-                else
-                    end = addNode(target);
-                last = end;
-                i += 4;
-                break;
-            case Tok.refIdx:
-                end = tokens[i].i;
-                if (end >= result.nodes.length)
+                    if (best != size_t.max)
+                        end = best;
+                    else
+                        end = addNode(target2, fork, axis);
+                    last = end;
+                    i += 4;
+                    break;
+                case Tok.refIdx:
+                    end = tokens[i].i;
+                    if (end >= result.nodes.length)
+                        return Nullable!Frame.init;
+                    ++i;
+                    break;
+                default:
                     return Nullable!Frame.init;
-                ++i;
-                break;
-            default:
+            }
+
+            if (tokens[i].tok != Tok.radius)
                 return Nullable!Frame.init;
+            auto radius = tokens[i].f;
+            ++i;
+
+            if (tokens[i].tok != Tok.beamKind)
+                return Nullable!Frame.init;
+            auto beamKind = cast(BeamKind) tokens[i].i;
+            ++i;
+
+            // Turtle: поворот заголовка после балки — задаёт направление
+            // следующего роста. Накапливается в общий заголовок.
+            if (tokens[i].tok != Tok.turn)
+                return Nullable!Frame.init;
+            heading += tokens[i].f;
+            ++i;
+
+            // Раздвоенная балка дублируется в twin вокруг оси сегмента:
+            // правило роста, а не копия координат — правка дельт меняет обе
+            // ветви разом, а forkDelta растаскивает их радиусы.
+            result.beams ~= Beam(start, end, radius, beamKind);
+            if (fork && !(forkOf[start] == start && forkOf[end] == end))
+                result.beams ~= Beam(forkOf[start], forkOf[end],
+                    radius * (1.0f + forkDelta), beamKind);
         }
-
-        if (tokens[i].tok != Tok.radius)
-            return Nullable!Frame.init;
-        auto radius = tokens[i].f;
-        ++i;
-
-        if (tokens[i].tok != Tok.beamKind)
-            return Nullable!Frame.init;
-        auto beamKind = cast(BeamKind) tokens[i].i;
-        ++i;
-
-        // Turtle: поворот заголовка после балки — задаёт направление
-        // следующего роста. Накапливается в общий заголовок.
-        if (tokens[i].tok != Tok.turn)
-            return Nullable!Frame.init;
-        heading += tokens[i].f;
-        ++i;
-
-        // Каждая балка дублируется в зеркальную (симметрия — правило роста,
-        // а не копия координат: правка дельт меняет обе половины разом).
-        result.beams ~= Beam(start, end, radius, beamKind);
-        if (mirror && !(mirrorOf[start] == start && mirrorOf[end] == end))
-            result.beams ~= Beam(mirrorOf[start], mirrorOf[end], radius, beamKind);
     }
 
     if (i >= tokens.length)
@@ -408,10 +464,10 @@ Nullable!Frame frameFromTokens(const Terminal!Tok[] tokens)
         auto n = cast(size_t) tokens[i].i % result.nodes.length;
         ++i;
 
-        // Якорь дублируется на зеркальный узел.
+        // Якорь дублируется на twin-узел раздвоенного сегмента.
         result.anchors ~= Anchor(n, kind);
-        if (mirror && mirrorOf[n] != n)
-            result.anchors ~= Anchor(mirrorOf[n], kind);
+        if (forkOf[n] != n)
+            result.anchors ~= Anchor(forkOf[n], kind);
     }
     return Nullable!Frame(result);
 }
@@ -600,6 +656,8 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
@@ -636,6 +694,8 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNear);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
@@ -661,6 +721,8 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.heading, 1.5707963f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
@@ -692,15 +754,17 @@ unittest
 
 unittest
 {
-    // Симметрия: маркер включается, каждый узел создаётся парой с отражением
-    // относительно X == 0, балки и якоря дублируются на зеркальную сторону.
-    // Старт на плоскости X == 0 держит обе половины связанными.
+    // Раздвоение (fork): каждая балка раздвоенного сегмента рождает twin вокруг
+    // оси сегмента — X его стартового узла. Старт на узле (0,0,0) даёт ось X==0,
+    // поэтому пары геометрически симметричны вокруг нуля.
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.mirror);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.fork);
+    t ~= new Terminal!Tok(Tok.forkDelta, 0.1f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
@@ -724,39 +788,45 @@ unittest
     auto f = frameFromTokens(t);
     assert(!f.isNull);
     assert(f.get.nodes.length == 5,
-        "каждый узел (кроме узла на плоскости) рождается парой с зеркалом");
+        "каждый узел раздвоенного сегмента (кроме оси) рождается парой с twin");
     assert(abs(f.get.nodes[3].pos.x - 1.0f) < 1e-4f
         && abs(f.get.nodes[3].pos.y - 1.0f) < 1e-4f
         && abs(f.get.nodes[4].pos.x + 1.0f) < 1e-4f
         && abs(f.get.nodes[4].pos.y - 1.0f) < 1e-4f,
-        "зеркальные узлы отражаются геометрически: (1,1) -> (-1,1)");
+        "twin отражается геометрически вокруг оси: (1,1) -> (-1,1)");
 
     assert(f.get.beams.length == 4);
     assert(f.get.beams[0].a == 0 && f.get.beams[0].b == 1);
     assert(f.get.beams[1].a == 0 && f.get.beams[1].b == 2,
-        "вторая балка — зеркальная копия первой через центр");
+        "вторая балка — twin первой через ось сегмента");
     assert(f.get.beams[2].a == 1 && f.get.beams[2].b == 3);
     assert(f.get.beams[3].a == 2 && f.get.beams[3].b == 4);
 
+    // forkDelta растаскивает радиус twin-балки: 0.04 * (1 + 0.1) = 0.044.
+    assert(abs(f.get.beams[1].radius - 0.044f) < 1e-4f);
+    assert(abs(f.get.beams[3].radius - 0.044f) < 1e-4f);
+
     assert(f.get.anchors.length == 2,
-        "якорь дублируется на зеркальный узел");
+        "якорь дублируется на twin-узел");
     assert(f.get.anchors[0].node == 1 && f.get.anchors[1].node == 2);
 
     assert(!isValidFrame(f.get).isNull,
-        "каркас с зеркалом и стартом на плоскости остаётся связным");
+        "раздвоенный каркас с узлом на оси остаётся связным");
 }
 
 unittest
 {
-    // Симметрия поверх turtle: зеркальная половина поворачивается вместе
+    // Раздвоение поверх turtle: twin-половина поворачивается вместе
     // с заголовком. Заголовок π/4 разворачивает дельту (1,0,0) в (c,c),
-    // зеркало — в (-c,c).
+    // twin — в (-c,c) вокруг оси сегмента (X узла старта).
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.mirror);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.78539815f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.fork);
+    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
@@ -775,19 +845,22 @@ unittest
     assert(n1.x > 0.7071f && n1.x < 0.7072f && n1.y > 0.7071f && n1.y < 0.7072f,
         "заголовок π/4 поворачивает дельту (1,0,0) в (c,c)");
     assert(n2.x < -0.7071f && n2.x > -0.7072f && abs(n2.y - n1.y) < 1e-4f,
-        "зеркало отражает uzel (c,c) в (-c,c)");
+        "twin отражает узел (c,c) в (-c,c) вокруг оси сегмента");
 }
 
 unittest
 {
-    // Симметрия со стартом вне плоскости: старт прижимается к X == 0,
-    // каркас остаётся связным, а не разваливается на две половины.
+    // Ось раздвоения — локальная (X узла старта сегмента), а не мировая X == 0.
+    // Старт вне нуля не прижимается и не рвёт каркас: обе ветви держатся
+    // на узле старта, он в своей же оси и сам остаётся одиночным.
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.mirror);
     t ~= new Terminal!Tok(Tok.coord, 0.3f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.2f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.fork);
+    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
@@ -801,9 +874,44 @@ unittest
     auto f = frameFromTokens(t);
     assert(!f.isNull);
     assert(f.get.nodes.length == 3,
-        "старт на плоскости, каждое ответвление — парой (узел, зеркало)");
+        "внеосевой старт: ветвь (1.3) + twin (2*0.3-1.3) вокруг оси 0.3");
+    assert(abs(f.get.nodes[1].pos.x - 1.3f) < 1e-4f,
+        "ветвь растёт от реального старта, старт не прижимается к нулю");
+    assert(abs(f.get.nodes[2].pos.x + 0.7f) < 1e-4f,
+        "twin отражается вокруг оси 0.3, а не мировой X == 0");
     assert(!isValidFrame(f.get).isNull,
-        "старт на плоскости держит обе половины связными");
+        "обе ветви связаны на узле старта — каркас связен");
+}
+
+unittest
+{
+    // Сегмент без раздвоения — медианная одиночная структура без twin:
+    // ни один узел не дублируется.
+    Terminal!Tok[] t;
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= new Terminal!Tok(Tok.coord, 1.0f);
+    t ~= new Terminal!Tok(Tok.coord, 1.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.anchors);
+    t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.motorWheel);
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 1);
+
+    auto f = frameFromTokens(t);
+    assert(!f.isNull);
+    assert(f.get.nodes.length == 2);
+    assert(f.get.beams.length == 1);
+    assert(f.get.anchors.length == 1,
+        "без раздвоения якорь не дублируется");
 }
 
 unittest
