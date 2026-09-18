@@ -60,7 +60,7 @@ unittest
     frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
     frame.anchors ~= Anchor(rr, AnchorKind.motorWheel);
 
-    auto physics = new BuggyPhysics(frame);
+    auto physics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
     scope (exit) physics.dispose();
 
     const double dt = 1.0 / 60.0;
@@ -129,16 +129,20 @@ final class BuggyPhysics
     /// колеса на z == 0 (как в вьюере).
     private vec3 posOffset;
 
-    this(const Frame frame)
+    /// Машина-основа
+    private const Buggy buggy_;
+
+    this(const Buggy buggy)
     {
+        buggy_ = buggy;
         world = New!PhysicsWorld(null, 1000);
         world.gravity = Vector3f(0.0f, 0.0f, -9.80665f); // Z вверх
 
         // Подъём: низ самого низкого колеса на z == 0.
         vec3 lift = vec3(0.0f);
         float minZ = float.max;
-        foreach (a; frame.anchors)
-            minZ = min(minZ, frame.nodes[a.node].pos.z);
+        foreach (a; buggy_.frame.anchors)
+            minZ = min(minZ, buggy_.frame.nodes[a.node].pos.z);
         if (minZ < float.max)
             lift.z = wheelRadius - minZ;
         posOffset = lift;
@@ -151,8 +155,8 @@ final class BuggyPhysics
         world.addShapeComponent(g, New!GeomBox(world, Vector3f(60.0f, 60.0f, 0.5f)),
             Vector3f(0.0f, 0.0f, 0.0f), 1.0f);
 
-        buildChassis(frame);
-        buildWheels(frame);
+        buildChassis();
+        buildWheels();
     }
 
     /// Уклон «горки»: силу тяжести разворачиваем так, чтобы появилась составляющая
@@ -232,8 +236,9 @@ final class BuggyPhysics
         return res;
     }
 
-    private void buildChassis(const Frame frame)
+    private void buildChassis()
     {
+        const Frame frame = buggy_.frame;
         // Масса и центр масс по балкам (каждая — цилиндр с осью вдоль длины).
         float totalMass = 0.0f;
         vec3 sumM = vec3(0.0f);
@@ -278,8 +283,9 @@ final class BuggyPhysics
         shape.solve = false;
     }
 
-    private void buildWheels(const Frame frame)
+    private void buildWheels()
     {
+        const Frame frame = buggy_.frame;
         wheelBodies.length = frame.anchors.length;
 
         foreach (i, a; frame.anchors)

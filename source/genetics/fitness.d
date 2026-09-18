@@ -248,7 +248,7 @@ PhysicsResult physicsRun(Frame frame, double seconds)
         return r;
     }
 
-    auto physics = new BuggyPhysics(frame);
+    auto physics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
     scope (exit) physics.dispose();
 
     physics.setSlopeDeg(physicsSlopeDeg);
