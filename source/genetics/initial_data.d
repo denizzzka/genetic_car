@@ -49,7 +49,6 @@ Genotype startGenome(Grammar gr)
     set("segmentList", [1u]);
     set("segment", [0u]);
     set("segMode", [0u]);
-    set("forkDelta", [mid]);
 
     set("beamList", [1u]);
     set("beam", [0u]);
@@ -59,6 +58,11 @@ Genotype startGenome(Grammar gr)
     set("destY", [u(-1.2f, -1.5f, 1.5f)]);
     set("destZ", [mid]);
     set("radius", [u(0.05f, 0.02f, 0.06f)]);
+    // Активатор-ингибитор Nodal/Lefty на нуле: стартовая пара (когда
+    // раздвоится) зеркально-точная; эволюция сама добавит асимметрию,
+    // если это выгодно.
+    set("nodal", [mid]);
+    set("lefty", [0u]);
     set("beamKind", [0u]);
     set("turn", [mid]);
 

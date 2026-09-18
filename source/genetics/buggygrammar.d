@@ -28,8 +28,9 @@ private NonTerminal nt(string name, Production[] productions)
 /// Маркерный токен без значения
 private Terminal!Tok marker(Tok tok)
 {
-    assert(tok == Tok.refLast || tok == Tok.endNew || tok == Tok.endNear
-        || tok == Tok.segStart || tok == Tok.fork || tok == Tok.anchors);
+    assert(tok == Tok.refLast || tok == Tok.refBase || tok == Tok.endNew
+        || tok == Tok.endNear || tok == Tok.segStart || tok == Tok.fork
+        || tok == Tok.anchors);
 
     return new Terminal!Tok(tok);
 }
@@ -39,8 +40,9 @@ private Terminal!Tok marker(Tok tok)
  *
  * Каркас — последовательность сегментов, модульных групп балок. Каждый
  * сегмент начинается маркером `segStart`, за ним идёт необязательный
- * `Tok.fork` (раздвоение) и `forkDelta` — коэффициент асимметрии пары.
- * Узлы отдельно не генерируются: они появляются только как концы балок.
+ * `Tok.fork` (раздвоение). Асимметрия каждой балки пары задаётся токенами
+ * `nodal` (активатор) и `lefty` (ингибитор). Узлы отдельно не генерируются:
+ * они появляются только как концы балок.
  * Каждая балка: старт — первый/последний созданный узел или существующий
  * по индексу, конец — вновь создаваемый (старт + смещение) или существующий
  * по индексу.
@@ -55,16 +57,20 @@ Grammar buggyGrammar()
 
     // Раздвоение сегмента: пустая продукция — медианная одиночная структура
     // («глаз по центру»), маркер `Tok.fork` — пара ветвей вокруг локальной
-    // оси (X стартового узла сегмента).
+    // оси (X стартового узла сегмента). Асимметрия пары задаётся не статикой
+    // всего сегмента, а парой активатор-ингибитор `nodal`/`lefty` на каждой
+    // балке — Twin-балка масштабируется в `1 + forkAsymmetry(nodal, lefty)`,
+    // геометрия остаётся зеркальной (как Nodal/Lefty у позвоночных).
     auto segMode = nt("segMode", [
         new Production([]),
         new Production([marker(Tok.fork)]),
     ]);
 
-    auto forkDelta = new Sampler!Tok("forkDelta", Tok.forkDelta, -0.1f, 0.1f);
+    auto nodal = new Sampler!Tok("nodal", Tok.nodal, -0.2f, 0.2f);
+    auto lefty = new Sampler!Tok("lefty", Tok.lefty, 0.0f, 8.0f);
 
     auto segment = nt("segment", [
-        new Production([marker(Tok.segStart), segMode, forkDelta, beamList_]),
+        new Production([marker(Tok.segStart), segMode, beamList_]),
     ]);
 
     segmentList_.productions = [
@@ -87,6 +93,7 @@ Grammar buggyGrammar()
 
     auto startRef = nt("startRef", [
         new Production([marker(Tok.refLast)]),
+        new Production([marker(Tok.refBase)]),
         new Production([idx]),
     ]);
 
@@ -105,7 +112,7 @@ Grammar buggyGrammar()
     ]);
 
     auto beam = nt("beam", [
-        new Production([startRef, endRef, radius, beamKind, turn]),
+        new Production([startRef, endRef, radius, nodal, lefty, beamKind, turn]),
     ]);
 
     beamList_.productions = [
@@ -140,7 +147,7 @@ Grammar buggyGrammar()
 
     auto symbols = [
         start, startPos, startX, startY, startZ, taper, taperPow, heading, turn,
-        segmentList_, segment, segMode, forkDelta,
+        segmentList_, segment, segMode, nodal, lefty,
         beamList_, beam, startRef,
         idx, endRef, destX, destY, destZ, radius, beamKind,
         anchorMarker, anchorList_, anchor, anchorKind,
@@ -202,6 +209,11 @@ Nullable!Frame frameFromAst(const Ast ast)
     size_t j;
     foreach (seg; ast.segments)
     {
+        // «Зачаток» сегмента: узел, на котором начался сегмент. `refBase`
+        // возвращает рост к нему — так из одной точки ветвления выпускаются
+        // несколько отростков (пальцы из «запястья») без точных индексов.
+        const segBase = last;
+
         bool haveAxis = false;
         float axis = 0.0f;
 
@@ -213,6 +225,11 @@ Nullable!Frame frameFromAst(const Ast ast)
                 case StartRefKind.last:
                     start = last;
                     break;
+                case StartRefKind.base:
+                    start = segBase;
+                    if (start >= result.nodes.length)
+                        return Nullable!Frame.init;
+                    break;
                 case StartRefKind.idx:
                     start = b.start.idx;
                     if (start >= result.nodes.length)
@@ -222,7 +239,14 @@ Nullable!Frame frameFromAst(const Ast ast)
 
             if (seg.fork && !haveAxis)
             {
-                axis = result.nodes[start].pos.x;
+                // Наследование оси: если начало сегмента — член пары из
+                // предыдущего раздвоения, ось — середина пары (локальная
+                // плоскость симметрии структуры), а не «родин»X одной стороны.
+                if (forkOf[start] != start)
+                    axis = 0.5f * (result.nodes[start].pos.x
+                        + result.nodes[forkOf[start]].pos.x);
+                else
+                    axis = result.nodes[start].pos.x;
                 haveAxis = true;
             }
 
@@ -280,11 +304,12 @@ Nullable!Frame frameFromAst(const Ast ast)
             }
             ++j;
 
-            // Пары: балка и её twin, radius twin-балки растаскивается forkDelta.
+            // Пары: балка и её twin, twin-балку растаскивает активатор
+            // Nodal, ингибитор Lefty гасит его (self-limiting асимметрия).
             result.beams ~= Beam(start, end, radius, b.kind);
             if (seg.fork && !(forkOf[start] == start && forkOf[end] == end))
                 result.beams ~= Beam(forkOf[start], forkOf[end],
-                    radius * (1.0f + seg.forkDelta), b.kind);
+                    radius * (1.0f + forkAsymmetry(b.nodal, b.lefty)), b.kind);
 
             heading += b.turn;
         }
@@ -458,13 +483,15 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
-    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
+
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
@@ -473,6 +500,8 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
@@ -496,13 +525,15 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
-    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
+
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNear);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
@@ -523,13 +554,15 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.heading, 1.5707963f);
     t ~= new Terminal!Tok(Tok.segStart);
-    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
+
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
@@ -538,6 +571,8 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
@@ -565,13 +600,14 @@ unittest
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
-    t ~= new Terminal!Tok(Tok.forkDelta, 0.1f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.1f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
@@ -580,6 +616,8 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.1f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
@@ -603,7 +641,8 @@ unittest
     assert(f.get.beams[2].a == 1 && f.get.beams[2].b == 3);
     assert(f.get.beams[3].a == 2 && f.get.beams[3].b == 4);
 
-    // forkDelta растаскивает радиус twin-балки: 0.04 * (1 + 0.1) = 0.044.
+    // Активатор Nodal=0.1 без ингибитора даёт сдвиг s=0.1,
+    // radius twin-балки: 0.04 * (1 + 0.1) = 0.044.
     assert(abs(f.get.beams[1].radius - 0.044f) < 1e-4f);
     assert(abs(f.get.beams[3].radius - 0.044f) < 1e-4f);
 
@@ -627,13 +666,15 @@ unittest
     t ~= new Terminal!Tok(Tok.heading, 0.78539815f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
-    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
+
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
@@ -661,13 +702,15 @@ unittest
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
-    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
+
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
@@ -694,13 +737,15 @@ unittest
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
-    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
+
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
@@ -717,6 +762,115 @@ unittest
 
 unittest
 {
+    // refBase — «зачаток»: балка стартует с базового узла сегмента, а не
+    // с последнего. Из одной точки ветвления (база «запястья») выпускаются
+    // несколько отростков-«пальцев», каждый в своей зеркальной паре.
+    Terminal!Tok[] t;
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.fork);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= new Terminal!Tok(Tok.coord, 1.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.refBase);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= new Terminal!Tok(Tok.coord, 0.5f);
+    t ~= new Terminal!Tok(Tok.coord, 1.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.refBase);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= new Terminal!Tok(Tok.coord, 1.5f);
+    t ~= new Terminal!Tok(Tok.coord, 1.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.anchors);
+
+    auto f = toFrame(t);
+    assert(!f.isNull);
+    // 1 база + пара рук + два раза по паре пальцев = 7 узлов.
+    assert(f.get.nodes.length == 7);
+    assert(f.get.beams.length == 6, "три балки раздвоенного сегмента дают три пары");
+
+    // Рука: от базы к (1,0,0) и её twin.
+    assert(f.get.beams[0].a == 0 && f.get.beams[0].b == 1);
+    assert(f.get.beams[1].a == 0 && f.get.beams[1].b == 2);
+
+    // Пальцы стартуют с того же «запястья» (узел 0) — refBase, а не с конца
+    // предыдущей балки (node 1). Каждый палец — своя зеркальная пара.
+    assert(f.get.beams[2].a == 0 && f.get.beams[2].b == 3
+        && f.get.beams[3].a == 0 && f.get.beams[3].b == 4,
+        "первый палец и его twin растут из базы сегмента");
+    assert(f.get.beams[4].a == 0 && f.get.beams[4].b == 5
+        && f.get.beams[5].a == 0 && f.get.beams[5].b == 6,
+        "второй палец и его twin — тоже из базы сегмента");
+
+    assert(abs(f.get.nodes[3].pos.x - 0.5f) < 1e-4f
+        && abs(f.get.nodes[4].pos.x + 0.5f) < 1e-4f,
+        "пальцы зеркальны вокруг оси сегмента");
+    assert(abs(f.get.nodes[5].pos.x - 1.5f) < 1e-4f
+        && abs(f.get.nodes[6].pos.x + 1.5f) < 1e-4f,
+        "второй палец отражается так же, и обе пары симметричны");
+
+    assert(!isValidFrame(f.get).isNull, "каркас с пальцами остаётся связным");
+}
+
+unittest
+{
+    // «Глаз циклопа»: даже в раздвоенном сегменте балка, растущая строго по
+    // оси (X == axis), остаётся одиночной и медианной — активатор Nodal не
+    // рождает twin из того, что на оси. Ось наследуется верно и при этом.
+    Terminal!Tok[] t;
+    t ~= new Terminal!Tok(Tok.coord, 0.7f);
+    t ~= new Terminal!Tok(Tok.coord, 0.2f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.fork);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 1.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.2f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.anchors);
+    t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.wheel);
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 1);
+
+    auto f = toFrame(t);
+    assert(!f.isNull);
+    assert(f.get.nodes.length == 2, "балка на оси не рождает twin");
+    assert(f.get.beams.length == 1, "сильный активатор не дублирует «глаз»");
+    assert(abs(f.get.nodes[1].pos.x - 0.7f) < 1e-4f,
+        "«глаз циклопа» остаётся на медианной оси сегмента");
+    assert(f.get.anchors.length == 1,
+        "одиночный медианный узел не дублируется в якорях");
+}
+
+unittest
+{
     // Морфоген-градиент: радиус балок масштабируется вдоль порядка
     // построения (0.5 в конце); параметры живут в AST.
     Terminal!Tok[] t;
@@ -727,7 +881,7 @@ unittest
     t ~= new Terminal!Tok(Tok.taperPow, 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
-    t ~= new Terminal!Tok(Tok.forkDelta, 0.0f);
+
     foreach (_; 0 .. 2)
     {
         t ~= new Terminal!Tok(Tok.refLast);
@@ -736,6 +890,8 @@ unittest
         t ~= new Terminal!Tok(Tok.coord, 0.0f);
         t ~= new Terminal!Tok(Tok.coord, 0.0f);
         t ~= new Terminal!Tok(Tok.radius, 0.06f);
+        t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+        t ~= new Terminal!Tok(Tok.lefty, 0.0f);
         t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
         t ~= new Terminal!Tok(Tok.turn, 0.0f);
     }

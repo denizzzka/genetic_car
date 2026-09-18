@@ -24,14 +24,27 @@ enum Tok
     /// пустой маркер — медианная одиночная структура («глаз по центру»).
     fork,
 
-    /// Коэффициент асимметрии пары (float, ±0.1): радиус twin-балки
-    /// масштабируется в `1 + forkDelta` раз. Нулевое значение — пара
-    /// зеркально-точная, отбор может эволюционировать направленную
-    /// асимметрию между сторонами (как клешни краба).
-    forkDelta,
+    /// Nodal — активатор асимметрии twin-пары (float). Знак задаёт, в какую
+    /// сторону уводятся twin-балки, величина — силу сдвига. Маленькое |nodal|
+    /// почти не ломает симметрию; сильный активатор усиливается, но гасится
+    /// ингибитором `lefty` — как в LR-генезе позвоночных. Одиночные
+    /// медианные балки (без twin) активатор не затрагивает совсем.
+    nodal,
+
+    /// Lefty — ингибитор асимметрии (float, ≥ 0). Нелинейно гасит активатор:
+    /// чем сильнее `nodal`, тем больше подавление (`lefty·nodal²`) — так
+    /// асимметрия пары остаётся малой и самоограниченной, а не «разносит»
+    /// структуру. Ноль — активатор действует в полную силу.
+    lefty,
 
     /// Начало балки: ссылка на последний созданный узел (маркер без значения).
     refLast,
+
+    /// Начало балки: ссылка на базовый узел сегмента (маркер без значения).
+    /// «Зачаток»: узел, на котором начался сегмент. Возвращает рост к нему,
+    /// так из одной точки ветвления можно выпускать несколько отростков
+    /// (пальцы из «запястья»), не кодируя точный номер узла.
+    refBase,
 
     /// Ссылка на существующий узел по номеру (int): начало/конец балки
     /// или индекс узла якоря. В якорях заворачивается по числу узлов.
@@ -81,7 +94,7 @@ enum Tok
     turn,
 }
 
-enum StartRefKind { last, idx }
+enum StartRefKind { last, base, idx }
 struct StartRef
 {
     StartRefKind kind;
@@ -101,6 +114,8 @@ struct BeamAst
     StartRef start;
     EndRef end;
     float radius;
+    float nodal;
+    float lefty;
     BeamKind kind;
     float turn;
 }
@@ -108,7 +123,6 @@ struct BeamAst
 struct SegmentAst
 {
     bool fork;
-    float forkDelta;
     float axis;
     BeamAst[] beams;
 }
@@ -133,8 +147,9 @@ struct Ast
  * Построить AST развития из потока терминалов.
  *
  * Дерево хранит все параметры грамматики без геометрии: startPos (seed,
- * heading, морфоген taper/taperPow), сегменты (fork, forkDelta, балки),
- * балки (старт/конец как типизированные рефы, радиус, turn) и якоря.
+ * heading, морфоген taper/taperPow), сегменты (fork, балки), балки
+ * (старт/конец как типизированные рефы, радиус, активатор-ингибитор
+ * nodal/lefty, turn) и якоря.
  * Геометрия здесь не строится — это этап разбора, а не интерпретации.
  */
 Nullable!Ast buildAst(const Terminal!Tok[] tokens)
@@ -179,11 +194,6 @@ Nullable!Ast buildAst(const Terminal!Tok[] tokens)
             ++i;
         }
 
-        if (i >= tokens.length || tokens[i].tok != Tok.forkDelta)
-            return Nullable!Ast.init;
-        seg.forkDelta = tokens[i].f;
-        ++i;
-
         while (i < tokens.length && tokens[i].tok != Tok.segStart
             && tokens[i].tok != Tok.anchors)
         {
@@ -192,6 +202,10 @@ Nullable!Ast buildAst(const Terminal!Tok[] tokens)
             {
                 case Tok.refLast:
                     b.start.kind = StartRefKind.last;
+                    ++i;
+                    break;
+                case Tok.refBase:
+                    b.start.kind = StartRefKind.base;
                     ++i;
                     break;
                 case Tok.refIdx:
@@ -241,6 +255,16 @@ Nullable!Ast buildAst(const Terminal!Tok[] tokens)
             b.radius = tokens[i].f;
             ++i;
 
+            if (tokens[i].tok != Tok.nodal)
+                return Nullable!Ast.init;
+            b.nodal = tokens[i].f;
+            ++i;
+
+            if (tokens[i].tok != Tok.lefty)
+                return Nullable!Ast.init;
+            b.lefty = tokens[i].f;
+            ++i;
+
             if (tokens[i].tok != Tok.beamKind)
                 return Nullable!Ast.init;
             b.kind = cast(BeamKind) tokens[i].i;
@@ -281,6 +305,32 @@ Nullable!Ast buildAst(const Terminal!Tok[] tokens)
     return Nullable!Ast(ast);
 }
 
+/**
+ * Эффективная асимметрия twin-пары от активатора Nodal и ингибитора Lefty.
+ *
+ * Ответная кривая активатор-ингибитор: `nodal` усиливает сдвиг, а `lefty`
+ * гасит его квадратично (`lefty·nodal²`), поэтому при сильном активаторе
+ * подавление растёт — асимметрия мала и самограничена, как в LR-генезе
+ * позвоночных (билатеральность сохраняется, но допускает эволюцию).
+ * Для медианных одиночных балок (без twin) активатор не применяется вовсе.
+ */
+float forkAsymmetry(float nodal, float lefty)
+{
+    return nodal / (1.0f + lefty * nodal * nodal);
+}
+
+unittest
+{
+    // Nodal/Lefty: слабый активатор почти симметричен, сильный гасится.
+    assert(abs(forkAsymmetry(0.0f, 0.0f)) < 1e-7f, "нулевой nodal — точная симметрия");
+    const strong = forkAsymmetry(0.3f, 0.0f);
+    assert(strong > 0.2f, "без ингибитора активатор действует в полную силу");
+    const damped = forkAsymmetry(0.3f, 1.0f);
+    assert(damped > 0.0f && damped < strong,
+        "ингибитор гасит активатор нелинейно");
+    assert(forkAsymmetry(-0.1f, 0.0f) < 0.0f, "знак активатора переворачивает сдвиг");
+}
+
 unittest
 {
     // AST: структура грамматики видна без геометрии — сегмент, рефы, якоря.
@@ -293,13 +343,14 @@ unittest
     t ~= new Terminal!Tok(Tok.heading, 0.3f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
-    t ~= new Terminal!Tok(Tok.forkDelta, 0.05f);
-    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.refBase);
     t ~= new Terminal!Tok(Tok.endNear);
     t ~= new Terminal!Tok(Tok.coord, 1.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.coord, 0.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.05f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.05f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.6f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.7f);
     t ~= new Terminal!Tok(Tok.anchors);
@@ -314,11 +365,13 @@ unittest
 
     assert(ast.get.segments.length == 1);
     const seg = ast.get.segments[0];
-    assert(seg.fork && abs(seg.forkDelta - 0.05f) < 1e-6f);
+    assert(seg.fork);
     assert(seg.beams.length == 1);
-    assert(seg.beams[0].start.kind == StartRefKind.last);
+    assert(seg.beams[0].start.kind == StartRefKind.base);
     assert(seg.beams[0].end.kind == EndRefKind.nearNode);
     assert(abs(seg.beams[0].end.delta.x - 1.0f) < 1e-6f);
+    assert(abs(seg.beams[0].nodal - 0.05f) < 1e-6f);
+    assert(abs(seg.beams[0].lefty - 0.6f) < 1e-6f);
     assert(abs(seg.beams[0].turn - 0.7f) < 1e-6f);
 
     assert(ast.get.anchors.length == 1);

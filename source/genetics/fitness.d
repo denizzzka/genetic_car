@@ -281,7 +281,7 @@ float wheelSymmetry(const Frame f)
 /// Доля массы балок, зеркально парных с балкой того же радиуса (по массе
 /// `r²·len`), включая самосимметричные: балку на плоскости и балку,
 /// пересекающую плоскость своими зеркальными концами. Штрафует и позиционную,
-/// и радиальную (след `forkDelta`) асимметрию.
+/// и радиальную (след Nodal/Lefty) асимметрию.
 float beamMassSymmetry(const Frame f)
 {
     if (f.beams.length == 0)
@@ -350,18 +350,21 @@ float beamMassSymmetry(const Frame f)
     return total > 0.0f ? matched / total : 1.0f;
 }
 
-/// Радиальная симметрия fork-пар из AST: 1 при нулевом разбросе `|forkDelta|`.
-/// На пустом AST (синтетические каркасы без генома) — нейтрально 1.
+/// Радиальная симметрия fork-пар из AST: 1 при нулевом отклике
+/// активатор-ингибитор (`|forkAsymmetry(nodal, lefty)|`) на всех балках
+/// раздвоенных сегментов. На пустом AST (синтетические каркасы без генома) —
+/// нейтрально 1.
 float forkRadiusSymmetry(const Ast ast)
 {
     float sum = 0.0f;
     size_t n = 0;
     foreach (s; ast.segments)
         if (s.fork)
-        {
-            sum += abs(s.forkDelta);
-            n += 1;
-        }
+            foreach (b; s.beams)
+            {
+                sum += abs(forkAsymmetry(b.nodal, b.lefty));
+                n += 1;
+            }
     if (n == 0)
         return 1.0f;
 
@@ -676,20 +679,24 @@ unittest
 
 unittest
 {
-    // forkDelta из AST: тот же каркас, но AST сообщает о радиальном разбросе
-    // fork-пары — ненулевой |forkDelta| снижает фитнес. Пустой AST нейтрален.
+    // Nodal/Lefty из AST: тот же каркас, но AST сообщает о радиальном разбросе
+    // fork-пары — ненулевой |forkAsymmetry| снижает фитнес. Пустой AST нейтрален.
     const base = buggyFitness(symmetricBuggyFrame());
     assert(base > 0.0f);
 
     Ast a0;
-    a0.segments ~= SegmentAst(true, 0.0f, 0.0f, []);
+    a0.segments ~= SegmentAst(true, 0.0f, []);
     Ast aD;
-    aD.segments ~= SegmentAst(true, 0.1f, 0.0f, []);
+    // Ненулевой активатор без ингибитора при ровной паре рождает сдвиг twin.
+    aD.segments ~= SegmentAst(true, 0.0f, []);
+    aD.segments[0].beams ~= BeamAst(StartRef(StartRefKind.last, 0),
+        EndRef(EndRefKind.newNode, vec3(0.0f, 0.0f, 0.0f), 0),
+        0.04f, 0.1f, 0.0f, BeamKind.normal, 0.0f);
 
     const f0 = buggyFitness(symmetricBuggyFrame(), a0);
     const fD = buggyFitness(symmetricBuggyFrame(), aD);
-    assert(abs(f0 - base) < 1e-6f, "нулевой |forkDelta| не меняет фитнес");
-    assert(fD < f0, "ненулевой |forkDelta| штрафует асимметрию fork-пары");
+    assert(abs(f0 - base) < 1e-6f, "нулевой Nodal/Lefty не меняет фитнес");
+    assert(fD < f0, "ненулевой |forkAsymmetry| штрафует асимметрию fork-пары");
 }
 
 unittest
