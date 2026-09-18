@@ -74,7 +74,7 @@ private TaskPool physicsPool()
 /// Оценка популяции: статический гейт последовательно, затем заезды особей
 /// (`fit *= physicsRun`) — независимые dmech-симуляции, на пул по индексам.
 Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
-    const EvolutionConfig params = EvolutionConfig.init)
+    const EvolutionConfig params = EvolutionConfig.init, size_t generation = 0)
 {
     Individual[] res;
     res.reserve(pop.length);
@@ -111,7 +111,7 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
                 auto run = physicsRun(frames[i], params.simulateSeconds);
                 res[i].fitness *= run.score;
                 if (params.logPhysics)
-                    logPhysicsIndividual(i, res[i].fitness, run);
+                    logPhysicsIndividual(i, generation, res[i].fitness, run);
             }
         }
         else
@@ -121,21 +121,21 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
                 auto run = physicsRun(frames[i], params.simulateSeconds);
                 res[i].fitness *= run.score;
                 if (params.logPhysics)
-                    logPhysicsIndividual(i, res[i].fitness, run);
+                    logPhysicsIndividual(i, generation, res[i].fitness, run);
             }
         }
     }
     return res;
 }
 
-private void logPhysicsIndividual(size_t idx, float finalFit, const PhysicsResult run)
+private void logPhysicsIndividual(size_t idx, size_t generation, float finalFit, const PhysicsResult run)
 {
     if (run.survived)
-        writefln("  #%d fit=%.4f score=%.3f roll=%.1fm wheels=%d beams=%d",
-            idx, finalFit, run.score, run.descent, run.wheels, run.beams);
+        writefln("gen %d: #%d fit=%.4f score=%.3f roll=%.1fm wheels=%d beams=%d",
+            generation, idx, finalFit, run.score, run.descent, run.wheels, run.beams);
     else
-        writefln("  #%d FAILED (%s) roll=%.1fm wheels=%d beams=%d",
-            idx, run.why, run.descent, run.wheels, run.beams);
+        writefln("gen %d: #%d FAILED (%s) roll=%.1fm wheels=%d beams=%d",
+            generation, idx, run.why, run.descent, run.wheels, run.beams);
 }
 
 /**
@@ -150,7 +150,7 @@ Individual[] evolve(const Grammar gr, Individual[] pop,
     foreach (gen; 0 .. generations)
     {
         auto children = buildNextGeneration(gr, cur, params, rnd);
-        cur = evaluatePopulation(gr, children, params);
+        cur = evaluatePopulation(gr, children, params, gen + 1);
         if (params.logPhysics)
             writefln("gen %2d: best=%.4f mean=%.4f",
                 gen + 1, bestFitness(cur), meanFitness(cur));
