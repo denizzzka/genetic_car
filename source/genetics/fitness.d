@@ -51,6 +51,11 @@ enum float footprintTolerance = 1.0f;
 enum float targetFrameHeight = 2.5f;
 enum float frameHeightTolerance = 0.5f;
 
+/// Допуски положения центра масс внутри габарита: по XY — к центру
+/// колёсного footprint, по Z — к верхней границе клиренса (maxClearance).
+enum float comXYTolerance = 0.5f;
+enum float comZTolerance = 0.5f;
+
 /// Оценочная фитнес-функция каркаса (без физики).
 ///
 /// Возвращает 0 для физически невыполнимых каркасов и значение в (0,1]
@@ -58,7 +63,7 @@ enum float frameHeightTolerance = 0.5f;
 /// с нижней границей 0.5, чтобы асимметричный каркас не обнулялся):
 ///   - симметрия через плоскость X=0 (канализация из грамматики);
 ///   - жёсткость — петли в графе балок (цикломатическое число);
-///   - устойчивость — низкий центр масс при широкой колее;
+///   - положение центра масс — к центру габарита на земле, как можно выше;
 ///   - колёсная база — продольный разброс колёс;
 ///   - плоскостность колёс по высоте;
 ///   - компактность — наказание за декоративные тупиковые балки;
@@ -166,7 +171,7 @@ float buggyFitness(const Frame f, const Ast ast)
     const size_t cycles = cyclomaticNumber(f); // μ = E - V + c
     const float phiRigid = 0.5f + 0.5f * (1.0f - exp(-0.4f * cast(float) cycles));
 
-    const float phiStab = 1.0f / (1.0f + clearance / max(xspan, 1e-3f));
+    const float phiCoM = comCentering(f, com);
 
     const float phiAxis = ramp(ybase, 0.15f, 0.6f)
         * sigmoid(ybase / max(xspan, 1e-3f) - 0.8f);
@@ -195,7 +200,7 @@ float buggyFitness(const Frame f, const Ast ast)
     const float gaugeViolation = nodesOutsideGauge / cast(float) f.nodes.length;
     const float phiGauge = exp(-3.0f * gaugeViolation);
 
-    return phiSym * phiRigid * phiStab * phiAxis * phiFlat * phiCompact * phiDrive
+    return phiSym * phiRigid * phiCoM * phiAxis * phiFlat * phiCompact * phiDrive
         * phiFootprint * phiHeight * phiGauge;
 }
 
@@ -403,6 +408,30 @@ float frameZRange(const Frame f)
         hi = max(hi, n.pos.z);
     }
     return hi - lo;
+}
+
+/// Положение центра масс в габаритном параллелепипеде: по XY — к центру
+/// колёсного footprint, по Z — как можно выше (к верхней границе гейта
+/// клиренса maxClearance). Множитель ∈ (0,1].
+private float comCentering(const Frame f, const vec3 com)
+{
+    float xmin = float.max, xmax = -float.max;
+    float ymin = float.max, ymax = -float.max;
+    float zmin = float.max;
+    foreach (a; f.anchors)
+    {
+        const vec3 p = f.nodes[a.node].pos;
+        xmin = min(xmin, p.x); xmax = max(xmax, p.x);
+        ymin = min(ymin, p.y); ymax = max(ymax, p.y);
+        zmin = min(zmin, p.z);
+    }
+    const float cx = 0.5f * (xmin + xmax);
+    const float cy = 0.5f * (ymin + ymax);
+    const float targetZ = zmin - fitnessWheelRadius + maxClearance;
+
+    return exp(-(((com.x - cx) / comXYTolerance) ^^ 2
+        + ((com.y - cy) / comXYTolerance) ^^ 2
+        + ((targetZ - com.z) / comZTolerance) ^^ 2));
 }
 
 /// Диагональ ограничивающего бокса всех узлов.
@@ -661,6 +690,19 @@ unittest
     const fD = buggyFitness(symmetricBuggyFrame(), aD);
     assert(abs(f0 - base) < 1e-6f, "нулевой |forkDelta| не меняет фитнес");
     assert(fD < f0, "ненулевой |forkDelta| штрафует асимметрию fork-пары");
+}
+
+unittest
+{
+    // comCentering: тот же каркас — выше и ближе к центру footprint лучше.
+    const f = symmetricBuggyFrame();
+    const high  = vec3(0.0f, 0.0f, 2.0f);
+    const low   = vec3(0.0f, 0.0f, 0.5f);
+    const side  = vec3(0.6f, 0.0f, 0.5f);
+    assert(comCentering(f, high) > comCentering(f, low),
+        "ЦТ выше — ближе к целевому положению");
+    assert(comCentering(f, high) > comCentering(f, side),
+        "ЦТ ближе к центру footprint — лучше");
 }
 
 /// Симметричная машина, дополненная вертикальной надстройкой: тот же footprint,
