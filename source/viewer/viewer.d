@@ -54,7 +54,7 @@ class BuggyScene: Scene
 
         auto camera = addCamera();
         auto freeview = New!FreeviewComponent(eventManager, camera);
-        freeview.setZoom(7.0f);
+        freeview.setZoom(15.0f);
         freeview.setRotation(30.0f, -45.0f, 0.0f);
         freeview.translationStiffness = 0.25f;
         freeview.rotationStiffness = 0.25f;
