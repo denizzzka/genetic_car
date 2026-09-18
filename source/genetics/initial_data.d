@@ -10,7 +10,7 @@ import genetics.buggygrammar;
 /// Стартовый геном: одна балка от носа до кормы и два якоря (колесо +
 /// моторное колесо). Дальше эволюция сама добавит структуру, если это
 /// выгодно.
-Genotype startGenome(Grammar gr)
+Genotype startGenome(const Grammar gr)
 {
     auto gt = new Genotype(gr.symbols.length);
 
