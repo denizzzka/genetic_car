@@ -220,26 +220,23 @@ enum float physicsWheelLift = 0.1f;       ///< колесо выше этого 
 /// колёс BНИЗ по курсу (-Y) за `seconds` секунд, нормированное
 /// на `physicsNominalSpeed·seconds` → (0,1]. Живучесть: любое колесо
 /// провалилось под землю, зависло (переворот, съезд) или каркас разлетелся —
-/// заезд обрывается, счёт 0. Симуляция принадлежит `Buggy`, фитнес только
-/// читает её наружу.
+/// заезд обрывается, счёт 0. Симуляция строится на `BuggyPhysics` отдельно,
+/// фитнес только читает её наружу.
 float physicsFitness(Frame frame, double seconds)
 {
     if (frame.anchors.length < 2)
         return 0.0f;
 
-    auto buggy = new Buggy(frame, vec3(0.0f));
-    scope (exit) buggy.disposePhysics();
-    buggy.createPhysics();
-    if (buggy.physics is null)
-        return 0.0f;
+    auto physics = new BuggyPhysics(frame);
+    scope (exit) physics.dispose();
 
-    buggy.physics.setSlopeDeg(physicsSlopeDeg);
-    buggy.physics.settle(physicsDt,
+    physics.setSlopeDeg(physicsSlopeDeg);
+    physics.settle(physicsDt,
         cast(int)(physicsSettleSeconds / physicsDt));
 
     const size_t steps = cast(size_t)(seconds / physicsDt);
 
-    auto wheels = buggy.physics.wheelStates();
+    auto wheels = physics.wheelStates();
     if (wheels.length == 0)
         return 0.0f;
     double startY = 0.0;
@@ -251,9 +248,9 @@ float physicsFitness(Frame frame, double seconds)
     double farthest = 0.0;
     foreach (_; 0 .. steps)
     {
-        buggy.step(physicsDt, 0.0f);
+        physics.step(physicsDt, 0.0f);
 
-        wheels = buggy.physics.wheelStates();
+        wheels = physics.wheelStates();
         if (wheels.length == 0)
             return 0.0f;
         foreach (s; wheels)
@@ -267,7 +264,7 @@ float physicsFitness(Frame frame, double seconds)
                 return 0.0f;                       // зависло: переворот/съезд
         }
 
-        foreach (s; buggy.physics.beamStates())
+        foreach (s; physics.beamStates())
             if (!isFinite(s.position.x) || !isFinite(s.position.y)
                 || !isFinite(s.position.z))
                 return 0.0f;

@@ -184,8 +184,9 @@ class BuggyScene: Scene
             if (f.isNull)
                 continue;
             const float laneX = i * gallerySpacing - firstX;
-            // Каркас живёт в Buggy (физика тоже будет владеть им), вьюер
-            // только читает из него. Офсет полосы — отображение, не геометрия.
+            // Buggy — только каркас для отрисовки; физика строится отдельно
+            // (BuggyPhysics) при оценке заезда. Офсет полосы — отображение,
+            // не геометрия.
             auto buggy = new Buggy(f.get.frame, laneOffset(f.get.frame, laneX));
             drawBuggy(buggy);
         }
