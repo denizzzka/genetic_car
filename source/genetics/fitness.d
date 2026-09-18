@@ -1,7 +1,8 @@
 module genetics.fitness;
 
 import std.math;
-import std.algorithm : min, max, clamp;
+import std.algorithm : min, max, clamp, sort;
+import std.typecons : Tuple, tuple;
 
 import dlib.math.vector;
 
@@ -38,11 +39,11 @@ enum float maxClearance = 2.0f;
 /// Разумный потолок сложности каркаса.
 enum size_t maxBeamCount = 64;
 
-/// Целевые габариты багги по колеям (разброс колёс, м) и их допуски.
-enum float targetBuggyWidth = 2.0f;
-enum float widthTolerance = 1.0f;
-enum float targetBuggyLength = 3.0f;
-enum float lengthTolerance = 1.0f;
+/// Целевые стороны footprint колёс (минимальный прямоугольник в плоскости
+/// XY, без фиксации ориентации) и допуск.
+enum float targetFootprintLong = 3.0f;
+enum float targetFootprintShort = 2.0f;
+enum float footprintTolerance = 1.0f;
 
 /// Оценочная фитнес-функция каркаса (без физики).
 ///
@@ -56,7 +57,7 @@ enum float lengthTolerance = 1.0f;
 ///   - плоскостность колёс по высоте;
 ///   - компактность — наказание за декоративные тупиковые балки;
 ///   - баланс ведущих колёс по сторонам;
-///   - габариты — приближение ширины (X) к 2 м и длины (Y) к 3 м.
+///   - габариты — footprint колёс близок к 2×3 м (без привязки к осям).
 float buggyFitness(const Frame f)
 {
     // ---- Гейт: физическая выполнимость ----
@@ -127,8 +128,9 @@ float buggyFitness(const Frame f)
     const float xspan = xmax - xmin;
     const float ybase = ymax - ymin;
 
-    const float phiWidth = exp(-((xspan - targetBuggyWidth) / widthTolerance) ^^ 2);
-    const float phiLength = exp(-((ybase - targetBuggyLength) / lengthTolerance) ^^ 2);
+    const dims = footprintExtents(f);
+    const float phiFootprint = exp(-((dims[0] - targetFootprintLong) / footprintTolerance) ^^ 2)
+        * exp(-((dims[1] - targetFootprintShort) / footprintTolerance) ^^ 2);
 
     const float nodeSym = symmetryRatio(f);
     const float wheelSym = wheelSymmetry(f);
@@ -151,7 +153,7 @@ float buggyFitness(const Frame f)
     const float phiDrive = 0.5f + 0.5f * motorBalance(f);
 
     return phiSym * phiRigid * phiStab * phiAxis * phiFlat * phiCompact * phiDrive
-        * phiWidth * phiLength;
+        * phiFootprint;
 }
 
 /// Доля узлов, у которых есть зеркальный партнёр через плоскость X=0.
@@ -269,6 +271,86 @@ float aabbDiagonal(const Frame f)
     return (hi - lo).length;
 }
 
+/// Длинная и короткая стороны бокса выпуклой оболочки колёс в плоскости XY,
+/// у ориентации, где он ближе всего к целевому прямоугольнику (2×3).
+/// Ориентация каркаса не важна: повёрнутая «диагональ» не раздувает стороны.
+Tuple!(float, float) footprintExtents(const Frame f)
+{
+    vec3[] pts;
+    pts.reserve(f.anchors.length);
+    foreach (a; f.anchors)
+        pts ~= f.nodes[a.node].pos;
+
+    auto crossZ = (vec3 o, vec3 a, vec3 b) {
+        return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    };
+
+    sort!"a.x != b.x ? a.x < b.x : a.y < b.y"(pts);
+
+    vec3[] hull;
+    vec3[] lower;
+    foreach (p; pts)
+    {
+        while (lower.length >= 2 && crossZ(lower[$ - 2], lower[$ - 1], p) <= 0.0f)
+            lower.length -= 1;
+        lower ~= p;
+    }
+    vec3[] upper;
+    foreach_reverse (p; pts)
+    {
+        while (upper.length >= 2 && crossZ(upper[$ - 2], upper[$ - 1], p) <= 0.0f)
+            upper.length -= 1;
+        upper ~= p;
+    }
+    if (lower.length >= 2 && upper.length >= 2)
+        hull = lower[0 .. $ - 1] ~ upper[0 .. $ - 1];
+
+    if (hull.length < 3)
+    {
+        float longest = 0.0f;
+        foreach (p; pts)
+            foreach (q; pts)
+                longest = max(longest, distance(p, q));
+        return tuple(longest, 0.0f);
+    }
+
+    // Ориентация, чей box ближе всего к целевому прямоугольнику.
+    float bestDist = float.max;
+    float longSide, shortSide;
+    foreach (i; 0 .. hull.length)
+    {
+        const a = hull[i];
+        const b = hull[(i + 1) % hull.length];
+        vec3 e = b - a;
+        const el = e.length;
+        if (el < 1e-6f)
+            continue;
+        e /= el;
+
+        float minU = float.max, maxU = -float.max;
+        float minV = float.max, maxV = -float.max;
+        foreach (p; hull)
+        {
+            const u = e.x * p.x + e.y * p.y;
+            const v = -e.y * p.x + e.x * p.y;
+            minU = min(minU, u); maxU = max(maxU, u);
+            minV = min(minV, v); maxV = max(maxV, v);
+        }
+        const w = maxU - minU;
+        const h = maxV - minV;
+        const lo = min(w, h);
+        const hi = max(w, h);
+        const dist = (hi - targetFootprintLong) ^^ 2 + (lo - targetFootprintShort) ^^ 2;
+        if (dist < bestDist)
+        {
+            bestDist = dist;
+            longSide = hi;
+            shortSide = lo;
+        }
+    }
+    return tuple(longSide, shortSide);
+}
+
 /// Число "декоративных" тупиков: узлы степени 1 без колеса.
 size_t nonAnchorLeaves(const Frame f)
 {
@@ -364,6 +446,36 @@ unittest
         "обе машины физически выполнимы");
     assert(symFitness > asymFitness,
         "зеркальность колёс и каркаса даёт прирост фитнеса");
+}
+
+unittest
+{
+    // footprintExtents — box оболочки, ближайший к целевому 2×3; поворот
+    // каркаса на 45° не должен увеличивать стороны.
+    auto wheels = [tuple(0.7f, 0.7f), tuple(-0.7f, 0.7f), tuple(-0.7f, -0.7f), tuple(0.7f, -0.7f)];
+
+    Frame sq;
+    foreach (p; wheels)
+    {
+        sq.nodes ~= Node(vec3(p[0], p[1], 0.3f));
+        sq.anchors ~= Anchor(sq.nodes.length - 1, AnchorKind.wheel);
+    }
+    const d1 = footprintExtents(sq);
+    assert(abs(d1[0] - 1.4f) < 1e-3f && abs(d1[1] - 1.4f) < 1e-3f,
+        "осевая квадратная оболочка 1.4×1.4");
+
+    Frame rot;
+    const float c = cos(PI / 4.0f), s = sin(PI / 4.0f);
+    foreach (p; wheels)
+    {
+        const float x = p[0] * c - p[1] * s;
+        const float y = p[0] * s + p[1] * c;
+        rot.nodes ~= Node(vec3(x, y, 0.3f));
+        rot.anchors ~= Anchor(rot.nodes.length - 1, AnchorKind.wheel);
+    }
+    const d2 = footprintExtents(rot);
+    assert(abs(d2[0] - 1.4f) < 1e-2f && abs(d2[1] - 1.4f) < 1e-2f && d2[0] < 1.6f,
+        "поворот на 45° не увеличивает footprint: диагональ не проходит");
 }
 
 private Frame symmetricBuggyFrame()
