@@ -556,31 +556,29 @@ Nullable!Frame isValidFrame(Frame f)
     return Nullable!Frame(f);
 }
 
-/// Расшифровать геном из грамматики багги в готовый каркас багги.
-/// Значение-результат сам говорит об успехе: `Nullable!Frame.isNull`
-/// означает, что декодирование, разбор или валидация не прошли.
-/// Расшифровать геном в каркас и вернуть наружу построенное дерево `ast`.
-/// Одноаргументная версия может использовать внутренний AST без раскрытия.
-Nullable!Frame develop(const Grammar gr, const Genotype g, out Ast ast)
+struct Developed
 {
-    ast = Ast.init;
-    auto tokens = decode!Tok(gr, g);
-    if (tokens is null)
-        return Nullable!Frame.init;
-    auto mayAst = buildAst(tokens);
-    if (mayAst.isNull)
-        return Nullable!Frame.init;
-    ast = mayAst.get;
-    auto frame = frameFromAst(ast);
-    if (frame.isNull)
-        return Nullable!Frame.init;
-    return isValidFrame(frame.get);
+    Frame frame;
+    Ast ast;
 }
 
-Nullable!Frame develop(const Grammar gr, const Genotype g)
+/// Расшифровать геном из грамматики багги в каркас вместе с его AST.
+/// `Nullable!Developed.isNull` - признак неудачи
+Nullable!Developed develop(const Grammar gr, const Genotype g)
 {
-    Ast ignored;
-    return develop(gr, g, ignored);
+    auto tokens = decode!Tok(gr, g);
+    if (tokens is null)
+        return Nullable!Developed.init;
+    auto mayAst = buildAst(tokens);
+    if (mayAst.isNull)
+        return Nullable!Developed.init;
+    auto frame = frameFromAst(mayAst.get);
+    if (frame.isNull)
+        return Nullable!Developed.init;
+    auto valid = isValidFrame(frame.get);
+    if (valid.isNull)
+        return Nullable!Developed.init;
+    return Nullable!Developed(Developed(valid.get, mayAst.get));
 }
 
 /// Токены -> AST -> геометрия (для тестов и пробников).
@@ -623,8 +621,8 @@ Nullable!Genotype mutateStep(const Grammar gr, const Genotype genome, ref Random
         if (may.isNull)
             continue;
         if (structural
-            && may.get.beams.length == current.get.beams.length
-            && may.get.anchors.length == current.get.anchors.length)
+            && may.get.frame.beams.length == current.get.frame.beams.length
+            && may.get.frame.anchors.length == current.get.frame.anchors.length)
             continue;
 
         return Nullable!Genotype(candidate);

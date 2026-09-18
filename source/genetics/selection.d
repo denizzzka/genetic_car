@@ -5,7 +5,6 @@ import std.random;
 
 import genetics.sge;
 import genetics.buggygrammar;
-import genetics.buggyast;
 import genetics.initial_data;
 import genetics.fitness;
 
@@ -49,10 +48,9 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop)
     foreach (g; pop)
     {
         float fit = 0.0f;
-        Ast ast;
-        auto may = develop(gr, g, ast);
+        auto may = develop(gr, g);
         if (!may.isNull)
-            fit = buggyFitness(may.get, ast);
+            fit = buggyFitness(may.get.frame, may.get.ast);
         res ~= Individual(g, fit);
     }
     return res;
@@ -197,9 +195,9 @@ unittest
         auto may = develop(gr, e.genotype);
         if (may.isNull)
             continue;
-        if (may.get.beams.length > startBeams)
+        if (may.get.frame.beams.length > startBeams)
             grewBeams = true;
-        if (may.get.anchors.length > startAnchors)
+        if (may.get.frame.anchors.length > startAnchors)
             grewAnchors = true;
     }
     assert(grewBeams, "число балок должно уметь расти через инделы");

@@ -82,7 +82,7 @@ unittest
     // Стартовая хромосома развивается в простейший каркас.
     auto may = develop(gr, genome);
     assert(!may.isNull, "стартовая хромосома должна развиваться");
-    const f = may.get;
+    const f = may.get.frame;
     assert(f.nodes.length == 2);
     assert(f.beams.length == 1);
     assert(f.anchors.length == 2);
@@ -115,7 +115,7 @@ unittest
         if (may.isNull)
             continue;
         ++okCount;
-        beamTotal += may.get.beams.length;
+        beamTotal += may.get.frame.beams.length;
     }
 
     assert(okCount > 100, "большинство точечных мутаций должны развиваться в валидный каркас");
@@ -135,8 +135,8 @@ unittest
     auto genome = startGenome(gr);
     auto rnd = Random(42);
 
-    const startBeams = develop(gr, genome).get.beams.length;
-    const startAnchors = develop(gr, genome).get.anchors.length;
+    const startBeams = develop(gr, genome).get.frame.beams.length;
+    const startAnchors = develop(gr, genome).get.frame.anchors.length;
     bool grewBeams, grewAnchors;
 
     foreach (_; 0 .. 50)
@@ -145,7 +145,7 @@ unittest
         if (next.isNull)
             continue;
 
-        auto f = develop(gr, next.get).get;
+        auto f = develop(gr, next.get).get.frame;
         if (f.beams.length > startBeams)
             grewBeams = true;
         if (f.anchors.length > startAnchors)

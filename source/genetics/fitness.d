@@ -558,7 +558,7 @@ unittest
 
     // Стартовый закодированный багги — правдоподобный каркас.
     auto grammar = buggyGrammar();
-    auto frame = develop(grammar, startGenome(grammar)).get;
+    auto frame = develop(grammar, startGenome(grammar)).get.frame;
     assert(buggyFitness(frame) > 0.0f,
         "стартовый багги должен получать положительный фитнес");
 

@@ -181,7 +181,7 @@ class BuggyScene: Scene
             if (f.isNull)
                 continue;
             const float laneX = i * gallerySpacing - firstX;
-            drawBuggy(f.get, laneX);
+            drawBuggy(f.get.frame, laneX);
         }
     }
 
