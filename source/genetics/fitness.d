@@ -359,7 +359,9 @@ float forkRadiusSymmetry(const Ast ast)
         }
     if (n == 0)
         return 1.0f;
-    return exp(-3.0f * sum / n);
+
+    enum penaltyFactor = 12.0f;
+    return exp(-penaltyFactor * sum / n);
 }
 
 /// Цикломатическое число графа балок μ = E - V + c (число независимых петель).
