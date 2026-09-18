@@ -38,6 +38,12 @@ enum float maxClearance = 2.0f;
 /// Разумный потолок сложности каркаса.
 enum size_t maxBeamCount = 64;
 
+/// Целевые габариты багги по колеям (разброс колёс, м) и их допуски.
+enum float targetBuggyWidth = 2.0f;
+enum float widthTolerance = 1.0f;
+enum float targetBuggyLength = 3.0f;
+enum float lengthTolerance = 1.0f;
+
 /// Оценочная фитнес-функция каркаса (без физики).
 ///
 /// Возвращает 0 для физически невыполнимых каркасов и значение в (0,1]
@@ -49,7 +55,8 @@ enum size_t maxBeamCount = 64;
 ///   - колёсная база — продольный разброс колёс;
 ///   - плоскостность колёс по высоте;
 ///   - компактность — наказание за декоративные тупиковые балки;
-///   - баланс ведущих колёс по сторонам.
+///   - баланс ведущих колёс по сторонам;
+///   - габариты — приближение ширины (X) к 2 м и длины (Y) к 3 м.
 float buggyFitness(const Frame f)
 {
     // ---- Гейт: физическая выполнимость ----
@@ -120,6 +127,9 @@ float buggyFitness(const Frame f)
     const float xspan = xmax - xmin;
     const float ybase = ymax - ymin;
 
+    const float phiWidth = exp(-((xspan - targetBuggyWidth) / widthTolerance) ^^ 2);
+    const float phiLength = exp(-((ybase - targetBuggyLength) / lengthTolerance) ^^ 2);
+
     const float nodeSym = symmetryRatio(f);
     const float wheelSym = wheelSymmetry(f);
     const float phiSym = 0.5f + 0.5f * (0.5f * (nodeSym + wheelSym));
@@ -140,7 +150,8 @@ float buggyFitness(const Frame f)
 
     const float phiDrive = 0.5f + 0.5f * motorBalance(f);
 
-    return phiSym * phiRigid * phiStab * phiAxis * phiFlat * phiCompact * phiDrive;
+    return phiSym * phiRigid * phiStab * phiAxis * phiFlat * phiCompact * phiDrive
+        * phiWidth * phiLength;
 }
 
 /// Доля узлов, у которых есть зеркальный партнёр через плоскость X=0.
