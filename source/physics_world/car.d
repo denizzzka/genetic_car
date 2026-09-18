@@ -13,7 +13,7 @@ class Buggy
     /// Не меняет геометрию, применяется только при отрисовке.
     vec3 offset;
 
-    this(Frame frame, vec3 offset = vec3(0.0f))
+    this(Frame frame, vec3 offset)
     {
         this.offset = offset;
         this.frame = frame;

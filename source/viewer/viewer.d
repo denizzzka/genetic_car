@@ -8,6 +8,7 @@ import std.random;
 import std.stdio : writefln;
 import frame.frame;
 import genetics;
+import physics_world;
 
 class BuggyScene: Scene
 {
@@ -181,19 +182,22 @@ class BuggyScene: Scene
             if (f.isNull)
                 continue;
             const float laneX = i * gallerySpacing - firstX;
-            drawBuggy(f.get.frame, laneX);
+            // Каркас живёт в Buggy (физика тоже будет владеть им), вьюер
+            // только читает из него. Офсет полосы — отображение, не геометрия.
+            auto buggy = new Buggy(f.get.frame, laneOffset(f.get.frame, laneX));
+            drawBuggy(buggy);
         }
     }
 
-    /// Рисует каркас как статичные балки и колёса в своей полосе laneX.
-    private void drawBuggy(const Frame frame, float laneX)
+    /// Рисует машину из Buggy: статичные балки и колёса в своей полосе laneX.
+    private void drawBuggy(const Buggy buggy)
     {
-        const off = laneOffset(frame, laneX);
+        const off = buggy.offset;
 
-        foreach (b; frame.beams)
+        foreach (b; buggy.frame.beams)
         {
-            const a = frame.nodes[b.a].pos + off;
-            const b2 = frame.nodes[b.b].pos + off;
+            const a = buggy.frame.nodes[b.a].pos + off;
+            const b2 = buggy.frame.nodes[b.b].pos + off;
             const dir = b2 - a;
             const float length = dir.length;
             if (length < 1e-5f)
@@ -207,9 +211,9 @@ class BuggyScene: Scene
             e.scaling = Vector3f(b.radius, length, b.radius);
         }
 
-        foreach (anchor; frame.anchors)
+        foreach (anchor; buggy.frame.anchors)
         {
-            const pos = frame.nodes[anchor.node].pos + off;
+            const pos = buggy.frame.nodes[anchor.node].pos + off;
             final switch (anchor.kind)
             {
                 case AnchorKind.wheel:
