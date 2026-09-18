@@ -3,7 +3,9 @@ module genetics.selection;
 import std.algorithm : sort, min, max;
 import std.random;
 import std.stdio : writefln;
+import std.parallelism : TaskPool, totalCPUs;
 
+import frame.frame;
 import genetics.sge;
 import genetics.buggygrammar;
 import genetics.initial_data;
@@ -34,6 +36,9 @@ struct EvolutionConfig
     /// (`physicsRun`) и сводку best/mean по каждому поколению `evolve`.
     /// По умолчанию тихо — включается во вьюере для наблюдения за эволюцией.
     bool logPhysics = false;
+
+    /// Распараллеливать физический слой на пуле Phobos (не более 75% ядер).
+    bool parallelPhysics = true;
 }
 
 /// Поколение 0: идентичные копии закодированного дефолтного багги.
@@ -51,14 +56,33 @@ Genotype[] seedPopulation(Grammar gr, size_t n)
     return pop;
 }
 
-/// Оценка популяции: develop + buggyFitness (статический гейт) и, если
-/// конфиг задаёт заезд, физический слой поверх: `fit *= physicsFitness`.
-/// Неразвиваемый геном — 0.
+/// Пул Phobos для физических заездов поколения, не более 75% ядер.
+/// Демон-воркеры: на выходе их убирает статический деструктор Phobos.
+private __gshared TaskPool physicsPool_;
+
+private TaskPool physicsPool()
+{
+    if (physicsPool_ is null)
+    {
+        const n = max(1, (cast(size_t) totalCPUs * 3) / 4);
+        physicsPool_ = new TaskPool(n);
+        physicsPool_.isDaemon = true;
+    }
+    return physicsPool_;
+}
+
+/// Оценка популяции: статический гейт последовательно, затем заезды особей
+/// (`fit *= physicsRun`) — независимые dmech-симуляции, на пул по индексам.
 Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
     const EvolutionConfig params = EvolutionConfig.init)
 {
     Individual[] res;
     res.reserve(pop.length);
+    res.length = pop.length;
+
+    Frame[] frames = new Frame[pop.length];
+    bool[] needPhysics = new bool[pop.length];
+
     foreach (i, g; pop)
     {
         float fit = 0.0f;
@@ -66,15 +90,40 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
         if (!may.isNull)
         {
             fit = buggyFitness(may.get.frame, may.get.ast);
+            frames[i] = may.get.frame;
             if (fit > 0.0f && params.simulateSeconds > 0.0)
+                needPhysics[i] = true;
+        }
+        res[i] = Individual(g, fit);
+    }
+
+    size_t[] physIdx;
+    foreach (i, b; needPhysics)
+        if (b)
+            physIdx ~= i;
+
+    if (physIdx.length > 0)
+    {
+        if (params.parallelPhysics && physIdx.length > 1)
+        {
+            foreach (i; physicsPool().parallel(physIdx, 1))
             {
-                auto run = physicsRun(may.get.frame, params.simulateSeconds);
-                fit *= run.score;
+                auto run = physicsRun(frames[i], params.simulateSeconds);
+                res[i].fitness *= run.score;
                 if (params.logPhysics)
-                    logPhysicsIndividual(i, fit, run);
+                    logPhysicsIndividual(i, res[i].fitness, run);
             }
         }
-        res ~= Individual(g, fit);
+        else
+        {
+            foreach (i; physIdx)
+            {
+                auto run = physicsRun(frames[i], params.simulateSeconds);
+                res[i].fitness *= run.score;
+                if (params.logPhysics)
+                    logPhysicsIndividual(i, res[i].fitness, run);
+            }
+        }
     }
     return res;
 }
