@@ -33,6 +33,7 @@ class BuggyScene: Scene
     /// меши и материалы (dlib-память вне GC, иначе — утечка и крах).
     Mesh meshBeam = null;
     Mesh meshWheel = null;
+    Texture texBeam;
     Material matBeam;
     Material matWheel;
     Material matDriveWheel;
@@ -104,6 +105,7 @@ class BuggyScene: Scene
         matBeam = addMaterial();
         matBeam.baseColorFactor = Color4f(0.55f, 0.55f, 0.62f, 1.0f);
         matBeam.metallicFactor = 0.7f;
+        matBeam.baseColorTexture = buildBeamGradientTexture();
 
         matWheel = addMaterial();
         matWheel.baseColorFactor = Color4f(0.08f, 0.08f, 0.08f, 1.0f);
@@ -133,6 +135,36 @@ class BuggyScene: Scene
         */
         import core.memory: GC;
         GC.addRange(cast(void*)this, __traits(classInstanceSize, BuggyScene));
+    }
+
+    /// Текстура-градиент для балок вдоль их длины. Цилиндр балки ориентирован
+    /// так, что его верхний торец (v=0) лежит у узла b.b («конечного» конца),
+    /// а нижний (v=1) — у узла b.a («начального»). Поэтому v=0 получает текущий
+    /// цвет балки, а к v=1 цвет плавно темнеет.
+    private Texture buildBeamGradientTexture()
+    {
+        const int imgW = 4;
+        const int imgH = 64;
+        const Color4f dark = Color4f(0.19f, 0.19f, 0.21f, 1.0f);
+        const Color4f light = matBeam.baseColorFactor;
+
+        SuperImage img = unmanagedImage(imgW, imgH, 4, 8);
+        foreach (y; 0 .. imgH)
+        {
+            const float t = cast(float)y / cast(float)(imgH - 1);
+            const Color4f c = Color4f(
+                light.r + (dark.r - light.r) * t,
+                light.g + (dark.g - light.g) * t,
+                light.b + (dark.b - light.b) * t,
+                1.0f);
+            foreach (x; 0 .. imgW)
+                img[x, y] = c;
+        }
+
+        auto tex = New!Texture(this);
+        tex.createFromImage(img, false);
+        Delete(img);
+        return tex;
     }
 
     /// Новое 0-е поколение: идентичные копии закодированного багги.
