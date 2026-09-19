@@ -27,7 +27,7 @@ struct EvolutionConfig
     size_t tournamentSize = 2;
     size_t eliteCount = 5;
     size_t mutateHits = 3;
-    size_t generationsPerPress = 100;
+    size_t generationsPerPress = 50;
 
     double simulateSeconds = 0.0;
 
