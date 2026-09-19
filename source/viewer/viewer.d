@@ -3,7 +3,9 @@ module viewer.viewer;
 import dagon;
 import dagon.core.keycodes;
 import dagon.core.time;
-import std.algorithm : min, sort;
+import core.thread : Thread;
+import core.sync : Mutex, Condition;
+import std.algorithm : min, max, sort;
 import std.random;
 import std.stdio : writefln;
 import frame.frame;
@@ -47,6 +49,41 @@ class BuggyScene: Scene
     enum size_t galleryTop = 5;
     enum float gallerySpacing = 4.0f;
 
+    // ---- Фоновая эволюция ----
+    // Физическая оценка поколения идёт в отдельном потоке: основной
+    // (rnd/отрисовка) не блокируется и работает как приложение. Всё
+    // перекрёстное состояние закрыто мьютексом; результат применяется
+    // к сцене только в update (главный поток) — dagon-сущности из
+    // воркера не трогаются.
+    private Thread worker;
+    // Создаются в afterLoad: new Condition/pthread не терпит CTFE-инициализации.
+    private Mutex evolMutex;
+    private Condition evolCond;
+    private bool workerBusy;     // поданная работа ещё не применена к сцене
+    private bool jobRequested;   // воркеру поставлена задача
+    private bool jobDone;        // воркер закончил, результат ждёт применения
+    private bool stopWorker;     // останова воркера при завершении
+    private Individual[] jobInput;
+    private size_t jobGenerations;
+    private EvolutionConfig jobConfig;
+    private Individual[] jobOutput;
+
+    // ---- Живой заезд (только главный поток) ----
+    // Пока поколение считается в фоне, на витрине едет одна машина в
+    // реальном времени — BuggyPhysics шагает раз за update(~1/60 с).
+    // Сущности под carRoot: liveCar[0] — рама, далее колёса по anchors.
+    private BuggyPhysics livePhysics;
+    private Entity[] liveCar;
+    private Mesh meshChassis = null;
+    private Vector3f chassisScale;
+    private Frame liveFrame;
+    private double liveSimTime;
+
+    /// Длительность показанного «круга» в реальном времени: как физический
+    /// заезд особи (evolutionConfig.simulateSeconds), после — повторить,
+    /// иначе машина уехала бы за пределы витрины на долгом прогоне.
+    enum double liveRunSeconds = 3.0;
+
     override void afterLoad()
     {
         eventManager.trackUpDownState = true;
@@ -76,6 +113,8 @@ class BuggyScene: Scene
 
         meshBeam = New!ShapeCylinder(1.0f, 1.0f, 8, assetManager);
         meshWheel = New!ShapeTorus(0.2f, 0.1f, 16, 8, assetManager);
+        // Полуразмерный бокс (1×1×1): масштабом e.scaling = габариты рамы.
+        meshChassis = New!ShapeBox(Vector3f(0.5f, 0.5f, 0.5f), assetManager);
 
         matBeam = addMaterial();
         matBeam.baseColorFactor = Color4f(0.55f, 0.55f, 0.62f, 1.0f);
@@ -97,6 +136,10 @@ class BuggyScene: Scene
         resetPopulation();
         buildGallery();
         logGeneration();
+
+        evolMutex = new Mutex;
+        evolCond = new Condition(evolMutex);
+        seedWorker();
 
         /*
         BuggyScene is dlib-allocated (New!), so the GC can't see
@@ -122,6 +165,34 @@ class BuggyScene: Scene
     {
         super.update(t);
 
+        if (workerBusy)
+        {
+            // Фон считает поколение: применяем результат, когда готов.
+            evolMutex.lock();
+            const pending = jobDone;
+            evolMutex.unlock();
+
+            if (pending)
+            {
+                evolMutex.lock();
+                auto fresh = jobOutput;
+                const gens = jobGenerations;
+                jobOutput = null;
+                jobDone = false;
+                evolMutex.unlock();
+
+                population = fresh;
+                generation += gens;
+                workerBusy = false;
+                stopLiveCar();
+                buildGallery();
+                logGeneration();
+            }
+            else
+                stepLiveCar();
+            return;
+        }
+
         if (eventManager.keyDown[KEY_R])
         {
             resetPopulation();
@@ -130,17 +201,188 @@ class BuggyScene: Scene
         }
         else if (eventManager.keyDown[KEY_G])
         {
-            population = evolve(grammar, population, evolutionConfig.generationsPerPress, rnd, evolutionConfig);
-            generation += evolutionConfig.generationsPerPress;
-            buildGallery();
-            logGeneration();
+            submitEvolution(evolutionConfig.generationsPerPress, evolutionConfig);
         }
         else if (eventManager.keyDown[KEY_M])
         {
-            population = evolve(grammar, population, 1, rnd);
-            generation += 1;
-            buildGallery();
-            logGeneration();
+            // Быстрый шаг: только статический отбор, без физического заезда.
+            submitEvolution(1, EvolutionConfig.init);
+        }
+    }
+
+    /// Поднять фоновый воркер эволюции. Демон: при выходе из приложения
+    /// процесс завершается, не дожидаясь потока.
+    private void seedWorker()
+    {
+        worker = new Thread(&workerRun);
+        worker.isDaemon = true;
+        worker.start();
+    }
+
+    /// Цикл воркера: ждёт задачу, считает поколения в физическом пуле,
+    /// кладёт результат под мьютекс. `rnd` свой (зерно фиксировано —
+    /// отбор воспроизводим в рамках сессии, как раньше на главном потоке).
+    private void workerRun()
+    {
+        auto workerRnd = Random(42);
+        while (true)
+        {
+            evolMutex.lock();
+            while (!jobRequested && !stopWorker)
+                evolCond.wait();
+            if (stopWorker)
+            {
+                evolMutex.unlock();
+                return;
+            }
+            jobRequested = false;
+            auto input = jobInput;
+            const gens = jobGenerations;
+            const cfg = jobConfig;
+            evolMutex.unlock();
+
+            auto output = evolve(grammar, input, gens, workerRnd, cfg);
+
+            evolMutex.lock();
+            jobOutput = output;
+            jobDone = true;
+            evolCond.notify();
+            evolMutex.unlock();
+        }
+    }
+
+    /// Поставить задачу фоновой эволюции и запустить живой заезд.
+    private void submitEvolution(size_t generations, EvolutionConfig cfg)
+    {
+        evolMutex.lock();
+        jobInput = population;
+        jobGenerations = generations;
+        jobConfig = cfg;
+        jobOutput = null;
+        jobDone = false;
+        jobRequested = true;
+        evolCond.notify();
+        evolMutex.unlock();
+
+        workerBusy = true;
+        // На время заезда убираем стоящую витрину топ-5: на сцене остаётся
+        // только едущий потомок победителя. Галерея вернётся в buildGallery
+        // по завершении работы.
+        removeCar();
+        startLiveCar();
+    }
+
+    /// Пока считается поколение, на витрине едет потомок лучшего багги
+    /// предыдущего поколения: кроссовер победителя с партнёром + мутация —
+    /// как buildNextGeneration, только на одном геноме.
+    private void startLiveCar()
+    {
+        auto descendant = descendantOfBest(grammar, population,
+            evolutionConfig.tournamentSize, evolutionConfig.mutateHits, rnd);
+        auto may = develop(grammar, descendant);
+        if (may.isNull)
+            return;
+        auto frame = may.get.frame;
+        if (frame.anchors.length < 2)
+            return;
+
+        livePhysics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
+        livePhysics.setSlopeDeg(physicsSlopeDeg);
+        livePhysics.settle(physicsDt,
+            cast(int)(physicsSettleSeconds / physicsDt));
+        liveFrame = frame;
+        liveSimTime = 0.0;
+
+        // Габариты рамы под кузов-бокс: как в BuggyPhysics.buildChassis.
+        vec3 minP = vec3(float.max, float.max, float.max);
+        vec3 maxP = vec3(-float.max, -float.max, -float.max);
+        foreach (n; frame.nodes)
+        {
+            minP.x = min(minP.x, n.pos.x);
+            minP.y = min(minP.y, n.pos.y);
+            minP.z = min(minP.z, n.pos.z);
+            maxP.x = max(maxP.x, n.pos.x);
+            maxP.y = max(maxP.y, n.pos.y);
+            maxP.z = max(maxP.z, n.pos.z);
+        }
+        vec3 dims = maxP - minP;
+        dims.x = max(dims.x, 0.1f);
+        dims.y = max(dims.y, 0.1f);
+        dims.z = max(dims.z, 0.1f);
+        // Небольшой запас по габариту — кузов зрительно обнимает раму.
+        chassisScale = dims + vec3(0.1f, 0.1f, 0.1f);
+
+        liveCar ~= addEntity(carRoot); // рама
+        liveCar[$ - 1].drawable = meshChassis;
+        liveCar[$ - 1].material = matBeam;
+        liveCar[$ - 1].scaling = chassisScale;
+
+        foreach (a; frame.anchors) // колёса
+        {
+            auto e = addEntity(carRoot);
+            e.drawable = meshWheel;
+            e.material = a.kind == AnchorKind.motorWheel ? matDriveWheel : matWheel;
+            liveCar ~= e;
+        }
+    }
+
+    /// Шаг живого заезда раз в update и перенос состояний в сущности.
+    private void stepLiveCar()
+    {
+        if (livePhysics is null)
+            return;
+        livePhysics.step(physicsDt, 0.0f);
+        liveSimTime += physicsDt;
+        if (liveSimTime >= liveRunSeconds)
+            restartLiveCar();
+        else
+            updateLiveCar();
+    }
+
+    /// Новый круг того же багги, чтобы машина не уезжала со сцены.
+    private void restartLiveCar()
+    {
+        if (livePhysics !is null)
+            livePhysics.dispose();
+        livePhysics = new BuggyPhysics(new Buggy(liveFrame, vec3(0.0f)));
+        livePhysics.setSlopeDeg(physicsSlopeDeg);
+        livePhysics.settle(physicsDt,
+            cast(int)(physicsSettleSeconds / physicsDt));
+        liveSimTime = 0.0;
+        updateLiveCar();
+    }
+
+    /// Перенос состояний физики в dagon-сущности живого багги.
+    private void updateLiveCar()
+    {
+        const beams = livePhysics.beamStates();
+        if (beams.length > 0 && liveCar.length > 0)
+        {
+            liveCar[0].position = beams[0].position;
+            liveCar[0].rotation = beams[0].orientation;
+        }
+
+        const wheels = livePhysics.wheelStates();
+        foreach (i; 1 .. liveCar.length)
+            if (i <= wheels.length)
+            {
+                liveCar[i].position = wheels[i - 1].position;
+                liveCar[i].rotation = wheels[i - 1].orientation;
+            }
+    }
+
+    private void stopLiveCar()
+    {
+        foreach (e; liveCar)
+        {
+            removeEntity(e);
+            carRoot.removeChild(e);
+        }
+        liveCar.length = 0;
+        if (livePhysics !is null)
+        {
+            livePhysics.dispose();
+            livePhysics = null;
         }
     }
 
