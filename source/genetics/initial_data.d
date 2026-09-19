@@ -42,6 +42,7 @@ Genotype startGenome(const Grammar gr)
     set("taper", [u(1.0f, 0.4f, 1.0f)]);
     set("taperPow", [u(1.0f, 0.5f, 4.0f)]);
     set("heading", [mid]);
+    set("motorPower", [u(initialMotorPower, 0.0f, 200.0f)]);
 
     // Один одиночный (медианный) сегмент без раздвоения: из него эволюция
     // либо вырастит пару ветвей (сегмент раздвоится — «лишняя пара
@@ -93,6 +94,8 @@ unittest
     assert(f.anchors[0].kind == AnchorKind.wheel && f.anchors[0].node == 0);
     assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 1);
     assert(f.totalBeamLength > 0.0f);
+    assert(f.motorPower > 99.0f && f.motorPower < 101.0f,
+        "стартовая сила мотора берётся из гена motorPower");
 
     auto rnd = Random(1);
     mutate(genome, 1, rnd);

@@ -59,14 +59,14 @@ unittest
     frame.anchors ~= Anchor(fr, AnchorKind.wheel);
     frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
     frame.anchors ~= Anchor(rr, AnchorKind.motorWheel);
+    frame.motorPower = initialMotorPower;
 
     auto physics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
     scope (exit) physics.dispose();
 
     const double dt = 1.0 / 60.0;
 
-    // Уклон горки и успокоение: осадка рамы без движения.
-    physics.setSlopeDeg(25.0f);
+    // Плоская земля, мотор-колёса: успокоить раму, затем заезд на полном газу.
     physics.settle(dt, 120);
 
     double avgY()
@@ -78,10 +78,10 @@ unittest
     }
     const double startY = avgY;
 
-    // ~9 секунд спуска — машина должна остаться на земле,
+    // ~9 секунд заезда — машина должна остаться на земле,
     // не разлететься и не провалиться сквозь неё.
     foreach (i; 0 .. 540)
-        physics.step(dt, 0.0f);
+        physics.step(dt, 1.0f);
 
     foreach (s; physics.wheelStates())
     {
@@ -96,9 +96,9 @@ unittest
             "позиция рамы не конечна — машина разлетелась");
     }
 
-    // За ~9 секунд спуска машина должна заметно укатиться по курсу.
+    // За ~9 секунд заезда машина должна заметно уехать вперёд по курсу.
     assert(-(avgY - startY) > 1.0,
-        "машина не катится с горки — колёса на осях не катятся");
+        "мотор-колёса не везут машину — момент не передаётся раме");
 }
 
 /**
@@ -112,10 +112,9 @@ unittest
  * на каждом шаге, так что узлы не разбалтываются и каркас катится как
  * монолит. Колёса у якорей приварены точкой (BallConstraint) к телу первой
  * балки узла. Столкновение балки с землёй или с чужим колесом регистрируется
- * beamFailure(): заезд обрывается как непройденный. Привод —
- * гравитационный: наклоном `g` (setSlopeDeg) моделируется горка, машина
- * катится сама. Момента на колёсах нет — на этом dmech он не передаёт
- * движение раме.
+ * beamFailure(): заезд обрывается как непройденный. Привод — мотор-колёса:
+ * на ведущие колёса подаётся момент `Frame.motorPower` (наследуемый ген),
+ * закрутка вокруг +X толкает машину по курсу (-Y).
  */
 final class BuggyPhysics
 {
@@ -192,17 +191,6 @@ final class BuggyPhysics
         buildWheels();
     }
 
-    /// Уклон «горки»: силу тяжести разворачиваем так, чтобы появилась составляющая
-    /// вдоль курса (+Y). Земля остаётся плоской — это тот же скат, но без
-    /// перекашивания каркаса.
-    void setSlopeDeg(float degrees)
-    {
-        const float a = degrees * PI / 180.0f;
-        world.gravity = Vector3f(0.0f,
-            -9.80665f * sin(a),
-            -9.80665f * cos(a));
-    }
-
     ~this()
     {
         dispose();
@@ -230,17 +218,34 @@ final class BuggyPhysics
 
     /// Один шаг симуляции. Фиксированный dt (~1/60) надёжно стабилен.
     ///
-    /// Из пассивных колёс на осях и наклона `g` машина едет сама — привод
-    /// моментом на этом dmech не передаёт движение раме (момент раскручивает
-    /// колесо, но тяга гаснет о трение и связи). `throttle` сохранён для
-    /// совместимости, газ не применяется.
+    /// `throttle` (0..1) кладёт момент на мотор-колёса: закрутка вокруг +X
+    /// толкает машину по курсу (-Y). Момент копится до world.update и
+    /// сбрасывается внутри него, поэтому подаётся каждый шаг заново. Пассивные
+    /// колёса на осях катятся сами — их везёт сцепление с землёй.
     void step(double dt, float throttle)
     {
         if (world is null)
             return;
 
+        applyDrive(throttle);
         world.update(dt);
         updateBeamPuppets();
+    }
+
+    /// Момент полного газа на каждое мотор-колесо, разложенный по `throttle`.
+    /// Сила мотора — наследуемый параметр каркаса (`Frame.motorPower`).
+    private void applyDrive(float throttle)
+    {
+        if (throttle == 0.0f || master is null)
+            return;
+        const Frame fr = buggy_.frame;
+        if (fr.motorPower == 0.0f)
+            return;
+        foreach (i, a; fr.anchors)
+            if (a.kind == AnchorKind.motorWheel && i < wheelBodies.length
+                && wheelBodies[i] !is null)
+                wheelBodies[i].applyTorque(
+                    Vector3f(throttle * fr.motorPower, 0.0f, 0.0f));
     }
 
     /// Успокоить машину: шаги симуляции без движения, чтобы осадка рамы и

@@ -205,7 +205,6 @@ class BuggyScene: Scene
                 continue;
 
             auto physics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
-            physics.setSlopeDeg(physicsSlopeDeg);
             physics.settle(physicsDt,
                 cast(int)(physicsSettleSeconds / physicsDt));
             const settleFailure = runFailure(physics);
@@ -250,7 +249,7 @@ class BuggyScene: Scene
     {
         if (livePhysics is null)
             return;
-        livePhysics.step(physicsDt, 0.0f);
+        livePhysics.step(physicsDt, 1.0f);
         liveSimTime += physicsDt;
         const stepFailure = runFailure(livePhysics);
         if (stepFailure.length)
@@ -271,7 +270,6 @@ class BuggyScene: Scene
         if (livePhysics !is null)
             livePhysics.dispose();
         livePhysics = new BuggyPhysics(new Buggy(liveFrame, vec3(0.0f)));
-        livePhysics.setSlopeDeg(physicsSlopeDeg);
         livePhysics.settle(physicsDt,
             cast(int)(physicsSettleSeconds / physicsDt));
         liveSimTime = 0.0;

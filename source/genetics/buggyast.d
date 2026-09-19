@@ -92,6 +92,11 @@ enum Tok
     /// Turtle: приращение заголовка после балки (float, радианы).
     /// Накапливается в общее направление построения.
     turn,
+
+    /// Сила мотор-колёс (float, Н·м) — наследуемый параметр развития.
+    /// Задаёт момент, развиваемый ведущими колёсами; эволюция подбирает его
+    /// под геометрию, чтобы машина ехала, а не опрокидывалась.
+    motorPower,
 }
 
 enum StartRefKind { last, base, idx }
@@ -139,6 +144,7 @@ struct Ast
     float heading;
     float taper = 1.0f;
     float taperPow = 1.0f;
+    float motorPower;
     SegmentAst[] segments;
     AnchorAst[] anchors;
 }
@@ -180,6 +186,13 @@ Nullable!Ast buildAst(const Terminal!Tok[] tokens)
         return Nullable!Ast.init;
     ast.heading = tokens[i].f;
     ++i;
+
+    // Сила мотор-колёс — необязательный параметр (ручные потоки его опускают).
+    if (i < tokens.length && tokens[i].tok == Tok.motorPower)
+    {
+        ast.motorPower = tokens[i].f;
+        ++i;
+    }
 
     while (i < tokens.length && tokens[i].tok != Tok.anchors)
     {
@@ -341,6 +354,7 @@ unittest
     t ~= new Terminal!Tok(Tok.taper, 0.6f);
     t ~= new Terminal!Tok(Tok.taperPow, 2.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.3f);
+    t ~= new Terminal!Tok(Tok.motorPower, 77.0f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
     t ~= new Terminal!Tok(Tok.refBase);
@@ -362,6 +376,7 @@ unittest
     assert(abs(ast.get.seed.x - 0.5f) < 1e-6f && abs(ast.get.seed.y + 0.25f) < 1e-6f);
     assert(ast.get.taper == 0.6f && ast.get.taperPow == 2.0f);
     assert(abs(ast.get.heading - 0.3f) < 1e-6f);
+    assert(abs(ast.get.motorPower - 77.0f) < 1e-6f);
 
     assert(ast.get.segments.length == 1);
     const seg = ast.get.segments[0];

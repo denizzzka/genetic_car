@@ -89,6 +89,9 @@ Grammar buggyGrammar()
     auto taperPow = new Sampler!Tok("taperPow", Tok.taperPow, 0.5f, 4.0f);
     auto heading = new Sampler!Tok("heading", Tok.heading, -3.1416f, 3.1416f);
     auto turn = new Sampler!Tok("turn", Tok.turn, -1.5708f, 1.5708f);
+    // Сила мотор-колёс, Н·м: от почти стоячей машины до агрессивной,
+    // способной вилли; эволюция ищет окно между «не едет» и «опрокидывается».
+    auto motorPower = new Sampler!Tok("motorPower", Tok.motorPower, 0.0f, 200.0f);
 
     auto startRef = nt("startRef", [
         new Production([marker(Tok.refLast)]),
@@ -97,7 +100,7 @@ Grammar buggyGrammar()
     ]);
 
     auto startPos = nt("startPos", [
-        new Production([startX, startY, startZ, taper, taperPow, heading]),
+        new Production([startX, startY, startZ, taper, taperPow, heading, motorPower]),
     ]);
 
     auto endRef = nt("endRef", [
@@ -146,6 +149,7 @@ Grammar buggyGrammar()
 
     auto symbols = [
         start, startPos, startX, startY, startZ, taper, taperPow, heading, turn,
+        motorPower,
         segmentList_, segment, segMode, nodal, lefty,
         beamList_, beam, startRef,
         idx, endRef, destX, destY, destZ, radius, beamKind,
@@ -321,6 +325,7 @@ Nullable!Frame frameFromAst(const Ast ast)
         if (forkOf[n] != n)
             result.anchors ~= Anchor(forkOf[n], a.kind);
     }
+    result.motorPower = ast.motorPower;
     return Nullable!Frame(result);
 }
 

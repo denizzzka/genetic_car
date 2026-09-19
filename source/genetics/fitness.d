@@ -208,34 +208,32 @@ float buggyFitness(const Frame f, const Ast ast)
 /// Параметры заезда (физический слой оценки).
 enum double physicsDt = 1.0 / 60.0;       ///< шаг симуляции (стабильный dt)
 enum double physicsSimSeconds = 3.0;      ///< длительность заезда особи, сек
-enum float physicsNominalSpeed = 2.0f;    ///< м/с фитнеса — дистанция-норма
-enum float physicsSlopeDeg = 25.0f;       ///< уклон «горки» (наклон вектора g)
+enum float physicsNominalSpeed = 4.0f;    ///< м/с фитнеса — дистанция-норма
 enum double physicsSettleSeconds = 1.0;   ///< успокоение осадки перед стартом
 
 /// Итог физического заезда одной машины.
 ///
 /// Помимо мультипликатора `score` в фитнес отдаёт телеметрию для вывода:
-/// фактический достигнутый спуск (`descent`), сколько было колёс/балок и что
+/// фактически пройденную дистанцию (`distance`), сколько было колёс/балок и что
 /// оборвало заезд (`why`), если `survived` ложно.
 struct PhysicsResult
 {
     float score = 0.0f;    // вклад в фитнес: (0..1]; 0 — не доехала
     bool survived = false; // заезд дошёл до конца, не развалившись
-    double descent = 0.0;  // достигнутый спуск по курсу (-Y), м
+    double distance = 0.0; // пройденная дистанция по курсу (-Y), м
     size_t wheels = 0;     // выставленное число колёс
     size_t beams = 0;      // выставленное число балок
     string why = "";       // причина обрыва (пусто — успех)
 }
 
-/// Физический слой оценки: пассивный спуск с горки `physicsSlopeDeg`.
+/// Физический слой оценки: заезд на мотор-колёсах по плоской земле.
 ///
-/// Силу тяжести наклоняют (`setSlopeDeg`), земля остаётся плоской; колёса на
-/// осях катятся сами, газовая тяга не участвует. Счёт — продвижение центра
-/// колёс BНИЗ по курсу (-Y) за `seconds` секунд, нормированное
-/// на `physicsNominalSpeed·seconds` → (0,1]. Живучесть: любое колесо
-/// провалилось под землю, зависло (переворот, съезд) или каркас разлетелся —
-/// заезд обрывается, счёт 0. Симуляция строится на `BuggyPhysics` отдельно,
-/// фитнес только читает её наружу.
+/// На ведущие колёса подаётся момент `Frame.motorPower` (наследуемый ген) —
+/// машина едет сама. Счёт — продвижение центра колёс ВНИЗ по курсу (-Y) за
+/// `seconds` секунд, нормированное на `physicsNominalSpeed·seconds` → (0,1].
+/// Живучесть: любое колесо провалилось под землю, зависло (переворот, съезд)
+/// или каркас разлетелся — заезд обрывается, счёт 0. Симуляция строится на
+/// `BuggyPhysics` отдельно, фитнес только читает её наружу.
 PhysicsResult physicsRun(const Buggy buggy, double seconds)
 {
     PhysicsResult r;
@@ -250,7 +248,6 @@ PhysicsResult physicsRun(const Buggy buggy, double seconds)
     auto physics = new BuggyPhysics(buggy);
     scope (exit) physics.dispose();
 
-    physics.setSlopeDeg(physicsSlopeDeg);
     physics.settle(physicsDt,
         cast(int)(physicsSettleSeconds / physicsDt));
 
@@ -271,11 +268,11 @@ PhysicsResult physicsRun(const Buggy buggy, double seconds)
         startY += s.position.y;
     startY /= wheels.length;
 
-    // Продвижение по спуску — максимум дистанции, преодолённой вниз (-Y).
+    // Продвижение по курсу — максимум дистанции, преодолённой вниз (-Y).
     double farthest = 0.0;
     foreach (_; 0 .. steps)
     {
-        physics.step(physicsDt, 0.0f);
+        physics.step(physicsDt, 1.0f);
 
         const stepFailure = runFailure(physics);
         if (stepFailure.length)
@@ -293,7 +290,7 @@ PhysicsResult physicsRun(const Buggy buggy, double seconds)
         farthest = max(farthest, downhill);
     }
 
-    r.descent = farthest;
+    r.distance = farthest;
     if (r.why.length != 0)
         return r;
 
@@ -896,6 +893,7 @@ private Frame symmetricBuggyFrame()
     f.anchors ~= Anchor(fr, AnchorKind.wheel);
     f.anchors ~= Anchor(rl, AnchorKind.motorWheel);
     f.anchors ~= Anchor(rr, AnchorKind.motorWheel);
+    f.motorPower = initialMotorPower;
     return f;
 }
 
