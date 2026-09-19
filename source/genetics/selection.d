@@ -1,8 +1,7 @@
 module genetics.selection;
 
-import std.algorithm : sort, min, max, filter, map;
-import std.array : array;
-import std.range : enumerate;
+import std.algorithm : sort, min, max;
+import std.range : iota;
 import std.random;
 import std.stdio : writefln;
 import std.parallelism : TaskPool, totalCPUs;
@@ -75,18 +74,17 @@ private TaskPool physicsPool()
     return physicsPool_;
 }
 
-/// Оценка популяции: статический гейт последовательно, затем заезды особей
-/// (`fit *= physicsRun`) — независимые dmech-симуляции, на пул по индексам.
-/// `needPhysics` — массив багги размером `pop.length`: ячейка заполняется,
-/// только если особь прошла статический гейт и ей назначена симуляция;
-/// фрейм живёт внутри багги.
+/// Оценка популяции
 Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
     const EvolutionConfig params = EvolutionConfig.init, size_t generation = 0)
 {
     auto res = new Individual[pop.length];
-    auto needPhysics = new Buggy[pop.length];
 
-    // Статический гейт: fitness > 0 открывает физику — особь получает багги.
+    Buggy[] needPhysics;
+    needPhysics.reserve(pop.length);
+    size_t[] physIdx;
+    physIdx.reserve(pop.length);
+
     foreach (i, g; pop)
     {
         float fit = 0.0f;
@@ -94,31 +92,27 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
         {
             fit = buggyFitness(may.get.frame, may.get.ast);
             if (fit > 0.0f && params.simulateSeconds > 0.0)
-                needPhysics[i] = new Buggy(may.get.frame, vec3(0.0f));
+            {
+                needPhysics ~= new Buggy(may.get.frame, vec3(0.0f));
+                physIdx ~= i;
+            }
         }
         res[i] = Individual(g, fit);
     }
 
-    // Индексы особей, допущенных до заезда.
-    auto physIdx = needPhysics
-        .enumerate
-        .filter!(a => a.value !is null)
-        .map!(a => a.index)
-        .array;
-
-    auto runAt = (size_t i) {
-        auto run = physicsRun(needPhysics[i], params.simulateSeconds);
-        res[i].fitness *= run.score;
+    auto runAt = (size_t k) {
+        auto run = physicsRun(needPhysics[k], params.simulateSeconds);
+        res[physIdx[k]].fitness *= run.score;
         if (params.logPhysics)
-            logPhysicsIndividual(i, generation, res[i].fitness, run);
+            logPhysicsIndividual(physIdx[k], generation, res[physIdx[k]].fitness, run);
     };
 
-    if (params.parallelPhysics && physIdx.length > 1)
-        foreach (i; physicsPool().parallel(physIdx, 1))
-            runAt(i);
+    if (params.parallelPhysics && needPhysics.length > 1)
+        foreach (k; physicsPool().parallel(iota(needPhysics.length), 1))
+            runAt(k);
     else
-        foreach (i; physIdx)
-            runAt(i);
+        foreach (k; 0 .. needPhysics.length)
+            runAt(k);
 
     return res;
 }
