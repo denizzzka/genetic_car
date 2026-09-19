@@ -10,6 +10,8 @@ import genetics.sge;
 import genetics.buggygrammar;
 import genetics.initial_data;
 import genetics.fitness;
+import physics_world;
+import dlib.math.vector;
 
 /// Отобранный индивид: геном и его фитнес (0 — невалидный/неразвиваемый).
 struct Individual
@@ -80,8 +82,7 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
     res.reserve(pop.length);
     res.length = pop.length;
 
-    Frame[] frames = new Frame[pop.length];
-    bool[] needPhysics = new bool[pop.length];
+    Buggy[] needPhysics = new Buggy[pop.length];
 
     foreach (i, g; pop)
     {
@@ -90,16 +91,15 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
         if (!may.isNull)
         {
             fit = buggyFitness(may.get.frame, may.get.ast);
-            frames[i] = may.get.frame;
             if (fit > 0.0f && params.simulateSeconds > 0.0)
-                needPhysics[i] = true;
+                needPhysics[i] = new Buggy(may.get.frame, vec3(0.0f));
         }
         res[i] = Individual(g, fit);
     }
 
     size_t[] physIdx;
-    foreach (i, b; needPhysics)
-        if (b)
+    foreach (i; 0 .. needPhysics.length)
+        if (needPhysics[i] !is null)
             physIdx ~= i;
 
     if (physIdx.length > 0)
@@ -108,7 +108,7 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
         {
             foreach (i; physicsPool().parallel(physIdx, 1))
             {
-                auto run = physicsRun(frames[i], params.simulateSeconds);
+                auto run = physicsRun(needPhysics[i], params.simulateSeconds);
                 res[i].fitness *= run.score;
                 if (params.logPhysics)
                     logPhysicsIndividual(i, generation, res[i].fitness, run);
@@ -118,7 +118,7 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
         {
             foreach (i; physIdx)
             {
-                auto run = physicsRun(frames[i], params.simulateSeconds);
+                auto run = physicsRun(needPhysics[i], params.simulateSeconds);
                 res[i].fitness *= run.score;
                 if (params.logPhysics)
                     logPhysicsIndividual(i, generation, res[i].fitness, run);

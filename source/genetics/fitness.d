@@ -237,18 +237,18 @@ struct PhysicsResult
 /// провалилось под землю, зависло (переворот, съезд) или каркас разлетелся —
 /// заезд обрывается, счёт 0. Симуляция строится на `BuggyPhysics` отдельно,
 /// фитнес только читает её наружу.
-PhysicsResult physicsRun(Frame frame, double seconds)
+PhysicsResult physicsRun(const Buggy buggy, double seconds)
 {
     PhysicsResult r;
-    r.wheels = frame.anchors.length;
+    r.wheels = buggy.frame.anchors.length;
 
-    if (frame.anchors.length < 2)
+    if (buggy.frame.anchors.length < 2)
     {
         r.why = "объект с одним колесом";
         return r;
     }
 
-    auto physics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
+    auto physics = new BuggyPhysics(buggy);
     scope (exit) physics.dispose();
 
     physics.setSlopeDeg(physicsSlopeDeg);
@@ -339,9 +339,9 @@ PhysicsResult physicsRun(Frame frame, double seconds)
 }
 
 /// Мультипликатор фитнеса из физического заезда — краткая форма `physicsRun`.
-float physicsFitness(Frame frame, double seconds)
+float physicsFitness(const Buggy buggy, double seconds)
 {
-    return physicsRun(frame, seconds).score;
+    return physicsRun(buggy, seconds).score;
 }
 
 /// Доля узлов, у которых есть зеркальный партнёр через плоскость X=0.
@@ -856,12 +856,12 @@ unittest
 {
     // Физический слой: заезд простейшего багги конечен, счёт нормирован
     // в (0,1] и не зависит от статики. Пустой каркас — ровно 0.
-    const p = physicsFitness(symmetricBuggyFrame(), 1.0);
+    const p = physicsFitness(new Buggy(symmetricBuggyFrame(), vec3(0.0f)), 1.0);
     assert(isFinite(p) && p >= 0.0f && p <= 1.0f,
         "счёт заезда нормирован и не разлетается");
 
     Frame empty;
-    assert(physicsFitness(empty, 1.0) == 0.0f,
+    assert(physicsFitness(new Buggy(empty, vec3(0.0f)), 1.0) == 0.0f,
         "каркас без колёс не выезжает из нуля");
 }
 
