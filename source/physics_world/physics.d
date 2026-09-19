@@ -44,6 +44,10 @@ enum float beamDensity = 150.0f;
 /// здоровая машина обнуляется на каждом бугорке.
 enum float beamGroundEps = 0.02f;
 
+/// Порог силы мотор-колёс, Н·м: ниже него привод заведомо не везёт машину,
+/// и физический заезд запускать незачем.
+enum float minMotorPower = 1.0f;
+
 /// Транспортное состояние тела: позиция и ориентация в координатах машины.
 /// Совпадает с трансформацией Dagon-сущности под carRoot:
 /// `entity.position = state.position; entity.rotation = state.orientation;`

@@ -102,6 +102,23 @@ unittest
 }
 
 /**
+ * Есть ли у каркаса привод: хотя бы одно мотор-колесо и заметная сила мотора.
+ *
+ * Дёшево отсеивает заведомо стоячие каркасы до дорогой физической
+ * симуляции — без мотор-колеса или при моменте ниже `minMotorPower` машина
+ * не поедет.
+ */
+bool canDrive(const Frame f)
+{
+    if (f.motorPower <= minMotorPower)
+        return false;
+    foreach (a; f.anchors)
+        if (a.kind == AnchorKind.motorWheel)
+            return true;
+    return false;
+}
+
+/**
  * Физическая модель машины поверх dmech.
  *
  * Координаты — те же, что у каркаса (car-local): X вправо, Y вперёд, Z вверх.
@@ -585,4 +602,21 @@ string runFailure(BuggyPhysics physics)
             break;
     }
     return "";
+}
+unittest
+{
+    // canDrive: решает, стоит ли запускать физический заезд.
+    Frame f;
+    f.nodes = [Node(vec3(0.0f)), Node(vec3(0.0f, 1.0f, 0.0f))];
+    f.beams = [Beam(0, 1, 0.05f)];
+
+    f.anchors = [Anchor(0, AnchorKind.wheel)];
+    assert(!canDrive(f), "нет мотор-колеса — привода нет");
+
+    f.anchors ~= Anchor(1, AnchorKind.motorWheel);
+    f.motorPower = minMotorPower;
+    assert(!canDrive(f), "момент на пороге не считается приводом");
+
+    f.motorPower = minMotorPower + 1.0f;
+    assert(canDrive(f), "мотор-колесо с заметным моментом — привод есть");
 }

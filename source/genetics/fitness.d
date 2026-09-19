@@ -245,6 +245,12 @@ PhysicsResult physicsRun(const Buggy buggy, double seconds)
         return r;
     }
 
+    if (!canDrive(buggy.frame))
+    {
+        r.why = "нет привода";
+        return r;
+    }
+
     auto physics = new BuggyPhysics(buggy);
     scope (exit) physics.dispose();
 

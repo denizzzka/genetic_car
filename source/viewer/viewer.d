@@ -203,6 +203,8 @@ class BuggyScene: Scene
             auto frame = may.get.frame;
             if (frame.anchors.length < 2)
                 continue;
+            if (!canDrive(frame))
+                continue;
 
             auto physics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
             physics.settle(physicsDt,
