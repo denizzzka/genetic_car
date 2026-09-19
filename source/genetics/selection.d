@@ -158,6 +158,49 @@ Individual[] evolve(const Grammar gr, Individual[] pop,
     return cur;
 }
 
+/// Правок пробуем, прежде чем откатиться к исходному геному.
+private enum size_t maxMutationAttempts = 24;
+
+/**
+ * Мутация с подбором: кандидат каждый раз заново мутируется из исходного
+ * генома и принимается, только если развивается в валидный каркас — `develop`
+ * даёт ненулевой результат (в конце он проходит `isValidFrame`).
+ *
+ * С вероятностью 25% вызов целиком — подбор индела (единственного оператора,
+ * меняющего число балок и колёс); такой кандидат принимается, только если
+ * реально изменил структуру — иначе редкая структурная правка тонет среди
+ * геометрических, и каркас не растёт. Иначе весь вызов — точечные мутации.
+ * После `maxMutationAttempts` неудачных попыток — откат к исходному
+ * (немутированному) геному.
+ */
+private Genotype mutateChecked(const Grammar gr, const Genotype base,
+    size_t mutateHits, ref Random rnd)
+{
+    auto baseDev = develop(gr, base);
+    const baseBeams = baseDev.isNull ? size_t.max : baseDev.get.frame.beams.length;
+    const baseAnchors = baseDev.isNull ? size_t.max : baseDev.get.frame.anchors.length;
+
+    const structural = uniform(0.0f, 1.0f, rnd) < 0.25f;
+    foreach (_; 0 .. maxMutationAttempts)
+    {
+        auto candidate = base.dup;
+        if (structural)
+            mutateIndel(candidate, 1, rnd);
+        else
+            mutate(candidate, mutateHits, rnd);
+
+        auto may = develop(gr, candidate);
+        if (may.isNull)
+            continue;
+        if (structural
+            && may.get.frame.beams.length == baseBeams
+            && may.get.frame.anchors.length == baseAnchors)
+            continue;
+        return candidate;
+    }
+    return base.dup;
+}
+
 private Genotype[] buildNextGeneration(const Grammar gr, Individual[] pop,
     const EvolutionConfig p, ref Random rnd)
 {
@@ -181,17 +224,10 @@ private Genotype[] buildNextGeneration(const Grammar gr, Individual[] pop,
         const pb = ranked[tournament(ranked, p.tournamentSize, rnd)].genotype;
         auto child = crossover(pa, pb, rnd);
 
-        // Шаг мутации — mutateStep: с вероятностью 25% это индел — единственный
-        // оператор, меняющий число балок и колёс. Раньше звался только mutate,
-        // геномы не меняли длину, и эволюция лишь сдвигала геометрию фиксированного
-        // скелета. mutateStep принимает кандидата только если индел реально изменил
-        // структуру; если подходящий шаг не нашёлся — запасной точечный mutate.
-        auto may = mutateStep(gr, child, rnd);
-        if (may.isNull)
-            mutate(child, p.mutateHits, rnd);
-        else
-            child = may.get;
-        next ~= child;
+        // Мутация с проверкой валидности каркаса: кандидат заново мутируется
+        // из исходного ребёнка, пока развивка не даёт валидный каркас;
+        // после maxMutationAttempts — откат к исходному ребёнку.
+        next ~= mutateChecked(gr, child, p.mutateHits, rnd);
     }
     return next;
 }
@@ -288,7 +324,7 @@ unittest
 
 unittest
 {
-    // Структурные мутации подключены в цикл отбора (mutateStep): число
+    // Структурные мутации подключены в цикл отбора (mutateChecked): число
     // балок и колёс обязано уметь расти за поколения, а не только менять
     // геометрию фиксированного скелета.
     auto gr = buggyGrammar();
@@ -311,4 +347,19 @@ unittest
     }
     assert(grewBeams, "число балок должно уметь расти через инделы");
     assert(grewAnchors, "число колёс должно уметь расти через инделы");
+}
+
+unittest
+{
+    // mutateChecked: результат либо развивается в валидный каркас, либо —
+    // откат к исходному (валидному) геному после исчерпания попыток.
+    auto gr = buggyGrammar();
+    auto rnd = Random(5);
+    auto pop = evaluatePopulation(gr, seedPopulation(gr, 20));
+    foreach (e; pop)
+    {
+        auto child = mutateChecked(gr, e.genotype, 3, rnd);
+        assert(!develop(gr, child).isNull || child.genes == e.genotype.genes,
+            "мутация с подбором либо валидна, либо откатывается к исходнику");
+    }
 }

@@ -128,35 +128,3 @@ unittest
     assert(avg >= 1 && avg <= 6,
         "одна мутация не должна обрушивать или раздувать каркас");
 }
-
-unittest
-{
-    import std.random: Random;
-
-    // Число балок и колёс не заложено в стартовый каркас: за 50 шагов
-    // мутации структура должна уметь вырасти, а не только менять геометрию.
-    auto gr = buggyGrammar();
-    auto genome = startGenome(gr);
-    auto rnd = Random(42);
-
-    const startBeams = develop(gr, genome).get.frame.beams.length;
-    const startAnchors = develop(gr, genome).get.frame.anchors.length;
-    bool grewBeams, grewAnchors;
-
-    foreach (_; 0 .. 50)
-    {
-        auto next = mutateStep(gr, genome, rnd);
-        if (next.isNull)
-            continue;
-
-        auto f = develop(gr, next.get).get.frame;
-        if (f.beams.length > startBeams)
-            grewBeams = true;
-        if (f.anchors.length > startAnchors)
-            grewAnchors = true;
-        genome = next.get;
-    }
-
-    assert(grewBeams, "балки должны уметь появляться");
-    assert(grewAnchors, "колёса должны уметь появляться");
-}

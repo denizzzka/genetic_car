@@ -1,7 +1,6 @@
 module genetics.buggygrammar;
 
 import std.math;
-import std.random: Random, uniform;
 import std.typecons: Nullable;
 import dlib.math.vector;
 import frame.frame;
@@ -391,46 +390,6 @@ Nullable!Frame toFrame(const Terminal!Tok[] tokens)
     if (ast.isNull)
         return Nullable!Frame.init;
     return frameFromAst(ast.get);
-}
-
-/**
- * Один шаг мутации генома с проверкой развития.
- *
- * Обычно — точечные правки (`mutate`). С вероятностью 25% — индельная
- * мутация (`mutateIndel`), единственная, что меняет длины генов и, значит,
- * число балок и колёс. Индел принимается, только если он действительно
- * изменил структуру: иначе редкая структурная правка тонет среди
- * геометрических, и каркас никогда не растёт.
- *
- * Возврат — сам результат: `Nullable!Genotype.isNull` означает, что подходящий
- * мутант не нашёлся.
- */
-Nullable!Genotype mutateStep(const Grammar gr, const Genotype genome, ref Random rnd)
-{
-    const current = develop(gr, genome);
-    if (current.isNull)
-        return Nullable!Genotype.init;
-
-    const structural = uniform(0.0f, 1.0f, rnd) < 0.25f;
-    foreach (_; 0 .. 100)
-    {
-        auto candidate = genome.dup;
-        if (structural)
-            mutateIndel(candidate, 1, rnd);
-        else
-            mutate(candidate, 1 + uniform(0u, 3u, rnd), rnd);
-
-        auto may = develop(gr, candidate);
-        if (may.isNull)
-            continue;
-        if (structural
-            && may.get.frame.beams.length == current.get.frame.beams.length
-            && may.get.frame.anchors.length == current.get.frame.anchors.length)
-            continue;
-
-        return Nullable!Genotype(candidate);
-    }
-    return Nullable!Genotype.init;
 }
 
 unittest
