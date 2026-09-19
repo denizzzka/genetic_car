@@ -14,6 +14,12 @@ import dmech;
 /// даёт внешний радиус 0.2 + 0.1 = 0.3.
 enum float wheelRadius = 0.3f;
 
+/// Колесо глубже этой отметки относительно земли — провал сквозь неё.
+enum float physicsWheelBelow = -0.1f;
+
+/// Колесо выше `wheelRadius` на эту величину — переворот или съезд с полосы.
+enum float physicsWheelLift = 0.1f;
+
 /// Внутренний радиус «отверстия» колеса (покрышка — полый цилиндр).
 enum float wheelInnerRadius = 0.22f;
 

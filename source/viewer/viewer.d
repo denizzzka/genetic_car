@@ -190,8 +190,8 @@ class BuggyScene: Scene
     private void startLiveCar()
     {
         // Живой образ потомка лучшего. Сразу после усадки и на каждом шаге
-        // проверяется beamFailure(): оборванный заезд показывает разбитую
-        // машину, поэтому берём нового потомка.
+        // применяется общий с фитнесом вердикт (runFailure): оборванный заезд
+        // показывает разбитую машину, поэтому берём нового потомка.
         const int maxAttempts = 8;
         foreach (_; 0 .. maxAttempts)
         {
@@ -208,11 +208,11 @@ class BuggyScene: Scene
             physics.setSlopeDeg(physicsSlopeDeg);
             physics.settle(physicsDt,
                 cast(int)(physicsSettleSeconds / physicsDt));
-            const BeamFailure bf = physics.beamFailure();
-            if (bf != BeamFailure.none)
+            const settleFailure = runFailure(physics);
+            if (settleFailure.length)
             {
                 writefln("live: заезд оборван после усадки (%s) — другой потомок",
-                    beamFailureName(bf));
+                    settleFailure);
                 physics.dispose();
                 continue;
             }
@@ -252,11 +252,10 @@ class BuggyScene: Scene
             return;
         livePhysics.step(physicsDt, 0.0f);
         liveSimTime += physicsDt;
-        const BeamFailure bf = livePhysics.beamFailure();
-        if (bf != BeamFailure.none)
+        const stepFailure = runFailure(livePhysics);
+        if (stepFailure.length)
         {
-            writefln("live: заезд оборван (%s) — другой потомок",
-                beamFailureName(bf));
+            writefln("live: заезд оборван (%s) — другой потомок", stepFailure);
             stopLiveCar();
             startLiveCar();
             return;
@@ -265,13 +264,6 @@ class BuggyScene: Scene
             restartLiveCar();
         else
             updateLiveCar();
-    }
-
-    private string beamFailureName(BeamFailure bf)
-    {
-        return bf == BeamFailure.ground
-            ? "балка каркаса касается земли"
-            : (bf == BeamFailure.wheel ? "балка касается постороннего колеса" : "?");
     }
 
     private void restartLiveCar()

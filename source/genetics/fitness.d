@@ -211,8 +211,6 @@ enum double physicsSimSeconds = 3.0;      ///< длительность заез
 enum float physicsNominalSpeed = 2.0f;    ///< м/с фитнеса — дистанция-норма
 enum float physicsSlopeDeg = 25.0f;       ///< уклон «горки» (наклон вектора g)
 enum double physicsSettleSeconds = 1.0;   ///< успокоение осадки перед стартом
-enum float physicsWheelBelow = -0.1f;     ///< колесо глубже этого — провал
-enum float physicsWheelLift = 0.1f;       ///< колесо выше этого — переворот/съезд
 
 /// Итог физического заезда одной машины.
 ///
@@ -256,28 +254,16 @@ PhysicsResult physicsRun(const Buggy buggy, double seconds)
     physics.settle(physicsDt,
         cast(int)(physicsSettleSeconds / physicsDt));
 
+    const settleFailure = runFailure(physics);
+    if (settleFailure.length)
     {
-        const BeamFailure bf = physics.beamFailure();
-        if (bf == BeamFailure.ground)
-        {
-            r.why = "балка каркаса касается земли";
-            return r;
-        }
-        if (bf == BeamFailure.wheel)
-        {
-            r.why = "балка каркаса касается колеса";
-            return r;
-        }
+        r.why = settleFailure;
+        return r;
     }
 
     const size_t steps = cast(size_t)(seconds / physicsDt);
 
     auto wheels = physics.wheelStates();
-    if (wheels.length == 0)
-    {
-        r.why = "не осталось колёс после усадки";
-        return r;
-    }
     r.beams = physics.beamStates().length;
 
     double startY = 0.0;
@@ -291,66 +277,14 @@ PhysicsResult physicsRun(const Buggy buggy, double seconds)
     {
         physics.step(physicsDt, 0.0f);
 
+        const stepFailure = runFailure(physics);
+        if (stepFailure.length)
+        {
+            r.why = stepFailure;
+            break;
+        }
+
         wheels = physics.wheelStates();
-        if (wheels.length == 0)
-        {
-            r.why = "не осталось колёс";
-            break;
-        }
-
-        bool broken = false;
-        foreach (s; wheels)
-        {
-            if (!isFinite(s.position.x) || !isFinite(s.position.y)
-                || !isFinite(s.position.z))
-            {
-                r.why = "каркас разлетелся";
-                broken = true;
-                break;
-            }
-            if (s.position.z < physicsWheelBelow)
-            {
-                r.why = "колесо провалилось под землю";
-                broken = true;
-                break;
-            }
-            if (s.position.z > wheelRadius + physicsWheelLift)
-            {
-                r.why = "машина перевернулась";
-                broken = true;
-                break;
-            }
-        }
-        if (broken)
-            break;
-
-        foreach (s; physics.beamStates())
-            if (!isFinite(s.position.x) || !isFinite(s.position.y)
-                || !isFinite(s.position.z))
-            {
-                r.why = "балка разлетелась";
-                broken = true;
-                break;
-            }
-        if (broken)
-            break;
-
-        {
-            const BeamFailure bf = physics.beamFailure();
-            if (bf == BeamFailure.ground)
-            {
-                r.why = "балка каркаса касается земли";
-                broken = true;
-            }
-            else if (bf == BeamFailure.wheel)
-            {
-                r.why = "балка каркаса касается колеса";
-                broken = true;
-            }
-        }
-        if (broken)
-            break;
-
         double curY = 0.0;
         foreach (s; wheels)
             curY += s.position.y;

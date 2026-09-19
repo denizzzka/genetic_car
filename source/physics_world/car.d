@@ -545,3 +545,39 @@ final class BuggyPhysics
         }
     }
 }
+
+/// Вердикт заезда
+string runFailure(BuggyPhysics physics)
+{
+    const wheels = physics.wheelStates();
+    if (wheels.length == 0)
+        return "не осталось колёс";
+
+    foreach (s; wheels)
+    {
+        if (!isFinite(s.position.x) || !isFinite(s.position.y)
+            || !isFinite(s.position.z))
+            return "каркас разлетелся";
+        if (s.position.z < physicsWheelBelow)
+            return "колесо провалилось под землю";
+        if (s.position.z > wheelRadius + physicsWheelLift)
+            return "машина перевернулась";
+    }
+
+    foreach (s; physics.beamStates())
+        if (!isFinite(s.position.x) || !isFinite(s.position.y)
+            || !isFinite(s.position.z))
+            return "балка разлетелась";
+
+    switch (physics.beamFailure())
+    {
+        case BeamFailure.ground:
+            return "балка каркаса касается земли";
+        case BeamFailure.wheel:
+            return "балка каркаса касается колеса";
+        case BeamFailure.none:
+        default:
+            break;
+    }
+    return "";
+}
