@@ -207,6 +207,7 @@ float buggyFitness(const Frame f, const Ast ast)
 
 /// Параметры заезда (физический слой оценки).
 enum double physicsDt = 1.0 / 60.0;       ///< шаг симуляции (стабильный dt)
+enum double physicsSimSeconds = 3.0;      ///< длительность заезда особи, сек
 enum float physicsNominalSpeed = 2.0f;    ///< м/с фитнеса — дистанция-норма
 enum float physicsSlopeDeg = 25.0f;       ///< уклон «горки» (наклон вектора g)
 enum double physicsSettleSeconds = 1.0;   ///< успокоение осадки перед стартом

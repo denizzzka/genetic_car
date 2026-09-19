@@ -176,6 +176,9 @@ class BuggyScene: Scene
     {
         const gr = grammar;
         auto input = population;
+        // Сброс до старта: иначе устаревший true от прошлого задания
+        // мгновенно применяет результат и гасит live-заезд.
+        atomicStore(jobDone, false);
         jobThread = new Thread({
             auto rnd = Random(42);
             jobOutput = evolve(gr, input, generations, rnd, cfg);

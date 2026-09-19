@@ -1,7 +1,6 @@
 module genetics.selection;
 
 import std.algorithm : sort, min, max;
-import std.range : iota;
 import std.random;
 import std.stdio : writefln;
 import std.parallelism : TaskPool, totalCPUs;
@@ -30,18 +29,12 @@ struct EvolutionConfig
     size_t mutateHits = 3;
     size_t generationsPerPress = 100;
 
-    /// Длительность физического заезда в секундах при оценке особи.
-    /// 0 — оценка только статикой (быстрая; для тестов и поколения 0).
-    /// > 0 — гибрид: статика как гейт, затем симуляция.
     double simulateSeconds = 0.0;
 
     /// Печатать в stdout итоги физического заезда по каждой особи
     /// (`physicsRun`) и сводку best/mean по каждому поколению `evolve`.
     /// По умолчанию тихо — включается во вьюере для наблюдения за эволюцией.
     bool logPhysics = false;
-
-    /// Распараллеливать физический слой на пуле Phobos (не более 75% ядер).
-    bool parallelPhysics = true;
 }
 
 /// Поколение 0: идентичные копии закодированного дефолтного багги.
@@ -100,21 +93,20 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
         res[i] = Individual(g, fit);
     }
 
-    auto runAt = (size_t k) {
-        auto run = physicsRun(needPhysics[k], params.simulateSeconds);
+    const runs = physicsPool().amap!runBuggy(needPhysics);
+    foreach (k, run; runs)
+    {
         res[physIdx[k]].fitness *= run.score;
         if (params.logPhysics)
             logPhysicsIndividual(physIdx[k], generation, res[physIdx[k]].fitness, run);
-    };
-
-    if (params.parallelPhysics && needPhysics.length > 1)
-        foreach (k; physicsPool().parallel(iota(needPhysics.length), 1))
-            runAt(k);
-    else
-        foreach (k; 0 .. needPhysics.length)
-            runAt(k);
+    }
 
     return res;
+}
+
+private PhysicsResult runBuggy(Buggy buggy)
+{
+    return physicsRun(buggy, physicsSimSeconds);
 }
 
 private void logPhysicsIndividual(size_t idx, size_t generation, float finalFit, const PhysicsResult run)
