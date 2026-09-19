@@ -62,10 +62,9 @@ class BuggyScene: Scene
     private Vector3f chassisScale;
     private Frame liveFrame;
     private double liveSimTime;
-
-    /// Круг заезда на витрине (столько же, сколько длится заезд особи),
-    /// после — заново, иначе машина уедет за сцену.
-    enum double liveRunSeconds = 3.0;
+    // Круг витрины = длительность заезда особи (simulateSeconds из конфига
+    // оценки); после — заново, иначе машина уедет за сцену.
+    private double liveRunSeconds;
 
     override void afterLoad()
     {
@@ -74,6 +73,7 @@ class BuggyScene: Scene
         rnd = Random(42);
         // Гибридная оценка: статический гейт + 3 секунды физического заезда.
         evolutionConfig.simulateSeconds = 3.0;
+        liveRunSeconds = evolutionConfig.simulateSeconds;
         // Виден ли ход заездов в stdout (по особам и поколениям).
         evolutionConfig.logPhysics = true;
 
