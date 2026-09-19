@@ -256,6 +256,20 @@ PhysicsResult physicsRun(const Buggy buggy, double seconds)
     physics.settle(physicsDt,
         cast(int)(physicsSettleSeconds / physicsDt));
 
+    {
+        const BeamFailure bf = physics.beamFailure();
+        if (bf == BeamFailure.ground)
+        {
+            r.why = "балка каркаса касается земли";
+            return r;
+        }
+        if (bf == BeamFailure.wheel)
+        {
+            r.why = "балка каркаса касается колеса";
+            return r;
+        }
+    }
+
     const size_t steps = cast(size_t)(seconds / physicsDt);
 
     auto wheels = physics.wheelStates();
@@ -318,6 +332,22 @@ PhysicsResult physicsRun(const Buggy buggy, double seconds)
                 broken = true;
                 break;
             }
+        if (broken)
+            break;
+
+        {
+            const BeamFailure bf = physics.beamFailure();
+            if (bf == BeamFailure.ground)
+            {
+                r.why = "балка каркаса касается земли";
+                broken = true;
+            }
+            else if (bf == BeamFailure.wheel)
+            {
+                r.why = "балка каркаса касается колеса";
+                broken = true;
+            }
+        }
         if (broken)
             break;
 

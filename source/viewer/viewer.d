@@ -58,8 +58,6 @@ class BuggyScene: Scene
     // Живой заезд realtime:
     private BuggyPhysics livePhysics;
     private Entity[] liveCar;
-    private Mesh meshChassis = null;
-    private Vector3f chassisScale;
     private Frame liveFrame;
     private double liveSimTime;
     // Круг витрины = длительность заезда особи (simulateSeconds из конфига
@@ -96,8 +94,6 @@ class BuggyScene: Scene
 
         meshBeam = New!ShapeCylinder(1.0f, 1.0f, 8, assetManager);
         meshWheel = New!ShapeTorus(0.2f, 0.1f, 16, 8, assetManager);
-        // Полуразмерный бокс (1×1×1): масштабом e.scaling = габариты рамы.
-        meshChassis = New!ShapeBox(Vector3f(0.5f, 0.5f, 0.5f), assetManager);
 
         matBeam = addMaterial();
         matBeam.baseColorFactor = Color4f(0.55f, 0.55f, 0.62f, 1.0f);
@@ -209,29 +205,18 @@ class BuggyScene: Scene
         liveFrame = frame;
         liveSimTime = 0.0;
 
-        // Габариты рамы под кузов-бокс: как в BuggyPhysics.buildChassis.
-        vec3 minP = vec3(float.max, float.max, float.max);
-        vec3 maxP = vec3(-float.max, -float.max, -float.max);
-        foreach (n; frame.nodes)
+        // По одному цилиндру на каждую балку каркаса: порядок совпадает
+        // с BeamState[] из beamStates() (по Frame.beams).
+        foreach (b; frame.beams)
         {
-            minP.x = min(minP.x, n.pos.x);
-            minP.y = min(minP.y, n.pos.y);
-            minP.z = min(minP.z, n.pos.z);
-            maxP.x = max(maxP.x, n.pos.x);
-            maxP.y = max(maxP.y, n.pos.y);
-            maxP.z = max(maxP.z, n.pos.z);
+            const float len =
+                (frame.nodes[b.b].pos - frame.nodes[b.a].pos).length;
+            auto e = addEntity(carRoot);
+            e.drawable = meshBeam;
+            e.material = matBeam;
+            e.scaling = Vector3f(b.radius, len, b.radius);
+            liveCar ~= e;
         }
-        vec3 dims = maxP - minP;
-        dims.x = max(dims.x, 0.1f);
-        dims.y = max(dims.y, 0.1f);
-        dims.z = max(dims.z, 0.1f);
-        // Небольшой запас по габариту — кузов зрительно обнимает раму.
-        chassisScale = dims + vec3(0.1f, 0.1f, 0.1f);
-
-        liveCar ~= addEntity(carRoot); // рама
-        liveCar[$ - 1].drawable = meshChassis;
-        liveCar[$ - 1].material = matBeam;
-        liveCar[$ - 1].scaling = chassisScale;
 
         foreach (a; frame.anchors)
         {
@@ -269,19 +254,23 @@ class BuggyScene: Scene
     private void updateLiveCar()
     {
         const beams = livePhysics.beamStates();
-        if (beams.length > 0 && liveCar.length > 0)
-        {
-            liveCar[0].position = beams[0].position;
-            liveCar[0].rotation = beams[0].orientation;
-        }
+        foreach (i, s; beams)
+            if (i < liveCar.length)
+            {
+                liveCar[i].position = s.position;
+                liveCar[i].rotation = s.orientation;
+            }
 
         const wheels = livePhysics.wheelStates();
-        foreach (i; 1 .. liveCar.length)
-            if (i <= wheels.length)
+        foreach (i, s; wheels)
+        {
+            const size_t idx = beams.length + i;
+            if (idx < liveCar.length)
             {
-                liveCar[i].position = wheels[i - 1].position;
-                liveCar[i].rotation = wheels[i - 1].orientation;
+                liveCar[idx].position = s.position;
+                liveCar[idx].rotation = s.orientation;
             }
+        }
     }
 
     private void stopLiveCar()
