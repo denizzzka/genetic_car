@@ -52,17 +52,23 @@ class BuggyScene: Scene
     /// Фоновый поток при создании новых поколений
     private Thread jobThread;
     private shared bool jobDone;
-    private Individual[] jobOutput;
-    private size_t jobGens;
 
     // Живой заезд realtime:
     private BuggyPhysics livePhysics;
     private Entity[] liveCar;
-    private Frame liveFrame;
     private double liveSimTime;
-    // Круг витрины = длительность заезда особи (simulateSeconds из конфига
-    // оценки); после — заново, иначе машина уедет за сцену.
     private double liveRunSeconds;
+
+    private Buggy[] liveBatch;
+    private size_t liveBatchIdx;
+
+    // Гонка поколений: строится на главном потоке, физика считается в фоне.
+    private Individual[] cur;
+    private size_t runGens;
+    private size_t gensDone;
+    private size_t jobGen;
+    private PhysicsBatch batch;
+    private EvolutionConfig runCfg;
 
     override void afterLoad()
     {
@@ -144,12 +150,21 @@ class BuggyScene: Scene
         {
             if (atomicLoad(jobDone))
             {
-                population = jobOutput;
-                generation += jobGens;
                 jobThread = null;
-                stopLiveCar();
-                buildGallery();
-                logGeneration();
+                cur = batch.res;
+                generation++;
+                if (gensDone + 1 < runGens)
+                {
+                    gensDone++;
+                    startNextGen();
+                }
+                else
+                {
+                    population = cur;
+                    stopLiveCar();
+                    buildGallery();
+                    logGeneration();
+                }
             }
             else
                 stepLiveCar();
@@ -164,46 +179,60 @@ class BuggyScene: Scene
         }
         else if (eventManager.keyDown[KEY_G])
             submitEvolution(evolutionConfig.generationsPerPress, evolutionConfig);
-        else if (eventManager.keyDown[KEY_M])
-            submitEvolution(1, EvolutionConfig.init);
     }
 
     private void submitEvolution(size_t generations, EvolutionConfig cfg)
     {
-        const gr = grammar;
-        auto input = population;
         // Сброс до старта: иначе устаревший true от прошлого задания
         // мгновенно применяет результат и гасит live-заезд.
         atomicStore(jobDone, false);
-        jobThread = new Thread({
-            auto rnd = Random(42);
-            jobOutput = evolve(gr, input, generations, rnd, cfg);
-            jobGens = generations;
-            atomicStore(jobDone, true);
-        });
-        jobThread.isDaemon = true;
-        jobThread.start();
+        runCfg = cfg;
+        cur = population;
+        runGens = generations;
+        gensDone = 0;
+        jobThread = null;
+        startNextGen();
         removeCar();
         startLiveCar();
     }
 
+    /// Строит партию поколения на главном потоке и запускает её физику в фоне.
+    private void startNextGen()
+    {
+        auto children = buildNextGeneration(grammar, cur, runCfg, rnd);
+        batch = evaluateStatic(grammar, children, runCfg);
+        jobGen = generation + 1;
+        atomicStore(jobDone, false);
+        jobThread = new Thread({
+            runPhysics(batch, runCfg, jobGen);
+            atomicStore(jobDone, true);
+        });
+        jobThread.isDaemon = true;
+        jobThread.start();
+    }
+
     private void startLiveCar()
     {
-        // Живой образ потомка лучшего. Сразу после усадки и на каждом шаге
-        // применяется общий с фитнесом вердикт (runFailure): оборванный заезд
-        // показывает разбитую машину, поэтому берём нового потомка.
-        const int maxAttempts = 8;
-        foreach (_; 0 .. maxAttempts)
+        liveBatch = null;
+        liveBatchIdx = 0;
+    }
+
+    private bool showNextLiveBuggy()
+    {
+        reload:
+        if (liveBatch is null || liveBatchIdx >= liveBatch.length)
         {
-            auto descendant = descendantOfBest(grammar, population,
-                evolutionConfig.tournamentSize, evolutionConfig.mutateHits, rnd);
-            auto may = develop(grammar, descendant);
-            if (may.isNull)
-                continue;
-            auto frame = may.get.frame;
-            if (frame.anchors.length < 2)
-                continue;
-            if (!canDrive(frame))
+            auto next = batch.needPhysics;
+            if (next is liveBatch || next.length == 0)
+                return false;
+            liveBatch = next;
+            liveBatchIdx = 0;
+        }
+
+        foreach (attempt; liveBatchIdx .. liveBatch.length)
+        {
+            Frame frame = liveBatch[attempt].frame;
+            if (frame.anchors.length < 2 || !canDrive(frame))
                 continue;
 
             auto physics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
@@ -212,14 +241,21 @@ class BuggyScene: Scene
             const settleFailure = runFailure(physics);
             if (settleFailure.length)
             {
-                writefln("live: заезд оборван после усадки (%s) — другой потомок",
+                writefln("live: заезд оборван после усадки (%s) — следующая машина",
                     settleFailure);
                 physics.dispose();
                 continue;
             }
 
+            if (livePhysics !is null)
+            {
+                livePhysics.dispose();
+                livePhysics = null;
+            }
+            removeLiveEntities();
+
+            liveBatchIdx = attempt + 1;
             livePhysics = physics;
-            liveFrame = frame;
             liveSimTime = 0.0;
 
             // По одному цилиндру на каждую балку каркаса: порядок совпадает
@@ -242,44 +278,54 @@ class BuggyScene: Scene
                 e.material = a.kind == AnchorKind.motorWheel ? matDriveWheel : matWheel;
                 liveCar ~= e;
             }
-            return;
+            return true;
         }
-        writefln("live: не удалось показать ни одного потомка");
+
+        liveBatchIdx = liveBatch.length;
+        goto reload;
     }
 
     private void stepLiveCar()
     {
         if (livePhysics is null)
+        {
+            if (showNextLiveBuggy())
+                updateLiveCar();
             return;
+        }
+
         livePhysics.step(physicsDt, 1.0f);
         liveSimTime += physicsDt;
+
         const stepFailure = runFailure(livePhysics);
         if (stepFailure.length)
         {
-            writefln("live: заезд оборван (%s) — другой потомок", stepFailure);
-            stopLiveCar();
-            startLiveCar();
+            writefln("live: заезд оборван (%s) — следующая машина", stepFailure);
+            showNextLiveBuggy();
+            updateLiveCar();
             return;
         }
+
         if (liveSimTime >= liveRunSeconds)
-            restartLiveCar();
-        else
-            updateLiveCar();
+            showNextLiveBuggy();
+        updateLiveCar();
     }
 
-    private void restartLiveCar()
+    private void removeLiveEntities()
     {
-        if (livePhysics !is null)
-            livePhysics.dispose();
-        livePhysics = new BuggyPhysics(new Buggy(liveFrame, vec3(0.0f)));
-        livePhysics.settle(physicsDt,
-            cast(int)(physicsSettleSeconds / physicsDt));
-        liveSimTime = 0.0;
-        updateLiveCar();
+        foreach (e; liveCar)
+        {
+            removeEntity(e);
+            carRoot.removeChild(e);
+        }
+        liveCar.length = 0;
     }
 
     private void updateLiveCar()
     {
+        if (livePhysics is null)
+            return;
+
         const beams = livePhysics.beamStates();
         foreach (i, s; beams)
             if (i < liveCar.length)
@@ -302,17 +348,14 @@ class BuggyScene: Scene
 
     private void stopLiveCar()
     {
-        foreach (e; liveCar)
-        {
-            removeEntity(e);
-            carRoot.removeChild(e);
-        }
-        liveCar.length = 0;
+        removeLiveEntities();
         if (livePhysics !is null)
         {
             livePhysics.dispose();
             livePhysics = null;
         }
+        liveBatch = null;
+        liveBatchIdx = 0;
     }
 
     private void logGeneration()

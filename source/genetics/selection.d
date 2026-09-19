@@ -67,9 +67,15 @@ private TaskPool physicsPool()
     return physicsPool_;
 }
 
-/// Оценка популяции
-Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
-    const EvolutionConfig params = EvolutionConfig.init, size_t generation = 0)
+struct PhysicsBatch
+{
+    Individual[] res;
+    Buggy[] needPhysics;
+    size_t[] physIdx;
+}
+
+PhysicsBatch evaluateStatic(const Grammar gr, Genotype[] pop,
+    const EvolutionConfig params = EvolutionConfig.init)
 {
     auto res = new Individual[pop.length];
 
@@ -93,15 +99,29 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
         res[i] = Individual(g, fit);
     }
 
-    const runs = physicsPool().amap!runBuggy(needPhysics);
+    return PhysicsBatch(res, needPhysics, physIdx);
+}
+
+void runPhysics(ref PhysicsBatch batch, const EvolutionConfig params,
+    size_t generation = 0)
+{
+    const runs = physicsPool().amap!runBuggy(batch.needPhysics);
     foreach (k, run; runs)
     {
-        res[physIdx[k]].fitness *= run.score;
+        batch.res[batch.physIdx[k]].fitness *= run.score;
         if (params.logPhysics)
-            logPhysicsIndividual(physIdx[k], generation, res[physIdx[k]].fitness, run);
+            logPhysicsIndividual(batch.physIdx[k], generation,
+                batch.res[batch.physIdx[k]].fitness, run);
     }
+}
 
-    return res;
+/// Оценка популяции
+Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
+    const EvolutionConfig params = EvolutionConfig.init, size_t generation = 0)
+{
+    auto batch = evaluateStatic(gr, pop, params);
+    runPhysics(batch, params, generation);
+    return batch.res;
 }
 
 private PhysicsResult runBuggy(Buggy buggy)
@@ -131,7 +151,9 @@ Individual[] evolve(const Grammar gr, Individual[] pop,
     foreach (gen; 0 .. generations)
     {
         auto children = buildNextGeneration(gr, cur, params, rnd);
-        cur = evaluatePopulation(gr, children, params, gen + 1);
+        auto batch = evaluateStatic(gr, children, params);
+        runPhysics(batch, params, gen + 1);
+        cur = batch.res;
         if (params.logPhysics)
             writefln("gen %2d: best=%.4f mean=%.4f",
                 gen + 1, bestFitness(cur), meanFitness(cur));
@@ -182,7 +204,7 @@ private Genotype mutateChecked(const Grammar gr, const Genotype base,
     return base.dup;
 }
 
-private Genotype[] buildNextGeneration(const Grammar gr, Individual[] pop,
+Genotype[] buildNextGeneration(const Grammar gr, Individual[] pop,
     const EvolutionConfig p, ref Random rnd)
 {
     Genotype[] next;
@@ -211,23 +233,6 @@ private Genotype[] buildNextGeneration(const Grammar gr, Individual[] pop,
         next ~= mutateChecked(gr, child, p.mutateHits, rnd);
     }
     return next;
-}
-
-/// Потомок лучшей особи популяции
-Genotype descendantOfBest(const Grammar gr, const Individual[] pop,
-    size_t tournamentSize, size_t mutateHits, ref Random rnd)
-{
-    if (pop.length == 0)
-        return startGenome(gr);
-
-    size_t best = 0;
-    foreach (i, e; pop)
-        if (e.fitness > pop[best].fitness)
-            best = i;
-
-    const mate = pop[tournament(pop, tournamentSize, rnd)].genotype;
-    auto child = crossover(pop[best].genotype, mate, rnd);
-    return mutateChecked(gr, child, mutateHits, rnd);
 }
 
 /// Турнирная селекция: индекс особи с максимальным фитнесом среди `k`.
