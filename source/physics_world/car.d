@@ -421,11 +421,13 @@ final class BuggyPhysics
     }
 
     /**
-     * Обрыв заезда из-за каркаса: балка ударилась об землю или о колесо.
+     * Обрыв заезда из-за каркаса: балка ударилась об землю, а любое
+     * соприкосновение частей колёс с балкой или другим колесом отбраковывается.
      *
-     * Контакт балки со СВОЕЙ ступицей (колесом, приваренным к концу этой
-     * балки) не считается задеванием — балка легитимно проходит через
-     * отверстие оси своего колеса.
+     * Единственное исключение — контакт балки со СВОЕЙ ступицей (колесом,
+     * приваренным к концу этой балки): ось легитимно проходит через колесо,
+     * без этого не собрать ни одного каркаса. Вся остальная часть колеса,
+     * цепляющая уже чужую балку или чужое колесо, — повод для отбраковки.
      */
     BeamFailure beamFailure()
     {
@@ -451,16 +453,25 @@ final class BuggyPhysics
                     && c.point.z < -beamGroundEps)
                     return BeamFailure.ground;
 
+                const wi = wheelShapeIndex(s1);
+                const wj = wheelShapeIndex(s2);
+
+                // Любое соприкосновение двух колёс каркаса (не только якоря в
+                // одной точке): их тела сцепляются и глушат привод — машина
+                // не едет. Синтаксически такие каркасы валидны, ловим здесь.
+                if (wi != size_t.max && wj != size_t.max)
+                    return BeamFailure.wheelWheel;
+
                 if (bi != size_t.max)
                 {
-                    const wj = wheelShapeIndex(s2);
-                    if (wj != size_t.max && !isOwnWheel(bi, wj))
+                    const wwj = wheelShapeIndex(s2);
+                    if (wwj != size_t.max && !isOwnWheel(bi, wwj))
                         return BeamFailure.wheel;
                 }
                 if (bj != size_t.max)
                 {
-                    const wi = wheelShapeIndex(s1);
-                    if (wi != size_t.max && !isOwnWheel(bj, wi))
+                    const wwi = wheelShapeIndex(s1);
+                    if (wwi != size_t.max && !isOwnWheel(bj, wwi))
                         return BeamFailure.wheel;
                 }
             }
@@ -597,6 +608,8 @@ string runFailure(BuggyPhysics physics)
             return "балка каркаса касается земли";
         case BeamFailure.wheel:
             return "балка каркаса касается колеса";
+        case BeamFailure.wheelWheel:
+            return "колёса каркаса соприкасаются";
         case BeamFailure.none:
         default:
             break;
@@ -619,4 +632,58 @@ unittest
 
     f.motorPower = minMotorPower + 1.0f;
     assert(canDrive(f), "мотор-колесо с заметным моментом — привод есть");
+}
+
+unittest
+{
+    // Столкновение колёс между собой — обрыв заезда. Два якоря в одной точке
+    // (wheel + motorWheel на одном узле) дают совпадающие коллайдеры, которые
+    // глушат привод; движок устойчиво держит между ними контакт, поэтому
+    // отбраковка срабатывает и до, и после шагов газом.
+    Frame vframe()
+    {
+        Frame fr;
+        fr.nodes ~= Node(vec3(0.0f, 0.904f, 0.300f));
+        fr.nodes ~= Node(vec3(0.602f, -0.505f, 0.101f));
+        fr.nodes ~= Node(vec3(-0.602f, -0.505f, 0.101f));
+        fr.nodes ~= Node(vec3(1.204f, -1.915f, -0.098f));
+        fr.nodes ~= Node(vec3(-1.204f, -1.915f, -0.098f));
+        fr.beams ~= Beam(0, 1, 0.050f);
+        fr.beams ~= Beam(0, 2, 0.050f);
+        fr.beams ~= Beam(1, 3, 0.044f);
+        fr.beams ~= Beam(2, 4, 0.044f);
+        fr.motorPower = 109.6f;
+        return fr;
+    }
+
+    // Нормальный каркас: по одному якорю на узел — колёса не касаются друг
+    // друга, заезд не обрывается из-за wheelWheel.
+    Frame good = vframe();
+    good.anchors ~= Anchor(1, AnchorKind.wheel);
+    good.anchors ~= Anchor(2, AnchorKind.wheel);
+    good.anchors ~= Anchor(3, AnchorKind.motorWheel);
+    good.anchors ~= Anchor(4, AnchorKind.motorWheel);
+    {
+        auto physics = new BuggyPhysics(new Buggy(good, vec3(0.0f)));
+        scope (exit) physics.dispose();
+        physics.settle(1.0 / 60.0, 30);
+        assert(physics.beamFailure() == BeamFailure.none,
+            "ступицы своих балок не должны отбраковывать живую машину");
+    }
+
+    // Дубли: два колеса в каждом из двух узлов — коллизия колёс ловится.
+    // Контакт колёс появляется на первом же world.update() и держится всё
+    // время: совпадающие тела не развести, они заперты в пересечении.
+    Frame dup = vframe();
+    dup.anchors ~= Anchor(4, AnchorKind.wheel);
+    dup.anchors ~= Anchor(3, AnchorKind.wheel);
+    dup.anchors ~= Anchor(4, AnchorKind.motorWheel);
+    dup.anchors ~= Anchor(3, AnchorKind.motorWheel);
+    {
+        auto physics = new BuggyPhysics(new Buggy(dup, vec3(0.0f)));
+        scope (exit) physics.dispose();
+        physics.settle(1.0 / 60.0, 30);
+        assert(physics.beamFailure() == BeamFailure.wheelWheel,
+            "совпадающие колёса должны отбраковываться по столкновению");
+    }
 }
