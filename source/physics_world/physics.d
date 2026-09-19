@@ -3,6 +3,7 @@ module physics_world.physics;
 import std.math;
 import std.exception : enforce;
 
+import dlib.core.memory;
 import dlib.math.vector;
 import dlib.math.matrix;
 import dlib.math.quaternion;
@@ -55,6 +56,20 @@ struct BodyState
 {
     Vector3f position;
     Quaternionf orientation;
+}
+
+/// Цилиндр Newton создаётся с осью вдоль ЛОКАЛЬНОЙ X, тогда как весь
+/// остальной код (и визуальный меш) считает ось цилиндра локальной Y —
+/// ось вращения колеса, продольная ось балки. Разворачиваем форму на
+/// +90° вокруг Z, чтобы физическая ось легла вдоль локального Y и совпала
+/// с мешем: поворот вокруг Z отображает X в Y.
+NewtonCylinderShape makeAxisYCylinder(float radius1, float radius2, float height,
+    NewtonPhysicsWorld world)
+{
+    auto shape = New!NewtonCylinderShape(radius1, radius2, height, world);
+    shape.setTransformation(rotationQuaternion(Vector3f(0, 0, 1), 0.5f * PI)
+        .toMatrix4x4);
+    return shape;
 }
 
 /// Причина обрыва заезда из-за каркаса: балка или колесо задели внешний объект.

@@ -320,7 +320,8 @@ final class BuggyPhysics
                 && wheelBodies[i] !is null)
             {
                 auto w = wheelBodies[i];
-                const vec3 axle = w.rotation.rotate(Vector3f(0.0f, 1.0f, 0.0f));
+                // Истинная ось колеса: кэш инвертирован, берём сопряжение.
+                const vec3 axle = w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
                 w.addTorque(axle * (throttle * fr.motorPower));
             }
     }
@@ -353,7 +354,7 @@ final class BuggyPhysics
             {
                 BodyState s;
                 s.position = b.position.xyz;
-                s.orientation = b.rotation;
+                s.orientation = b.rotation.conj;
                 res ~= s;
             }
         return res;
@@ -367,9 +368,57 @@ final class BuggyPhysics
             {
                 BodyState s;
                 s.position = w.position.xyz;
-                s.orientation = w.rotation;
+                s.orientation = w.rotation.conj;
                 res ~= s;
             }
+        return res;
+    }
+
+    debug:
+    /// Сырое (кэшированное dagon'ом) состояние мастера для отладки.
+    BodyState dbgMasterState() @property
+    {
+        BodyState s;
+        if (master is null)
+            return s;
+        s.position = master.position.xyz;
+        s.orientation = master.rotation;
+        return s;
+    }
+
+    debug:
+    /// Ожидаемые балки ровного монолитного каркаса: какой должна быть каждая
+    /// балка по замыслу (на месте закрепления), будучи жёстко приделанной к
+    /// мастеру. mid — ожидаемый центр, dir — ожидаемая ось (локальный Y),
+    /// len — длина.
+    static struct BeamTarget
+    {
+        Vector3f mid;
+        Vector3f dir;
+        float len;
+    }
+
+    debug:
+    BeamTarget[] dbgBeamTargets() @property
+    {
+        BeamTarget[] res;
+        if (master is null)
+            return res;
+        const Frame fr = buggy_.frame;
+        Quaternionf mt = master.rotation.conj; // истинное вращение мастера
+        foreach (i, b; buggy_.frame.beams)
+        {
+            const vec3 a = fr.nodes[b.a].pos + posOffset;
+            const vec3 c = fr.nodes[b.b].pos + posOffset;
+            const vec3 d = c - a;
+            if (d.length < 1e-5f)
+                continue;
+            BeamTarget t;
+            t.mid = master.position.xyz + mt.rotate(beamLocal[i]);
+            t.dir = mt.rotate(d);
+            t.len = d.length;
+            res ~= t;
+        }
         return res;
     }
 
@@ -411,7 +460,7 @@ final class BuggyPhysics
                 continue;
 
             auto body = New!NewtonCarBody(NewtonRigidBodyType.Kinematic,
-                New!NewtonCylinderShape(b.radius, b.radius, len, world),
+                makeAxisYCylinder(b.radius, b.radius, len, world),
                 0.0f, world, world);
             // Ось цилиндра (локальный Y) — вдоль балки.
             body.dynamic = true;
@@ -498,7 +547,7 @@ final class BuggyPhysics
                 continue;
             beamLocal[i] = master.rotation.conj.rotate(
                 beamBodies[i].position.xyz - master.position.xyz);
-            beamLocalQuat[i] = master.rotation.conj * beamBodies[i].rotation;
+            beamLocalQuat[i] = master.rotation * beamBodies[i].rotation.conj;
         }
     }
 
@@ -509,13 +558,18 @@ final class BuggyPhysics
     {
         if (master is null)
             return;
+        // Кэшированное dagon'ом вращение любого тела — инверсия истинного:
+        // dlib's fromMatrix читает матрицу Newton во встречной конвенции, и
+        // readback по правилу из toMatrix4x4 обращается. Везде дальше истинное
+        // вращение получаем через `.conj`.
+        Quaternionf mTrue = master.rotation.conj;
         foreach (i, b; beamBodies)
         {
             if (b is null)
                 continue;
-            const vec3 r = master.rotation.rotate(beamLocal[i]);
+            const vec3 r = mTrue.rotate(beamLocal[i]);
             const vec3 pos = master.position.xyz + r;
-            const Quaternionf q = master.rotation * beamLocalQuat[i];
+            const Quaternionf q = mTrue * beamLocalQuat[i];
             b.setTransformation(translationMatrix(pos) * q.toMatrix4x4);
             b.update(0.0);
             b.velocity = master.velocity + cross(master.angularVelocity, r);
@@ -576,7 +630,9 @@ final class BuggyPhysics
             if (b is null)
                 continue;
             // Ось цилиндра — локальный Y; низшая точка балки над землёй.
-            const vec3 dir = b.rotation * Vector3f(0.0f, 1.0f, 0.0f);
+            // Именно rotate, а не `*`: у dlib quat*vec это кватернионное
+            // произведение, а не поворот вектора.
+            const vec3 dir = b.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
             const float half = beamLen[i] * 0.5f;
             const float low = (b.position.z - dir.z * half) - fr.beams[i].radius;
             if (low < -beamGroundEps)
@@ -606,7 +662,7 @@ final class BuggyPhysics
                 * (wheelRadius * wheelRadius - wheelInnerRadius * wheelInnerRadius)
                 * wheelWidth);
             auto wheel = New!NewtonCarBody(NewtonRigidBodyType.Dynamic,
-                New!NewtonCylinderShape(wheelRadius, wheelRadius, wheelWidth, world),
+                makeAxisYCylinder(wheelRadius, wheelRadius, wheelWidth, world),
                 mass, world, world);
             // Ось цилиндра (локальный Y) — вдоль поперечной оси машины X.
             wheel.dynamic = true;
