@@ -221,6 +221,23 @@ private Genotype[] buildNextGeneration(const Grammar gr, Individual[] pop,
     return next;
 }
 
+/// Потомок лучшей особи популяции
+Genotype descendantOfBest(const Grammar gr, const Individual[] pop,
+    size_t tournamentSize, size_t mutateHits, ref Random rnd)
+{
+    if (pop.length == 0)
+        return startGenome(gr);
+
+    size_t best = 0;
+    foreach (i, e; pop)
+        if (e.fitness > pop[best].fitness)
+            best = i;
+
+    const mate = pop[tournament(pop, tournamentSize, rnd)].genotype;
+    auto child = crossover(pop[best].genotype, mate, rnd);
+    return mutateChecked(gr, child, mutateHits, rnd);
+}
+
 /// Турнирная селекция: индекс особи с максимальным фитнесом среди `k`.
 size_t tournament(const Individual[] pop, size_t k, ref Random rnd)
 {
