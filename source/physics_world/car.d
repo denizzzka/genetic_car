@@ -139,6 +139,9 @@ final class BuggyPhysics
     /// Тела балок каркаса: по одному RigidBody на каждую `Frame.beams`.
     private RigidBody[] beamBodies;
 
+    /// Длина каждой балки — для геометрической проверки «под землёй».
+    private float[] beamLen;
+
     /// Формы балок — для распознавания коллизий каркаса.
     private ShapeComponent[] beamShapes;
 
@@ -216,6 +219,7 @@ final class BuggyPhysics
         groundShape = null;
         master = null;
         beamBodies.length = 0;
+        beamLen.length = 0;
         beamShapes.length = 0;
         beamNodeA.length = 0;
         beamNodeB.length = 0;
@@ -279,6 +283,7 @@ final class BuggyPhysics
     {
         const Frame frame = buggy_.frame;
         beamBodies.length = frame.beams.length;
+        beamLen.length = frame.beams.length;
         beamShapes.length = frame.beams.length;
         beamNodeA.length = frame.beams.length;
         beamNodeB.length = frame.beams.length;
@@ -313,6 +318,7 @@ final class BuggyPhysics
             shape.solve = false;
 
             beamBodies[i] = body;
+            beamLen[i] = len;
             beamShapes[i] = shape;
             beamNodeA[i] = b.a;
             beamNodeB[i] = b.b;
@@ -437,7 +443,32 @@ final class BuggyPhysics
                 }
             }
         }
+        if (beamUnderground())
+            return BeamFailure.ground;
+
         return BeamFailure.none;
+    }
+
+    /// Геометрическая проверка «рама под землёй»: низшая точка поверхности
+    /// любой балки ниже `-beamGroundEps`. Не зависит от манифолдов — ловит
+    /// и глухое погружение, и проскакивание между шагами проверки.
+    private bool beamUnderground()
+    {
+        if (master is null)
+            return false;
+        const Frame fr = buggy_.frame;
+        foreach (i, b; beamBodies)
+        {
+            if (b is null)
+                continue;
+            // Ось цилиндра — локальный Y; низшая точка балки над землёй.
+            const vec3 dir = b.orientation * Vector3f(0.0f, 1.0f, 0.0f);
+            const float half = beamLen[i] * 0.5f;
+            const float low = (b.position.z - dir.z * half) - fr.beams[i].radius;
+            if (low < -beamGroundEps)
+                return true;
+        }
+        return false;
     }
 
     private size_t beamShapeIndex(const ShapeComponent s)

@@ -189,42 +189,61 @@ class BuggyScene: Scene
 
     private void startLiveCar()
     {
-        auto descendant = descendantOfBest(grammar, population,
-            evolutionConfig.tournamentSize, evolutionConfig.mutateHits, rnd);
-        auto may = develop(grammar, descendant);
-        if (may.isNull)
-            return;
-        auto frame = may.get.frame;
-        if (frame.anchors.length < 2)
-            return;
-
-        livePhysics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
-        livePhysics.setSlopeDeg(physicsSlopeDeg);
-        livePhysics.settle(physicsDt,
-            cast(int)(physicsSettleSeconds / physicsDt));
-        liveFrame = frame;
-        liveSimTime = 0.0;
-
-        // По одному цилиндру на каждую балку каркаса: порядок совпадает
-        // с BeamState[] из beamStates() (по Frame.beams).
-        foreach (b; frame.beams)
+        // Живой образ потомка лучшего. Сразу после усадки и на каждом шаге
+        // проверяется beamFailure(): оборванный заезд показывает разбитую
+        // машину, поэтому берём нового потомка.
+        const int maxAttempts = 8;
+        foreach (_; 0 .. maxAttempts)
         {
-            const float len =
-                (frame.nodes[b.b].pos - frame.nodes[b.a].pos).length;
-            auto e = addEntity(carRoot);
-            e.drawable = meshBeam;
-            e.material = matBeam;
-            e.scaling = Vector3f(b.radius, len, b.radius);
-            liveCar ~= e;
-        }
+            auto descendant = descendantOfBest(grammar, population,
+                evolutionConfig.tournamentSize, evolutionConfig.mutateHits, rnd);
+            auto may = develop(grammar, descendant);
+            if (may.isNull)
+                continue;
+            auto frame = may.get.frame;
+            if (frame.anchors.length < 2)
+                continue;
 
-        foreach (a; frame.anchors)
-        {
-            auto e = addEntity(carRoot);
-            e.drawable = meshWheel;
-            e.material = a.kind == AnchorKind.motorWheel ? matDriveWheel : matWheel;
-            liveCar ~= e;
+            auto physics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
+            physics.setSlopeDeg(physicsSlopeDeg);
+            physics.settle(physicsDt,
+                cast(int)(physicsSettleSeconds / physicsDt));
+            const BeamFailure bf = physics.beamFailure();
+            if (bf != BeamFailure.none)
+            {
+                writefln("live: заезд оборван после усадки (%s) — другой потомок",
+                    beamFailureName(bf));
+                physics.dispose();
+                continue;
+            }
+
+            livePhysics = physics;
+            liveFrame = frame;
+            liveSimTime = 0.0;
+
+            // По одному цилиндру на каждую балку каркаса: порядок совпадает
+            // с BeamState[] из beamStates() (по Frame.beams).
+            foreach (b; frame.beams)
+            {
+                const float len =
+                    (frame.nodes[b.b].pos - frame.nodes[b.a].pos).length;
+                auto e = addEntity(carRoot);
+                e.drawable = meshBeam;
+                e.material = matBeam;
+                e.scaling = Vector3f(b.radius, len, b.radius);
+                liveCar ~= e;
+            }
+
+            foreach (a; frame.anchors)
+            {
+                auto e = addEntity(carRoot);
+                e.drawable = meshWheel;
+                e.material = a.kind == AnchorKind.motorWheel ? matDriveWheel : matWheel;
+                liveCar ~= e;
+            }
+            return;
         }
+        writefln("live: не удалось показать ни одного потомка");
     }
 
     private void stepLiveCar()
@@ -233,10 +252,26 @@ class BuggyScene: Scene
             return;
         livePhysics.step(physicsDt, 0.0f);
         liveSimTime += physicsDt;
+        const BeamFailure bf = livePhysics.beamFailure();
+        if (bf != BeamFailure.none)
+        {
+            writefln("live: заезд оборван (%s) — другой потомок",
+                beamFailureName(bf));
+            stopLiveCar();
+            startLiveCar();
+            return;
+        }
         if (liveSimTime >= liveRunSeconds)
             restartLiveCar();
         else
             updateLiveCar();
+    }
+
+    private string beamFailureName(BeamFailure bf)
+    {
+        return bf == BeamFailure.ground
+            ? "балка каркаса касается земли"
+            : (bf == BeamFailure.wheel ? "балка касается постороннего колеса" : "?");
     }
 
     private void restartLiveCar()
