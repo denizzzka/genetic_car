@@ -32,7 +32,7 @@ struct EvolutionConfig
     double simulateSeconds = 0.0;
 
     /// Печатать в stdout итоги физического заезда по каждой особи
-    /// (`physicsRun`) и сводку best/mean по каждому поколению `evolve`.
+    /// (`physicsFitness`) и сводку best/mean по каждому поколению `evolve`.
     /// По умолчанию тихо — включается во вьюере для наблюдения за эволюцией.
     bool logPhysics = false;
 }
@@ -106,7 +106,7 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
 
 private PhysicsResult runBuggy(Buggy buggy)
 {
-    return physicsRun(buggy, physicsSimSeconds);
+    return physicsFitness(buggy, physicsSimSeconds);
 }
 
 private void logPhysicsIndividual(size_t idx, size_t generation, float finalFit, const PhysicsResult run)
