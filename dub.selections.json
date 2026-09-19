@@ -5,10 +5,11 @@
 		"bindbc-freetype": "1.3.2",
 		"bindbc-glslang": "0.1.0",
 		"bindbc-loader": "1.1.4",
+		"bindbc-newton": "0.3.2",
 		"bindbc-opengl": "1.1.1",
 		"bindbc-sdl": "1.5.2",
 		"bindbc-spirvcross": "0.1.1",
-		"dagon": "1.5.0",
-		"dlib": "1.5.1"
+		"dagon": "1.6.1",
+		"dlib": "1.6.0"
 	}
 }

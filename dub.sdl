@@ -3,5 +3,11 @@ description "Generating buggy vehicles using a genetic algorithm"
 authors "Denis Feklushkin"
 copyright "Copyright © 2026, Denis Feklushkin"
 license "proprietary"
-dependency "dagon" version="~>1.5.0"
-dependency "dmech" repository="git+https://github.com/gecko0307/dmech.git" version="984839dcda4ac95e1aae47e36aa591af355f1f56"
+dependency "dagon" version="~>1.6.0"
+dependency "dagon:newton" version="~>1.6.0"
+
+// Копии libnewton.so + libdg*.so (copyFiles из dagon:newton) складываются в
+// корень проекта; dlopen по имени ищет их только через LD_LIBRARY_PATH,
+// поэтому dub run обязан выставлять его перед запуском целевой программы.
+// $ROOT_PACKAGE_DIR подставляется dub'ом и равно корневому каталогу пакета.
+runEnvironments "LD_LIBRARY_PATH" "$ROOT_PACKAGE_DIR"

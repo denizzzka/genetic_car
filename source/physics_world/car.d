@@ -6,9 +6,12 @@ import std.algorithm : min, max;
 import dlib.core.memory;
 import dlib.math.vector;
 import dlib.math.quaternion;
-import dlib.math.utils;
+import dlib.math.matrix;
+import dlib.math.transformation;
+import dlib.core.ownership;
 
-import dmech;
+import dagon.core.event;
+import dagon.ext.newton;
 
 import frame.frame;
 import physics_world.physics;
@@ -118,57 +121,94 @@ bool canDrive(const Frame f)
     return false;
 }
 
+/// Роль тела в заезде: колбэки Newton прыгают по ней на нужную обработку.
+private enum BodyKind
+{
+    none,
+    ground,
+    master,
+    wheel,
+    beam,
+}
+
+/// Наше расширение обёртки Newton: таскает обратную ссылку на BuggyPhysics,
+/// чтобы статические колбэки мира знали, какому заезду принадлежит тело.
+final class NewtonCarBody: NewtonRigidBody
+{
+    BuggyPhysics owner;
+    BodyKind kind;
+    size_t index;
+
+    this(NewtonRigidBodyType bodyType, NewtonCollisionShape shape, float mass,
+        NewtonPhysicsWorld world, Owner owner)
+    {
+        super(bodyType, shape, mass, world, owner);
+    }
+}
+
+/// Контакты тел из группы sensor (балки) между собой глушатся
+/// (AABB-overlap выключен): узлы каркаса в точке — это не столкновение.
+extern(C) int sensorNoOverlap(const NewtonJoint* contact, dFloat timestep, int threadIndex)
+{
+    return 0;
+}
+
+/// Контакты обычных тел (default×default) не трогаем — они решаются,
+/// — но подсматриваем: два колеса каркаса соприкасаются — провал заезда.
+extern(C) void contactDefaultDefault(const NewtonJoint* joint, dFloat timestep, int threadIndex)
+{
+    NewtonBody* b0 = NewtonJointGetBody0(joint);
+    NewtonBody* b1 = NewtonJointGetBody1(joint);
+    auto nb0 = cast(NewtonCarBody)NewtonBodyGetUserData(b0);
+    auto nb1 = cast(NewtonCarBody)NewtonBodyGetUserData(b1);
+    if (nb0 !is null && nb1 !is null
+        && nb0.kind == BodyKind.wheel && nb1.kind == BodyKind.wheel
+        && nb0.owner !is null)
+        nb0.owner.markWheelWheel();
+}
+
 /**
- * Физическая модель машины поверх dmech.
+ * Физическая модель машины.
  *
  * Координаты — те же, что у каркаса (car-local): X вправо, Y вперёд, Z вверх.
  * Создаётся независимо от `Buggy`, только когда нужен заезд: мир с землёй,
- * у каждой балки каркаса — отдельный RigidBody с коллизиями (форма активна,
- * но не решается). Жёсткость каркаса держит «мастер» — тело с массой и
- * инерцией всей рамы: трансформы тел балок жёстко пересчитываются из него
- * на каждом шаге, так что узлы не разбалтываются и каркас катится как
- * монолит. Колёса у якорей приварены точкой (BallConstraint) к телу первой
- * балки узла. Столкновение балки с землёй или с чужим колесом регистрируется
- * beamFailure(): заезд обрывается как непройденный. Привод — мотор-колёса:
- * на ведущие колёса подаётся момент `Frame.motorPower` (наследуемый ген),
- * закрутка вокруг +X толкает машину по курсу (-Y).
+ * у каждой балки каркаса — отдельное кинестатическое тело в sensor-группе
+ * (контакты регистрируются, но не решаются), у якорей — динамические колёса.
+ * Жёсткость каркаса держит «мастер» — тело с массой и инерцией всей рамы
+ * (коллизии у него выключены): к нему приварены колёса (BallConstraint)
+ * и из него на каждом шаге пересчитываются трансформы тел балок, так что узлы
+ * не разбалтываются и каркас катится как монолит. Задевание балки земли или
+ * чужого колеса ловится в sensor-колбэке и жёстко отбраковывает заезд.
+ * Привод — мотор-колёса: на ведущие колёса подаётся момент `Frame.motorPower`
+ * (наследуемый ген) вокруг их оси, закрутка толкает машину по курсу (-Y).
  */
 final class BuggyPhysics
 {
-    private PhysicsWorld world;
+    private NewtonPhysicsWorld world;
 
     /// Тело земли: статичный бокс, верхняя грань на z == 0.
-    private RigidBody ground;
-
-    /// Форма земли — для распознавания коллизий «балка об землю».
-    private ShapeComponent groundShape;
+    private NewtonCarBody ground;
 
     /// «Мастер» каркаса: единый центр масс и инерции рамы. Он же везёт
     /// тела балок — их трансформы жёстко пересчитываются из мастера каждый
-    /// шаг, рама идеально монолитна, а солимер не разбалтывает узлы.
-    private RigidBody master;
+    /// шаг, рама идеально монолитна, а коллизии мастера выключены.
+    private NewtonCarBody master;
 
     /// Локальные смещение и ориентация каждой балки в мастер-теле.
     private Vector3f[] beamLocal;
     private Quaternionf[] beamLocalQuat;
 
-    /// Тела балок каркаса: по одному RigidBody на каждую `Frame.beams`.
-    private RigidBody[] beamBodies;
+    /// Кинестатические тела балок каркаса: по одному на каждую `Frame.beams`.
+    private NewtonCarBody[] beamBodies;
 
     /// Длина каждой балки — для геометрической проверки «под землёй».
     private float[] beamLen;
-
-    /// Формы балок — для распознавания коллизий каркаса.
-    private ShapeComponent[] beamShapes;
 
     /// Пары узлов концов балки (индекс в сварках и ступицах).
     private size_t[] beamNodeA, beamNodeB;
 
     /// Тела колёс по индексам `Frame.anchors`.
-    private RigidBody[] wheelBodies;
-
-    /// Формы колёс по индексам `Frame.anchors` — для распознавания коллизий.
-    private ShapeComponent[] wheelShapes;
+    private NewtonCarBody[] wheelBodies;
 
     /// Узел якоря каждого колеса (своя ступица не считается задеванием).
     private size_t[] wheelNodes;
@@ -177,14 +217,35 @@ final class BuggyPhysics
     /// колеса на z == 0 (как в вьюере).
     private vec3 posOffset;
 
+    /// Первый же провал заезда (латится): сенсорные колбэки и геометрия
+    /// копят сюда причину, `beamFailure()` её выдаёт.
+    private BeamFailure beamFail_;
+
     /// Машина-основа
     private const Buggy buggy_;
 
     this(const Buggy buggy)
     {
+        ensureNewtonLoaded();
         buggy_ = buggy;
-        world = New!PhysicsWorld(null, 1000);
-        world.gravity = Vector3f(0.0f, 0.0f, -9.80665f); // Z вверх
+
+        // Конструктор NewtonPhysicsWorld просит EventManager, но хранит его
+        // только для проформы: симуляции он не касается. Передаём null.
+        world = New!NewtonPhysicsWorld(cast(EventManager)null, cast(Owner)null);
+        world.threadsCount = 0;
+
+        // Трение и упругость — по паре материалов default×default: колёса
+        // катятся по земле, два колеса между собой решаются.
+        NewtonMaterialSetDefaultFriction(world.newtonWorld,
+            world.defaultGroupId, world.defaultGroupId, groundFriction, groundFriction);
+        NewtonMaterialSetDefaultElasticity(world.newtonWorld,
+            world.defaultGroupId, world.defaultGroupId, 0.0f);
+        // Контакт двух обычных тел не меняем, но смотрим (провал wheelWheel).
+        NewtonMaterialSetCollisionCallback(world.newtonWorld,
+            world.defaultGroupId, world.defaultGroupId, null, &contactDefaultDefault);
+        // Балки сами с собой не контачат: стыки узлов — не провал.
+        NewtonMaterialSetCollisionCallback(world.newtonWorld,
+            world.sensorGroupId, world.sensorGroupId, &sensorNoOverlap, null);
 
         // Подъём: низ самого низкого колеса на z == 0.
         vec3 lift = vec3(0.0f);
@@ -195,17 +256,10 @@ final class BuggyPhysics
             lift.z = wheelRadius - minZ;
         posOffset = lift;
 
-        auto g = world.addStaticBody(Vector3f(0.0f, 0.0f, -0.5f));
-        g.friction = 0.9f;
-        ground = g;
-        // GeomBox берёт ПОЛОВИННЫЕ габариты: размер 0.5 в Z + тело в z=-0.5
-        // даёт верхнюю грань ровно на z == 0.
-        groundShape = world.addShapeComponent(g,
-            New!GeomBox(world, Vector3f(60.0f, 60.0f, 0.5f)),
-            Vector3f(0.0f, 0.0f, 0.0f), 1.0f);
-
+        buildGround();
         buildFrame();
         buildWheels();
+        beamFail_ = BeamFailure.none;
     }
 
     ~this()
@@ -221,22 +275,22 @@ final class BuggyPhysics
             world = null;
         }
         ground = null;
-        groundShape = null;
         master = null;
+        beamLocal.length = 0;
+        beamLocalQuat.length = 0;
         beamBodies.length = 0;
         beamLen.length = 0;
-        beamShapes.length = 0;
         beamNodeA.length = 0;
         beamNodeB.length = 0;
         wheelBodies.length = 0;
-        wheelShapes.length = 0;
         wheelNodes.length = 0;
+        beamFail_ = BeamFailure.none;
     }
 
     /// Один шаг симуляции. Фиксированный dt (~1/60) надёжно стабилен.
     ///
-    /// `throttle` (0..1) кладёт момент на мотор-колёса: закрутка вокруг +X
-    /// толкает машину по курсу (-Y). Момент копится до world.update и
+    /// `throttle` (0..1) кладёт момент на мотор-колёса: закрутка вокруг оси
+    /// колеса толкает машину по курсу (-Y). Момент копится до world.update и
     /// сбрасывается внутри него, поэтому подаётся каждый шаг заново. Пассивные
     /// колёса на осях катятся сами — их везёт сцепление с землёй.
     void step(double dt, float throttle)
@@ -246,11 +300,14 @@ final class BuggyPhysics
 
         applyDrive(throttle);
         world.update(dt);
+        syncBodies();
         updateBeamPuppets();
     }
 
     /// Момент полного газа на каждое мотор-колесо, разложенный по `throttle`.
     /// Сила мотора — наследуемый параметр каркаса (`Frame.motorPower`).
+    /// Момент прикладывается вокруг оси колеса (локальный Y цилиндра) так,
+    /// чтобы закрутка +X катила машину по курсу -Y.
     private void applyDrive(float throttle)
     {
         if (throttle == 0.0f || master is null)
@@ -261,8 +318,11 @@ final class BuggyPhysics
         foreach (i, a; fr.anchors)
             if (a.kind == AnchorKind.motorWheel && i < wheelBodies.length
                 && wheelBodies[i] !is null)
-                wheelBodies[i].applyTorque(
-                    Vector3f(throttle * fr.motorPower, 0.0f, 0.0f));
+            {
+                auto w = wheelBodies[i];
+                const vec3 axle = w.rotation.rotate(Vector3f(0.0f, 1.0f, 0.0f));
+                w.addTorque(axle * (throttle * fr.motorPower));
+            }
     }
 
     /// Успокоить машину: шаги симуляции без движения, чтобы осадка рамы и
@@ -273,6 +333,18 @@ final class BuggyPhysics
             step(dt, 0.0f);
     }
 
+    /// Прочитать свежие позы тел из Newton после шага: обёртка хранит копии
+    /// position/rotation, и без этого вызова они не обновятся.
+    private void syncBodies()
+    {
+        if (master is null)
+            return;
+        master.update(0.0);
+        foreach (w; wheelBodies)
+            if (w !is null)
+                w.update(0.0);
+    }
+
     BodyState[] beamStates()
     {
         BodyState[] res;
@@ -280,8 +352,8 @@ final class BuggyPhysics
             if (b !is null)
             {
                 BodyState s;
-                s.position = b.position;
-                s.orientation = b.orientation;
+                s.position = b.position.xyz;
+                s.orientation = b.rotation;
                 res ~= s;
             }
         return res;
@@ -294,11 +366,25 @@ final class BuggyPhysics
             if (w !is null)
             {
                 BodyState s;
-                s.position = w.position;
-                s.orientation = w.orientation;
+                s.position = w.position.xyz;
+                s.orientation = w.rotation;
                 res ~= s;
             }
         return res;
+    }
+
+    private void buildGround()
+    {
+        // Бокс задаёт полный габарит: размер 1 в Z + тело в z=-0.5 даёт верхнюю
+        // грань ровно на z == 0.
+        auto body = New!NewtonCarBody(NewtonRigidBodyType.Static,
+            New!NewtonBoxShape(Vector3f(120.0f, 120.0f, 1.0f), world),
+            0.0f, world, world);
+        body.dynamic = false;
+        body.kind = BodyKind.ground;
+        body.setTransformation(translationMatrix(vec3(0.0f, 0.0f, -0.5f)));
+        body.update(0.0);
+        ground = body;
     }
 
     private void buildFrame()
@@ -306,17 +392,15 @@ final class BuggyPhysics
         const Frame frame = buggy_.frame;
         beamBodies.length = frame.beams.length;
         beamLen.length = frame.beams.length;
-        beamShapes.length = frame.beams.length;
         beamNodeA.length = frame.beams.length;
         beamNodeB.length = frame.beams.length;
         beamLocal.length = frame.beams.length;
         beamLocalQuat.length = frame.beams.length;
 
-        // Геометрия каркаса — отдельные тела-балки с коллизиями: столкновение
-        // балки с землёй или чужим колесом ловится как провал заезда. Формы
-        // активны, но не решаются (solve == false): ступичный проход осей и
-        // ход рамы не должны толкаться контактами, а стабильность качения даёт
-        // «мастер». Масса балок символическая — мост (master) несёт всю раму.
+        // Геометрия каркаса — отдельные кинестатические тела-балки в
+        // sensor-группе: контакты с землёй и чужими колёсами ловятся как
+        // провал заезда, но никогда не толкают (колбэк их снимает).
+        // Массы у балок нет — мост (master) несёт всю раму и тянет балки.
         foreach (i, b; frame.beams)
         {
             const vec3 a = frame.nodes[b.a].pos + posOffset;
@@ -326,22 +410,30 @@ final class BuggyPhysics
             if (len < 1e-5f)
                 continue;
 
-            auto body = world.addDynamicBody((a + c) * 0.5f, 0.0f);
+            auto body = New!NewtonCarBody(NewtonRigidBodyType.Kinematic,
+                New!NewtonCylinderShape(b.radius, b.radius, len, world),
+                0.0f, world, world);
             // Ось цилиндра (локальный Y) — вдоль балки.
-            body.orientation = rotationBetween(Vector3f(0, 1, 0), dir / len);
-            body.useGravity = false;
-            body.friction = 0.0f;
-            body.stopThreshold = 0.0f;
+            body.dynamic = true;
+            body.kind = BodyKind.beam;
+            body.index = i;
+            body.groupId = world.sensorGroupId;
+            body.sensor = true;
+            body.collidable = true;
+            const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), dir / len);
+            body.setTransformation(translationMatrix((a + c) * 0.5f) * q.toMatrix4x4);
+            body.update(0.0);
 
-            auto shape = world.addShapeComponent(body,
-                New!GeomCylinder(world, len, b.radius),
-                Vector3f(0.0f, 0.0f, 0.0f), 0.1f);
-            shape.active = true;
-            shape.solve = false;
+            // Сенсорный колбэк — наша обратная связь: каждая балка знает
+            // свой индекс и сообщает заезду о задевании.
+            immutable beamIdx = i;
+            body.sensorCallback = (NewtonRigidBody, NewtonRigidBody other)
+            {
+                onBeamContact(beamIdx, other);
+            };
 
             beamBodies[i] = body;
             beamLen[i] = len;
-            beamShapes[i] = shape;
             beamNodeA[i] = b.a;
             beamNodeB[i] = b.b;
         }
@@ -364,8 +456,16 @@ final class BuggyPhysics
             totalMass = 1.0f;
         const vec3 com = sumM / totalMass;
 
-        master = world.addDynamicBody(com, 0.0f);
-        master.stopThreshold = 0.0f;
+        master = New!NewtonCarBody(NewtonRigidBodyType.Dynamic,
+            New!NewtonBoxShape(Vector3f(0.05f, 0.05f, 0.05f), world),
+            0.0f, world, world);
+        master.dynamic = true;
+        master.kind = BodyKind.master;
+        master.autoSleep = false;
+        master.collidable = false; // коллизии считают балки и колёса
+        master.gravity = Vector3f(0.0f, 0.0f, -9.80665f);
+        master.linearDamping = bodyDamping;
+        master.angularDamping = Vector3f(bodyDamping, bodyDamping, bodyDamping);
 
         // AABB каркаса для грубой инерции рамы.
         vec3 minP = vec3(float.max), maxP = vec3(-float.max);
@@ -383,20 +483,22 @@ final class BuggyPhysics
         dims.x = max(dims.x, 0.05f);
         dims.y = max(dims.y, 0.05f);
         dims.z = max(dims.z, 0.05f);
-        auto mshape = world.addShapeComponent(master,
-            New!GeomBox(world, dims), Vector3f(0.0f, 0.0f, 0.0f), totalMass);
-        // Мастер не участвует в коллизиях — их считают балки.
-        mshape.active = false;
-        mshape.solve = false;
+        const float Ixx = (dims.y * dims.y + dims.z * dims.z) / 3.0f * totalMass;
+        const float Iyy = (dims.x * dims.x + dims.z * dims.z) / 3.0f * totalMass;
+        const float Izz = (dims.x * dims.x + dims.y * dims.y) / 3.0f * totalMass;
+        master.setMassMatrix(totalMass, Ixx, Iyy, Izz);
+
+        master.setTransformation(translationMatrix(com));
+        master.update(0.0);
 
         // Локальные преобразования балок в мастере.
         foreach (i, b; frame.beams)
         {
             if (beamBodies[i] is null)
                 continue;
-            beamLocal[i] = master.orientation.conj.rotate(
-                beamBodies[i].position - master.position);
-            beamLocalQuat[i] = master.orientation.conj * beamBodies[i].orientation;
+            beamLocal[i] = master.rotation.conj.rotate(
+                beamBodies[i].position.xyz - master.position.xyz);
+            beamLocalQuat[i] = master.rotation.conj * beamBodies[i].rotation;
         }
     }
 
@@ -411,13 +513,34 @@ final class BuggyPhysics
         {
             if (b is null)
                 continue;
-            const vec3 r = master.orientation.rotate(beamLocal[i]);
-            b.position = master.position + r;
-            b.orientation = master.orientation * beamLocalQuat[i];
-            b.linearVelocity = master.linearVelocity
-                + cross(master.angularVelocity, r);
+            const vec3 r = master.rotation.rotate(beamLocal[i]);
+            const vec3 pos = master.position.xyz + r;
+            const Quaternionf q = master.rotation * beamLocalQuat[i];
+            b.setTransformation(translationMatrix(pos) * q.toMatrix4x4);
+            b.update(0.0);
+            b.velocity = master.velocity + cross(master.angularVelocity, r);
             b.angularVelocity = master.angularVelocity;
         }
+    }
+
+    /// Сенсорный колбэк балки: задело колесо (не своё) — провал.
+    /// Землю тут игнорируем — её ловит геометрическая beamUnderground().
+    private void onBeamContact(size_t beamIdx, NewtonRigidBody other)
+    {
+        foreach (wi, w; wheelBodies)
+            if (w is other)
+            {
+                if (!isOwnWheel(beamIdx, wi))
+                    beamFail_ = BeamFailure.wheel;
+                return;
+            }
+    }
+
+    /// См. contactDefaultDefault: два колеса соприкасаются.
+    private void markWheelWheel()
+    {
+        if (beamFail_ == BeamFailure.none)
+            beamFail_ = BeamFailure.wheelWheel;
     }
 
     /**
@@ -433,58 +556,16 @@ final class BuggyPhysics
     {
         if (world is null)
             return BeamFailure.none;
-
-        foreach (ref m; world.manifolds)
-        {
-            for (uint i = 0; i < m.numContacts; ++i)
-            {
-                const c = &m.contacts[i];
-                const s1 = c.shape1;
-                const s2 = c.shape2;
-                if (s1 is null || s2 is null)
-                    continue;
-
-                const bi = beamShapeIndex(s1);
-                const bj = beamShapeIndex(s2);
-                if (bi != size_t.max && (s2 is groundShape)
-                    && c.point.z < -beamGroundEps)
-                    return BeamFailure.ground;
-                if (bj != size_t.max && (s1 is groundShape)
-                    && c.point.z < -beamGroundEps)
-                    return BeamFailure.ground;
-
-                const wi = wheelShapeIndex(s1);
-                const wj = wheelShapeIndex(s2);
-
-                // Любое соприкосновение двух колёс каркаса (не только якоря в
-                // одной точке): их тела сцепляются и глушат привод — машина
-                // не едет. Синтаксически такие каркасы валидны, ловим здесь.
-                if (wi != size_t.max && wj != size_t.max)
-                    return BeamFailure.wheelWheel;
-
-                if (bi != size_t.max)
-                {
-                    const wwj = wheelShapeIndex(s2);
-                    if (wwj != size_t.max && !isOwnWheel(bi, wwj))
-                        return BeamFailure.wheel;
-                }
-                if (bj != size_t.max)
-                {
-                    const wwi = wheelShapeIndex(s1);
-                    if (wwi != size_t.max && !isOwnWheel(bj, wwi))
-                        return BeamFailure.wheel;
-                }
-            }
-        }
+        if (beamFail_ != BeamFailure.none)
+            return beamFail_;
         if (beamUnderground())
-            return BeamFailure.ground;
-
-        return BeamFailure.none;
+            beamFail_ = BeamFailure.ground;
+        return beamFail_;
     }
 
     /// Геометрическая проверка «рама под землёй»: низшая точка поверхности
-    /// любой балки ниже `-beamGroundEps`. Не зависит от манифолдов — ловит
-    /// и глухое погружение, и проскакивание между шагами проверки.
+    /// любой балки ниже `-beamGroundEps`. Не зависит от контактов Newton —
+    /// ловит и глухое погружение, и проскакивание между шагами проверки.
     private bool beamUnderground()
     {
         if (master is null)
@@ -495,29 +576,13 @@ final class BuggyPhysics
             if (b is null)
                 continue;
             // Ось цилиндра — локальный Y; низшая точка балки над землёй.
-            const vec3 dir = b.orientation * Vector3f(0.0f, 1.0f, 0.0f);
+            const vec3 dir = b.rotation * Vector3f(0.0f, 1.0f, 0.0f);
             const float half = beamLen[i] * 0.5f;
             const float low = (b.position.z - dir.z * half) - fr.beams[i].radius;
             if (low < -beamGroundEps)
                 return true;
         }
         return false;
-    }
-
-    private size_t beamShapeIndex(const ShapeComponent s)
-    {
-        foreach (i, sh; beamShapes)
-            if (s is sh)
-                return i;
-        return size_t.max;
-    }
-
-    private size_t wheelShapeIndex(const ShapeComponent s)
-    {
-        foreach (i, sh; wheelShapes)
-            if (s is sh)
-                return i;
-        return size_t.max;
     }
 
     /// Своя ступица: колесо приварено к концу этой балки.
@@ -531,49 +596,45 @@ final class BuggyPhysics
     {
         const Frame frame = buggy_.frame;
         wheelBodies.length = frame.anchors.length;
-        wheelShapes.length = frame.anchors.length;
         wheelNodes.length = frame.anchors.length;
 
         foreach (i, a; frame.anchors)
         {
             const vec3 nodePos = frame.nodes[a.node].pos + posOffset;
 
-            auto wheel = world.addDynamicBody(nodePos, 0.0f);
-            // Ось цилиндра (локальный Y) — вдоль поперечной оси машины X.
-            wheel.orientation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
-            wheel.friction = 0.9f;
-            wheel.stopThreshold = 0.0f;
-
             float mass = cast(float)(wheelDensity * PI
                 * (wheelRadius * wheelRadius - wheelInnerRadius * wheelInnerRadius)
                 * wheelWidth);
-            auto shape = world.addShapeComponent(wheel,
-                New!GeomWheel(world, wheelWidth, wheelRadius, wheelInnerRadius),
-                Vector3f(0.0f, 0.0f, 0.0f), mass);
-            shape.active = true;
-            shape.solve = true;
+            auto wheel = New!NewtonCarBody(NewtonRigidBodyType.Dynamic,
+                New!NewtonCylinderShape(wheelRadius, wheelRadius, wheelWidth, world),
+                mass, world, world);
+            // Ось цилиндра (локальный Y) — вдоль поперечной оси машины X.
+            wheel.dynamic = true;
+            wheel.kind = BodyKind.wheel;
+            wheel.index = i;
+            wheel.autoSleep = false;
+            wheel.gravity = Vector3f(0.0f, 0.0f, -9.80665f);
+            wheel.linearDamping = bodyDamping;
+            wheel.angularDamping = Vector3f(bodyDamping, bodyDamping, bodyDamping);
+            // Инерция полого цилиндра, ось вращения — локальный Y.
+            const float r2 = wheelRadius * wheelRadius;
+            const float ri2 = wheelInnerRadius * wheelInnerRadius;
+            const float h2 = wheelWidth * wheelWidth;
+            const float perp = (3.0f * (r2 + ri2) + h2) / 12.0f * mass;
+            const float axial = 0.5f * (r2 + ri2) * mass;
+            wheel.setMassMatrix(mass, perp, axial, perp);
+
+            const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
+            wheel.setTransformation(translationMatrix(nodePos) * q.toMatrix4x4);
+            wheel.update(0.0);
 
             // Колесо приварено точкой (BallConstraint) к мастер-каркасу в
             // точке узла якоря: свободно вращается вокруг своей оси, не мешая
-            // качению. Стабильно, как в исходной однотелой схеме (мягкая
-            // сварка с дефолтными параметрами), а жёсткий постоянный перенос
-            // рамы даёт мастер; тела балок только передают геометрию.
-            // Осевой HingeConstraint непригоден: AxisAngle в нём жёстко
-            // блокирует вращение колеса (импульсы по перпендикулярным осям +
-            // трение контакта запирают качение, машина почти не едет).
+            // качению. Свободное качение и монолитную раму даёт мастер.
             if (master !is null)
-            {
-                Vector3f anchor =
-                    master.orientation.conj.rotate(nodePos - master.position);
-                Vector3f wheelAnchor =
-                    wheel.orientation.conj.rotate(Vector3f(weldEps, 0.0f, 0.0f));
-                auto weld = New!BallConstraint(world, master, wheel,
-                    anchor, wheelAnchor);
-                world.addConstraint(weld);
-            }
+                New!NewtonBallConstraint(world, master, wheel, nodePos);
 
             wheelBodies[i] = wheel;
-            wheelShapes[i] = shape;
             wheelNodes[i] = a.node;
         }
     }
@@ -638,8 +699,7 @@ unittest
 {
     // Столкновение колёс между собой — обрыв заезда. Два якоря в одной точке
     // (wheel + motorWheel на одном узле) дают совпадающие коллайдеры, которые
-    // глушат привод; движок устойчиво держит между ними контакт, поэтому
-    // отбраковка срабатывает и до, и после шагов газом.
+    // глушат привод; контакт между ними держится и до, и после шагов газом.
     Frame vframe()
     {
         Frame fr;
@@ -672,8 +732,8 @@ unittest
     }
 
     // Дубли: два колеса в каждом из двух узлов — коллизия колёс ловится.
-    // Контакт колёс появляется на первом же world.update() и держится всё
-    // время: совпадающие тела не развести, они заперты в пересечении.
+    // Движок устойчиво держит между ними контакт, поэтому отбраковка
+    // срабатывает и до, и после шагов газом.
     Frame dup = vframe();
     dup.anchors ~= Anchor(4, AnchorKind.wheel);
     dup.anchors ~= Anchor(3, AnchorKind.wheel);
