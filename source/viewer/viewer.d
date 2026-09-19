@@ -4,7 +4,7 @@ import dagon;
 import dagon.core.keycodes;
 import dagon.core.time;
 import core.thread : Thread;
-import core.sync : Mutex, Condition;
+import core.atomic : atomicStore, atomicLoad;
 import std.algorithm : min, max, sort;
 import std.random;
 import std.stdio : writefln;
@@ -49,29 +49,13 @@ class BuggyScene: Scene
     enum size_t galleryTop = 5;
     enum float gallerySpacing = 4.0f;
 
-    // ---- Фоновая эволюция ----
-    // Физическая оценка поколения идёт в отдельном потоке: основной
-    // (rnd/отрисовка) не блокируется и работает как приложение. Всё
-    // перекрёстное состояние закрыто мьютексом; результат применяется
-    // к сцене только в update (главный поток) — dagon-сущности из
-    // воркера не трогаются.
-    private Thread worker;
-    // Создаются в afterLoad: new Condition/pthread не терпит CTFE-инициализации.
-    private Mutex evolMutex;
-    private Condition evolCond;
-    private bool workerBusy;     // поданная работа ещё не применена к сцене
-    private bool jobRequested;   // воркеру поставлена задача
-    private bool jobDone;        // воркер закончил, результат ждёт применения
-    private bool stopWorker;     // останова воркера при завершении
-    private Individual[] jobInput;
-    private size_t jobGenerations;
-    private EvolutionConfig jobConfig;
+    /// Фоновый поток при создании новых поколений
+    private Thread jobThread;
+    private shared bool jobDone;
     private Individual[] jobOutput;
+    private size_t jobGens;
 
-    // ---- Живой заезд (только главный поток) ----
-    // Пока поколение считается в фоне, на витрине едет одна машина в
-    // реальном времени — BuggyPhysics шагает раз за update(~1/60 с).
-    // Сущности под carRoot: liveCar[0] — рама, далее колёса по anchors.
+    // Живой заезд realtime:
     private BuggyPhysics livePhysics;
     private Entity[] liveCar;
     private Mesh meshChassis = null;
@@ -79,9 +63,8 @@ class BuggyScene: Scene
     private Frame liveFrame;
     private double liveSimTime;
 
-    /// Длительность показанного «круга» в реальном времени: как физический
-    /// заезд особи (evolutionConfig.simulateSeconds), после — повторить,
-    /// иначе машина уехала бы за пределы витрины на долгом прогоне.
+    /// Круг заезда на витрине (столько же, сколько длится заезд особи),
+    /// после — заново, иначе машина уедет за сцену.
     enum double liveRunSeconds = 3.0;
 
     override void afterLoad()
@@ -137,10 +120,6 @@ class BuggyScene: Scene
         buildGallery();
         logGeneration();
 
-        evolMutex = new Mutex;
-        evolCond = new Condition(evolMutex);
-        seedWorker();
-
         /*
         BuggyScene is dlib-allocated (New!), so the GC can't see
         references to objects (grammar, population) stored in its fields.
@@ -165,25 +144,13 @@ class BuggyScene: Scene
     {
         super.update(t);
 
-        if (workerBusy)
+        if (jobThread !is null)
         {
-            // Фон считает поколение: применяем результат, когда готов.
-            evolMutex.lock();
-            const pending = jobDone;
-            evolMutex.unlock();
-
-            if (pending)
+            if (atomicLoad(jobDone))
             {
-                evolMutex.lock();
-                auto fresh = jobOutput;
-                const gens = jobGenerations;
-                jobOutput = null;
-                jobDone = false;
-                evolMutex.unlock();
-
-                population = fresh;
-                generation += gens;
-                workerBusy = false;
+                population = jobOutput;
+                generation += jobGens;
+                jobThread = null;
                 stopLiveCar();
                 buildGallery();
                 logGeneration();
@@ -200,81 +167,27 @@ class BuggyScene: Scene
             logGeneration();
         }
         else if (eventManager.keyDown[KEY_G])
-        {
             submitEvolution(evolutionConfig.generationsPerPress, evolutionConfig);
-        }
         else if (eventManager.keyDown[KEY_M])
-        {
-            // Быстрый шаг: только статический отбор, без физического заезда.
             submitEvolution(1, EvolutionConfig.init);
-        }
     }
 
-    /// Поднять фоновый воркер эволюции. Демон: при выходе из приложения
-    /// процесс завершается, не дожидаясь потока.
-    private void seedWorker()
-    {
-        worker = new Thread(&workerRun);
-        worker.isDaemon = true;
-        worker.start();
-    }
-
-    /// Цикл воркера: ждёт задачу, считает поколения в физическом пуле,
-    /// кладёт результат под мьютекс. `rnd` свой (зерно фиксировано —
-    /// отбор воспроизводим в рамках сессии, как раньше на главном потоке).
-    private void workerRun()
-    {
-        auto workerRnd = Random(42);
-        while (true)
-        {
-            evolMutex.lock();
-            while (!jobRequested && !stopWorker)
-                evolCond.wait();
-            if (stopWorker)
-            {
-                evolMutex.unlock();
-                return;
-            }
-            jobRequested = false;
-            auto input = jobInput;
-            const gens = jobGenerations;
-            const cfg = jobConfig;
-            evolMutex.unlock();
-
-            auto output = evolve(grammar, input, gens, workerRnd, cfg);
-
-            evolMutex.lock();
-            jobOutput = output;
-            jobDone = true;
-            evolCond.notify();
-            evolMutex.unlock();
-        }
-    }
-
-    /// Поставить задачу фоновой эволюции и запустить живой заезд.
     private void submitEvolution(size_t generations, EvolutionConfig cfg)
     {
-        evolMutex.lock();
-        jobInput = population;
-        jobGenerations = generations;
-        jobConfig = cfg;
-        jobOutput = null;
-        jobDone = false;
-        jobRequested = true;
-        evolCond.notify();
-        evolMutex.unlock();
-
-        workerBusy = true;
-        // На время заезда убираем стоящую витрину топ-5: на сцене остаётся
-        // только едущий потомок победителя. Галерея вернётся в buildGallery
-        // по завершении работы.
+        const gr = grammar;
+        auto input = population;
+        jobThread = new Thread({
+            auto rnd = Random(42);
+            jobOutput = evolve(gr, input, generations, rnd, cfg);
+            jobGens = generations;
+            atomicStore(jobDone, true);
+        });
+        jobThread.isDaemon = true;
+        jobThread.start();
         removeCar();
         startLiveCar();
     }
 
-    /// Пока считается поколение, на витрине едет потомок лучшего багги
-    /// предыдущего поколения: кроссовер победителя с партнёром + мутация —
-    /// как buildNextGeneration, только на одном геноме.
     private void startLiveCar()
     {
         auto descendant = descendantOfBest(grammar, population,
@@ -317,7 +230,7 @@ class BuggyScene: Scene
         liveCar[$ - 1].material = matBeam;
         liveCar[$ - 1].scaling = chassisScale;
 
-        foreach (a; frame.anchors) // колёса
+        foreach (a; frame.anchors)
         {
             auto e = addEntity(carRoot);
             e.drawable = meshWheel;
@@ -326,7 +239,6 @@ class BuggyScene: Scene
         }
     }
 
-    /// Шаг живого заезда раз в update и перенос состояний в сущности.
     private void stepLiveCar()
     {
         if (livePhysics is null)
@@ -339,7 +251,6 @@ class BuggyScene: Scene
             updateLiveCar();
     }
 
-    /// Новый круг того же багги, чтобы машина не уезжала со сцены.
     private void restartLiveCar()
     {
         if (livePhysics !is null)
@@ -352,7 +263,6 @@ class BuggyScene: Scene
         updateLiveCar();
     }
 
-    /// Перенос состояний физики в dagon-сущности живого багги.
     private void updateLiveCar()
     {
         const beams = livePhysics.beamStates();
