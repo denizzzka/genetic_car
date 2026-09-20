@@ -170,7 +170,7 @@ class BuggyScene: Scene
     /// Новое 0-е поколение: идентичные копии закодированного багги.
     private void resetPopulation()
     {
-        population = evaluatePopulation(grammar, seedPopulation(grammar, evolutionConfig.populationSize));
+        population = evaluatePopulation(grammar, seedPopulation(grammar, EvolutionConfig.populationSize));
         generation = 0;
     }
 
