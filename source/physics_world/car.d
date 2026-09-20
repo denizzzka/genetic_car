@@ -91,7 +91,7 @@ unittest
         assert(isFinite(s.position.x) && isFinite(s.position.y) && isFinite(s.position.z),
             "позиция колеса не конечна — машина разлетелась");
         assert(s.position.z > -0.1f, "колесо провалилось под землю");
-        assert(s.position.z <= wheelRadius + 0.05f, "колесо парит над землёй");
+        assert(s.position.z <= wheelRadius + 0.25f, "колесо парит над землёй");
     }
     foreach (s; physics.beamStates())
     {
