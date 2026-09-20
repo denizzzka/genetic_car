@@ -224,14 +224,27 @@ final class BuggyPhysics
     /// Машина-основа
     private const Buggy buggy_;
 
+    /// Мир принадлежит нам, и `dispose` должен его уничтожить через `Delete`.
+    /// Миры из пула (см. physics_world.worldpool) — чужие: `dispose` их не
+    /// трогает, пул возвращает мир в оборот без `NewtonDestroy`.
+    private bool ownsWorld_;
+
+    /// Свой мир: создаётся локально и забирается с собой (тесты/вьюер).
     this(const Buggy buggy)
+    {
+        this(buggy, New!NewtonPhysicsWorld(cast(EventManager)null, cast(Owner)null));
+        ownsWorld_ = true;
+    }
+
+    this(const Buggy buggy, NewtonPhysicsWorld pooledWorld)
     {
         ensureNewtonLoaded();
         buggy_ = buggy;
 
         // Конструктор NewtonPhysicsWorld просит EventManager, но хранит его
         // только для проформы: симуляции он не касается. Передаём null.
-        world = New!NewtonPhysicsWorld(cast(EventManager)null, cast(Owner)null);
+        world = pooledWorld;
+        ownsWorld_ = false;
         world.threadsCount = 0;
 
         // Трение и упругость — по паре материалов default×default: колёса
@@ -271,7 +284,10 @@ final class BuggyPhysics
     {
         if (world !is null)
         {
-            Delete(world);
+            // Свой мир уничтожаем целиком (NewtonDestroy). Чужой (из пула)
+            // только отсоединяем: пул сам вернёт его с пустыми телами.
+            if (ownsWorld_)
+                Delete(world);
             world = null;
         }
         ground = null;

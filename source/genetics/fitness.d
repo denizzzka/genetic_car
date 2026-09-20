@@ -251,7 +251,10 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
         return r;
     }
 
-    auto physics = new BuggyPhysics(buggy);
+    auto world = acquireWorld();
+    scope (exit) releaseWorld(world);
+
+    auto physics = new BuggyPhysics(buggy, world);
     scope (exit) physics.dispose();
 
     physics.settle(physicsDt,
