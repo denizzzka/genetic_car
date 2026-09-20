@@ -232,6 +232,7 @@ final class BuggyPhysics
     /// Свой мир: создаётся локально и забирается с собой (тесты/вьюер).
     this(const Buggy buggy)
     {
+        ensureNewtonLoaded();
         this(buggy, New!NewtonPhysicsWorld(cast(EventManager)null, cast(Owner)null));
         ownsWorld_ = true;
     }

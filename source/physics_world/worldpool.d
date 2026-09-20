@@ -98,6 +98,7 @@ final class NewtonWorldPool
 
     private static NewtonPhysicsWorld createWorld()
     {
+        ensureNewtonLoaded();
         auto w = New!NewtonPhysicsWorld(cast(EventManager)null, cast(Owner)null);
         w.threadsCount = 0;
         return w;
