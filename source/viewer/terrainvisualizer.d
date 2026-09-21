@@ -18,6 +18,10 @@ struct VFTile
 {
     Mesh mesh;
     Entity entity;
+    /// В мире сцены (окно) или выгружен при уходе окна: выгруженный тайл
+    /// держится в кэше, и при возврате окна сущность возвращается через
+    /// `useEntity` без перестройки меша.
+    bool inScene;
 }
 
 /// Булыжник: сущность-камень, меш берётся из общего пула по id (форма
@@ -122,6 +126,7 @@ final class TerrainVisualizer
             if (!insideWindow(key))
             {
                 scene_.removeEntity(tiles_[key].entity, false);
+                tiles_[key].inScene = false;
                 stale ~= key;
             }
 
@@ -142,7 +147,16 @@ final class TerrainVisualizer
     {
         const long key = tileKey(tx, ty);
         if (key in tiles_)
+        {
+            // Тайл уже в кэше, но мог быть выгружен из мира при уходе окна:
+            // возвращаем его сущность в сцену, меш не перестраиваем.
+            if (!tiles_[key].inScene)
+            {
+                scene_.useEntity(tiles_[key].entity);
+                tiles_[key].inScene = true;
+            }
             return;
+        }
 
         immutable cfg = terrain_.config;
         immutable tile = terrain_.tileData(tx, ty);
@@ -155,6 +169,7 @@ final class TerrainVisualizer
         VFTile t;
         t.mesh = mesh;
         t.entity = e;
+        t.inScene = true;
         tiles_[key] = t;
     }
 
