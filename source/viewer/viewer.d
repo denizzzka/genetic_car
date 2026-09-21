@@ -269,6 +269,9 @@ class BuggyScene: Scene
         auto children = buildNextGeneration(grammar, cur, runCfg, rnd);
         batch = evaluateStatic(grammar, children, runCfg);
         jobGen = generation + 1;
+        // Новый batch — следующее поколение: сбрасываем live-цикл, чтобы N
+        // показывал машины текущего поколения, а не досматривал завершившееся.
+        stopLiveCar();
         atomicStore(jobDone, false);
         jobThread = new Thread({
             runPhysics(batch, runCfg, jobGen);
