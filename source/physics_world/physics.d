@@ -7,6 +7,7 @@ import dlib.core.memory;
 import dlib.math.vector;
 import dlib.math.matrix;
 import dlib.math.quaternion;
+import dlib.math.transformation;
 
 import dagon.ext.newton;
 
@@ -50,10 +51,60 @@ enum float groundFriction = 0.9f;
 enum float bodyDamping = 0.5f;
 
 /// Направление носа машины («вперёд»); курс движения — в сторону −Y.
+/// Остаётся в координатах каркаса (см. frame.frame), независимо от того,
+/// как ориентирован мир Newton.
 immutable Vector3f forward = Vector3f(0.0f, 1.0f, 0.0f);
 
-/// Ускорение свободного падения физического мира: вниз по вертикали.
-immutable Vector3f gravity = Vector3f(0.0f, 0.0f, -9.80665f);
+/// Ориентация физического мира: Newton держит «вверх» вдоль своей Y (земля —
+/// плоскость XZ, у heightfield'а ось высоты — Y), а у каркаса и вьюера
+/// «вверх» — Z. Мир Newton — это геометрия каркаса, повёрнутая вокруг X на
+/// −90°: (x, y, z)каркас → (x, z, −y)newton. Все положения и ориентации тел,
+/// уходящие в Newton и возвращающиеся из него, проходят через переводы ниже.
+/// Значение из rotationQuaternion(Vector3f(1,0,0), −π/2) записано литералом:
+/// сама функция не умеет CTFE.
+immutable Quaternionf carToNewtonQuat =
+    Quaternionf(-0.70710678f, 0.0f, 0.0f, 0.70710678f);
+
+/// Точка из координат каркаса в координаты мира Newton.
+vec3 toNewtonPos(const vec3 carPos)
+{
+    return vec3(carPos.x, carPos.z, -carPos.y);
+}
+
+/// Точка из координат мира Newton в координаты каркаса.
+vec3 toCarPos(const vec3 newtonPos)
+{
+    return vec3(newtonPos.x, -newtonPos.z, newtonPos.y);
+}
+
+/// Ориентация из координат каркаса в ориентацию тела мира Newton.
+Quaternionf toNewtonRot(const Quaternionf carRot)
+{
+    // Операции dlib над кватернионами не помечены const — работаем на копии.
+    Quaternionf r = carToNewtonQuat;
+    return r * carRot;
+}
+
+/// Кэшированное dagon'ом вращение тела из мира Newton в истинную ориентацию
+/// координат каркаса. `body.rotation` — инверсия истинного поворота (см.
+/// updateBeamPuppets), поэтому сначала восстанавливаем его `.conj`, затем
+/// вычитаем поворот мира — наружу снова уходит геометрия каркаса.
+Quaternionf toCarRot(const Quaternionf cachedNewtonRot)
+{
+    Quaternionf r = carToNewtonQuat;
+    Quaternionf c = cachedNewtonRot;
+    return r.conj * c.conj;
+}
+
+/// Матрица тела в мире Newton из положения и ориентации координат каркаса.
+Matrix4x4f newtonBodyMatrix(const vec3 carPos, const Quaternionf carRot)
+{
+    return translationMatrix(toNewtonPos(carPos)) * toNewtonRot(carRot).toMatrix4x4;
+}
+
+/// Ускорение свободного падения мира Newton: вниз вдоль −Y (согласуется
+/// с поворотом мира из carToNewtonQuat).
+immutable Vector3f gravity = Vector3f(0.0f, -9.80665f, 0.0f);
 
 /// Транспортное состояние тела: позиция и ориентация в координатах машины.
 /// Совпадает с трансформацией Dagon-сущности под carRoot:
@@ -76,6 +127,57 @@ NewtonCylinderShape makeAxisYCylinder(float radius1, float radius2, float height
     shape.setTransformation(rotationQuaternion(Vector3f(0, 0, 1), 0.5f * PI)
         .toMatrix4x4);
     return shape;
+}
+
+/// Плоская земля-heightfield для мира Newton: ровная плоскость XZ на y == 0,
+/// простирающаяся примерно на `halfExtent` в сторону origin (точный охват
+/// задаётся трансформацией тела в buildGround).
+///
+/// По измерениям Newton 3.14 строит по `size−1` клеток на сторону при аргументе
+/// `size` (поле от body-начала на (size−1)·cell), хотя буферы высот и атрибутов
+/// ожидает размера size². Поэтому создаём прямоугольник `cells+1 × cells+1`, а
+/// из ровной плоскости разница в одну клетку ничего не меняет.
+final class GroundHeightfield : NewtonCollisionShape
+{
+    // Newton 3.14 НЕ копирует height-данные: коллизия хранит указатели на
+    // них, поэтому массивы живут всё время жизни коллизии (освобождение —
+    // в деструкторе).
+    private float[] elevations_;
+    private ubyte[] attributes_;
+
+    /// Требуемый полуразмер поля; для вычисления переноса в buildGround.
+    float halfExtent;
+
+    this(float halfExtent, uint cells, NewtonPhysicsWorld world)
+    {
+        super(world);
+        this.halfExtent = halfExtent;
+
+        const uint size = cells + 1;
+        elevations_ = New!(float[])(size * size);
+        foreach (ref h; elevations_)
+            h = 0.0f;
+
+        attributes_ = New!(ubyte[])(size * size);
+        foreach (ref a; attributes_)
+            a = 0;
+
+        const float cell = 2.0f * halfExtent / cast(float)cells;
+        newtonCollision = NewtonCreateHeightFieldCollision(world.newtonWorld,
+            cast(int)size, cast(int)size, 1, // gridsDiagonals
+            0, // elevationdatType: float
+            elevations_.ptr, cast(char*)attributes_.ptr,
+            1.0f, // verticalScale
+            cell, cell, // horizontalScale по X и Z
+            0); // shapeId
+        NewtonCollisionSetUserData(newtonCollision, cast(void*)this);
+    }
+
+    ~this()
+    {
+        Delete(elevations_);
+        Delete(attributes_);
+    }
 }
 
 /// Причина обрыва заезда из-за каркаса: балка или колесо задели внешний объект.

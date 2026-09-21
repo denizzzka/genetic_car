@@ -170,7 +170,11 @@ extern(C) void contactDefaultDefault(const NewtonJoint* joint, dFloat timestep, 
 /**
  * Физическая модель машины.
  *
- * Координаты — те же, что у каркаса (car-local): X вправо, Y вперёд, Z вверх.
+ * Внутри мир Newton живёт в своих координатах: X вправо, Y вверх (земля —
+ * плоскость XZ на y == 0, см. `carToNewtonQuat`). Наружу (тесты, вьюер,
+ * фитнес) через `toCarPos`/`toCarRot` всё отдаётся в координатах каркаса
+ * (car-local): X вправо, Y вперёд, Z вверх.
+ *
  * Создаётся независимо от `Buggy`, только когда нужен заезд: мир с землёй,
  * у каждой балки каркаса — отдельное кинестатическое тело в sensor-группе
  * (контакты регистрируются, но не решаются), у якорей — динамические колёса.
@@ -186,7 +190,7 @@ final class BuggyPhysics
 {
     private NewtonPhysicsWorld world;
 
-    /// Тело земли: статичный бокс, верхняя грань на z == 0.
+    /// Тело земли: статичный body с плоским heightfield, верх на y == 0.
     private NewtonCarBody ground;
 
     /// «Мастер» каркаса: единый центр масс и инерции рамы. Он же везёт
@@ -370,8 +374,8 @@ final class BuggyPhysics
             if (b !is null)
             {
                 BodyState s;
-                s.position = b.position.xyz;
-                s.orientation = b.rotation.conj;
+                s.position = toCarPos(b.position.xyz);
+                s.orientation = toCarRot(b.rotation);
                 res ~= s;
             }
         return res;
@@ -384,8 +388,8 @@ final class BuggyPhysics
             if (w !is null)
             {
                 BodyState s;
-                s.position = w.position.xyz;
-                s.orientation = w.rotation.conj;
+                s.position = toCarPos(w.position.xyz);
+                s.orientation = toCarRot(w.rotation);
                 res ~= s;
             }
         return res;
@@ -398,8 +402,8 @@ final class BuggyPhysics
         BodyState s;
         if (master is null)
             return s;
-        s.position = master.position.xyz;
-        s.orientation = master.rotation;
+        s.position = toCarPos(master.position.xyz);
+        s.orientation = toCarRot(master.rotation);
         return s;
     }
 
@@ -422,7 +426,7 @@ final class BuggyPhysics
         if (master is null)
             return res;
         const Frame fr = buggy_.frame;
-        Quaternionf mt = master.rotation.conj; // истинное вращение мастера
+        Quaternionf mt = toCarRot(master.rotation); // истинное вращение мастера
         foreach (i, b; buggy_.frame.beams)
         {
             const vec3 a = fr.nodes[b.a].pos + posOffset;
@@ -431,7 +435,7 @@ final class BuggyPhysics
             if (d.length < 1e-5f)
                 continue;
             BeamTarget t;
-            t.mid = master.position.xyz + mt.rotate(beamLocal[i]);
+            t.mid = toCarPos(master.position.xyz) + mt.rotate(beamLocal[i]);
             t.dir = mt.rotate(d);
             t.len = d.length;
             res ~= t;
@@ -441,14 +445,17 @@ final class BuggyPhysics
 
     private void buildGround()
     {
-        // Бокс задаёт полный габарит: размер 1 в Z + тело в z=-0.5 даёт верхнюю
-        // грань ровно на z == 0.
-        auto body = New!NewtonCarBody(NewtonRigidBodyType.Static,
-            New!NewtonBoxShape(Vector3f(120.0f, 120.0f, 1.0f), world),
+        // Земля-heightfield в координатах мира Newton: плоскость XZ на y == 0,
+        // вверх оси — +Y (см. carToNewtonQuat). Грань прежнего бокса лежала на
+        // z == 0 координат каркаса, что в Newton совпадает с y == 0.
+        // Перенос поля (центрирование) — трансформацией ТЕЛА, а не коллизии:
+        // матрица на heightfield внутри shape даёт NaN AABB.
+        auto shape = New!GroundHeightfield(120.0f, 8, world);
+        auto body = New!NewtonCarBody(NewtonRigidBodyType.Static, shape,
             0.0f, world, world);
         body.dynamic = false;
         body.kind = BodyKind.ground;
-        body.setTransformation(translationMatrix(vec3(0.0f, 0.0f, -0.5f)));
+        body.setTransformation(translationMatrix(vec3(-shape.halfExtent, 0.0f, -shape.halfExtent)));
         body.update(0.0);
         ground = body;
     }
@@ -487,7 +494,7 @@ final class BuggyPhysics
             body.sensor = true;
             body.collidable = true;
             const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), dir / len);
-            body.setTransformation(translationMatrix((a + c) * 0.5f) * q.toMatrix4x4);
+            body.setTransformation(newtonBodyMatrix((a + c) * 0.5f, q));
             body.update(0.0);
 
             // Сенсорный колбэк — наша обратная связь: каждая балка знает
@@ -554,7 +561,7 @@ final class BuggyPhysics
         const float Izz = (dims.x * dims.x + dims.y * dims.y) / 3.0f * totalMass;
         master.setMassMatrix(totalMass, Ixx, Iyy, Izz);
 
-        master.setTransformation(translationMatrix(com));
+        master.setTransformation(translationMatrix(toNewtonPos(com)));
         master.update(0.0);
 
         // Локальные преобразования балок в мастере.
@@ -637,6 +644,7 @@ final class BuggyPhysics
     /// Геометрическая проверка «рама под землёй»: низшая точка поверхности
     /// любой балки ниже `-beamGroundEps`. Не зависит от контактов Newton —
     /// ловит и глухое погружение, и проскакивание между шагами проверки.
+    /// Высота здесь — координата Y мира Newton (земля — плоскость XZ).
     private bool beamUnderground()
     {
         if (master is null)
@@ -651,7 +659,7 @@ final class BuggyPhysics
             // произведение, а не поворот вектора.
             const vec3 dir = b.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
             const float half = beamLen[i] * 0.5f;
-            const float low = (b.position.z - dir.z * half) - fr.beams[i].radius;
+            const float low = (b.position.y - dir.y * half) - fr.beams[i].radius;
             if (low < -beamGroundEps)
                 return true;
         }
@@ -698,14 +706,14 @@ final class BuggyPhysics
             wheel.setMassMatrix(mass, perp, axial, perp);
 
             const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
-            wheel.setTransformation(translationMatrix(nodePos) * q.toMatrix4x4);
+            wheel.setTransformation(newtonBodyMatrix(nodePos, q));
             wheel.update(0.0);
 
             // Колесо приварено точкой (BallConstraint) к мастер-каркасу в
             // точке узла якоря: свободно вращается вокруг своей оси, не мешая
             // качению. Свободное качение и монолитную раму даёт мастер.
             if (master !is null)
-                New!NewtonBallConstraint(world, master, wheel, nodePos);
+                New!NewtonBallConstraint(world, master, wheel, toNewtonPos(nodePos));
 
             wheelBodies[i] = wheel;
             wheelNodes[i] = a.node;
