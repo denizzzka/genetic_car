@@ -103,8 +103,8 @@ final class TerrainVisualizer
     private void updateTiles(const vec3 focus)
     {
         const float S = terrain_.config.tileSize;
-        const int cx = cast(int) floor(focus.x / S);
-        const int cy = cast(int) floor(focus.y / S);
+        const int cx = cast(int) floor(focus.x / S + 0.5f);
+        const int cy = cast(int) floor(focus.y / S + 0.5f);
         const int R = windowRadius_;
         const int tx0 = cx - R, tx1 = cx + R;
         const int ty0 = cy - R, ty1 = cy + R;
@@ -197,8 +197,8 @@ final class TerrainVisualizer
         const float cell = tileSize / cast(float) cfg.cells;
 
         const vec3 corner = origin
-            + frameForward * (cast(float) tx * tileSize)
-            + frameRight * (cast(float) ty * tileSize);
+            + frameForward * (cast(float) tx * tileSize - gridHalfShift(cfg))
+            + frameRight * (cast(float) ty * tileSize - gridHalfShift(cfg));
 
         const float hLow = -0.5f;
         const float hRange = 4.5f;

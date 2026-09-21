@@ -128,8 +128,8 @@ final class TerrainWorld
     void updateAround(const vec3 focus)
     {
         const float S = cfg_.tileSize;
-        const int cx = cast(int) floor(focus.x / S);
-        const int cy = cast(int) floor(focus.y / S);
+        const int cx = cast(int) floor(focus.x / S + 0.5f);
+        const int cy = cast(int) floor(focus.y / S + 0.5f);
         const int R = windowRadius_;
 
         const int tx0 = cx - R, tx1 = cx + R;
@@ -189,8 +189,8 @@ final class TerrainWorld
 
         immutable tile = terrain_.tileData(tx, ty);
         const vec3 corner = origin
-            + frameForward * (cast(float) tx * cfg_.tileSize)
-            + frameRight * (cast(float) ty * cfg_.tileSize);
+            + frameForward * (cast(float) tx * cfg_.tileSize - gridHalfShift(cfg_))
+            + frameRight * (cast(float) ty * cfg_.tileSize - gridHalfShift(cfg_));
 
         TileEntry e;
         e.shape = New!TerrainHeightfield(tile, cfg_, world_);

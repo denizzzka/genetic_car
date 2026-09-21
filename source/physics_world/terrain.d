@@ -152,12 +152,20 @@ private ulong tileSeed(const TerrainConfig cfg, int tx, int ty)
     return h;
 }
 
+/// Полтайла: сдвиг сетки тайлов на полтайла по обеим осям, чтобы стартовый
+/// origin лежал в центре тайла, а не на стыке четырёх. На стыке физическое
+/// высотное поле теряет контакт с колесом, и машина проваливается.
+float gridHalfShift(const TerrainConfig cfg) pure nothrow @nogc
+{
+    return 0.5f * cfg.tileSize;
+}
+
 private BoulderData[] buildBoulders(const TerrainConfig cfg, int tx, int ty)
 {
     auto gen = Mt19937(cast(uint) tileSeed(cfg, tx, ty));
     const vec3 corner = origin
-        + forward * (cast(float) tx * cfg.tileSize)
-        + right * (cast(float) ty * cfg.tileSize);
+        + forward * (cast(float) tx * cfg.tileSize - gridHalfShift(cfg))
+        + right * (cast(float) ty * cfg.tileSize - gridHalfShift(cfg));
     const vec3 tileCenter = corner
         + forward * (cfg.tileSize * 0.5f)
         + right * (cfg.tileSize * 0.5f);
@@ -220,8 +228,8 @@ shared class TerrainSurface
             const uint W = cfg_.cells + 1;
             const float cell = cfg_.tileSize / cast(float) cfg_.cells;
             const vec3 corner = origin
-                + forward * (cast(float) tx * cfg_.tileSize)
-                + right * (cast(float) ty * cfg_.tileSize);
+                + forward * (cast(float) tx * cfg_.tileSize - gridHalfShift(cfg_))
+                + right * (cast(float) ty * cfg_.tileSize - gridHalfShift(cfg_));
 
             auto t = new TerrainTileData;
             t.heights = new float[W * W];
