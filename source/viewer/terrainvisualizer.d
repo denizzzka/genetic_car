@@ -48,6 +48,7 @@ final class TerrainVisualizer
     private Scene scene_;
     private TerrainSurface terrain_;
     private Material matTile_;
+    private Material matTileDim_;
     private Material matBoulder_;
 
     /// Пул готовых камней: несколько десятков заранее построенных форм.
@@ -80,6 +81,16 @@ final class TerrainVisualizer
         matTile_.roughnessFactor = 1.0f;
         matTile_.metallicFactor = 0.0f;
         matTile_.baseColorTexture = buildHeightGradientTexture();
+
+        // Затемнённый вариант для тайлов вокруг центрального. В dagon при
+        // наличии текстуры baseColorFactor (diffuseVector) в шейдере
+        // игнорируется — текстура целиком заменяет его, поэтому затемнение
+        // делаем внутри самой текстуры: тот же градиент высот, но серенький.
+        matTileDim_ = scene.addMaterial();
+        matTileDim_.baseColorFactor = Color4f(1.0f, 1.0f, 1.0f, 1.0f);
+        matTileDim_.roughnessFactor = matTile_.roughnessFactor;
+        matTileDim_.metallicFactor = matTile_.metallicFactor;
+        matTileDim_.baseColorTexture = buildDimGradientTexture();
 
         matBoulder_ = scene.addMaterial();
         matBoulder_.baseColorFactor = Color4f(0.45f, 0.38f, 0.3f, 1.0f);
@@ -140,7 +151,14 @@ final class TerrainVisualizer
 
         foreach (tx; tx0 .. tx1 + 1)
             foreach (ty; ty0 .. ty1 + 1)
+            {
                 ensureTile(tx, ty);
+                // Тайлы вокруг центрального затемняем, центральный остаётся
+                // ярким — видно, по какому тайлу едет багги.
+                const long key = tileKey(tx, ty);
+                tiles_[key].entity.material =
+                    (tx == cx && ty == cy) ? matTile_ : matTileDim_;
+            }
     }
 
     private void ensureTile(int tx, int ty)
@@ -280,11 +298,24 @@ final class TerrainVisualizer
     /// Текстура-градиент высот: низ — зелень, выше — мягкая скала.
     private Texture buildHeightGradientTexture()
     {
+        return buildGradientTexture(1.0f);
+    }
+
+    /// Серенький вариант той же текстуры: тот же градиент высот, но цвета
+    /// смешаны с нейтральным серым — «подкрашенные» тайлы вокруг центрального.
+    private Texture buildDimGradientTexture()
+    {
+        return buildGradientTexture(0.0f);
+    }
+
+    private Texture buildGradientTexture(const float grayMix)
+    {
         const int imgW = 4;
         const int imgH = 64;
         const Color4f low = Color4f(0.30f, 0.48f, 0.22f, 1.0f);
         const Color4f mid = Color4f(0.52f, 0.46f, 0.34f, 1.0f);
         const Color4f high = Color4f(0.60f, 0.58f, 0.56f, 1.0f);
+        const Color4f gray = Color4f(0.45f, 0.45f, 0.45f, 1.0f);
 
         SuperImage img = unmanagedImage(imgW, imgH, 4, 8);
         foreach (y; 0 .. imgH)
@@ -310,7 +341,14 @@ final class TerrainVisualizer
                     1.0f);
             }
             foreach (x; 0 .. imgW)
-                img[x, y] = c;
+            {
+                const Color4f d = Color4f(
+                    c.r * grayMix + gray.r * (1.0f - grayMix),
+                    c.g * grayMix + gray.g * (1.0f - grayMix),
+                    c.b * grayMix + gray.b * (1.0f - grayMix),
+                    1.0f);
+                img[x, y] = d;
+            }
         }
 
         auto tex = New!Texture(scene_);
