@@ -4,14 +4,11 @@ import std.math;
 import dlib.math.vector;
 
 /*
- * Система координат каркаса задаётся его собственным базисом:
- * right — вправо, forward — вперёд, up — вверх (константы ниже).
+ * Система координат каркаса задаётся его собственным ортонормированным
+ * базисом: right/forward/up и их отрицания (константы ниже). Им пользуются
+ * стартовый геном (initial_data) и грамматика (buggygrammar).
  */
 
-/// Ортонормированный базис каркаса, согласованный с физикой: ось X —
-/// поперечная (left/right), ось Y — продольная по ходу (forward/backward,
-/// курс фитнеса — forward, т.е. −Y), ось Z — вверх (up/down).
-/// Им пользуются стартовый геном (initial_data) и грамматика (buggygrammar).
 immutable vec3 right    = vec3( 1.0f,  0.0f,  0.0f);
 immutable vec3 forward  = vec3( 0.0f, -1.0f,  0.0f);
 immutable vec3 up       = vec3( 0.0f,  0.0f,  1.0f);
@@ -70,6 +67,20 @@ struct Frame
         foreach (b; beams)
             len += distance(nodes[b.a].pos, nodes[b.b].pos);
         return len;
+    }
+
+    /// Направление «своей» балки узла — от самого узла к другому её концу.
+    /// Каркас связный, поэтому балка у узла есть всегда.
+    vec3 beamDirectionAt(size_t node) const
+    {
+        foreach (b; beams)
+        {
+            if (b.a == node)
+                return nodes[b.b].pos - nodes[node].pos;
+            if (b.b == node)
+                return nodes[b.a].pos - nodes[node].pos;
+        }
+        assert(false, "у узла нет балки: каркас должен быть связным");
     }
 }
 

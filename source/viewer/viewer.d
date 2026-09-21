@@ -511,10 +511,10 @@ class BuggyScene: Scene
             e.scaling = Vector3f(b.radius, length, b.radius);
         }
 
-        foreach (i, anchor; buggy.frame.anchors)
+        foreach (anchor; buggy.frame.anchors)
         {
             const pos = buggy.frame.nodes[anchor.node].pos + off;
-            const vec3 axle = wheelAxle(buggy.frame, i);
+            const vec3 axle = wheelAxle(buggy.frame.beamDirectionAt(anchor.node));
             final switch (anchor.kind)
             {
                 case AnchorKind.wheel:

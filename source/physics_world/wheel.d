@@ -1,6 +1,7 @@
 /**
- * Колесо каркаса: ось, перпендикулярная «своей» балке узла, и револьте-шарнир,
- * которым колесо приварено к мастер-каркасу одним концом.
+ * Колесо каркаса: ось вдоль «своей» балки узла (диск всегда перпендикулярен
+ * балке, независимо от её ориентации), и револьте-шарнир, которым колесо
+ * приварено к мастер-каркасу одним концом.
  *
  * Модуль намеренно листовой (не импортирует car.d): шарнир работает через
  * базовый `NewtonRigidBody`, а направление оси выводится чисто из геометрии
@@ -16,49 +17,12 @@ import dlib.math.quaternion;
 
 import dagon.ext.newton;
 
-import frame.frame : Frame, frameUp = up, frameForward = forward;
-
-/// Ось колеса якоря: самая поперечная из двух горизонтальных направлений
-/// «своей» балки узла — либо вдоль самой балки (балка-ось, «гироскутер»:
-/// колёса на концах перекладины крутятся вокруг неё), либо перпендикулярно ей
-/// (`up × балка`, рука/лонжерон, на которой висит колесо). Знак оси выбирается
-/// так, чтобы она смотрела в сторону `frameForward`. У сиротливого узла без
-/// балок (или при вертикальной балке) — прямо `frameForward`, как у старинной
-/// глобальной расстановки.
-vec3 wheelAxle(const Frame frame, size_t anchorIdx)
+/// Ось вращения колеса по одной балке: направление балки, приведённое к
+/// единичному. Диск колеса встаёт перпендикулярно балке. Ничего не знает о
+/// каркасе и мире; фолбэков нет.
+vec3 wheelAxle(const vec3 beamDir)
 {
-    const size_t node = frame.anchors[anchorIdx].node;
-    vec3 bestAxle = vec3(0.0f, 0.0f, 0.0f);
-    float bestScore = -1.0f;
-    foreach (b; frame.beams)
-    {
-        if (b.a != node && b.b != node)
-            continue;
-        const vec3 p = frame.nodes[node].pos;
-        const vec3 q = frame.nodes[(b.a == node) ? b.b : b.a].pos;
-        const vec3 flat = (q - p) - frameUp * dot(q - p, frameUp);
-        const float len = flat.length;
-        if (len < 1e-5f)
-            continue;
-        const vec3 along = flat / len;
-        const vec3 perp = cross(frameUp, along);
-        // Ось — более поперечный кандидат: сама балка (гироскутер) или
-        // перпендикуляр к ней (рука). При равенстве — перпендикуляр.
-        const float scoreAlong = abs(dot(along, frameForward));
-        const float scorePerp = abs(dot(perp, frameForward));
-        const vec3 cand = scorePerp >= scoreAlong ? perp : along;
-        const float score = scoreAlong > scorePerp ? scoreAlong : scorePerp;
-        if (score > bestScore)
-        {
-            bestScore = score;
-            bestAxle = cand;
-        }
-    }
-    if (bestScore < 0.0f)
-        return frameForward;
-    const float al = bestAxle.length;
-    const vec3 axle = al < 1e-5f ? frameForward : bestAxle / al;
-    return dot(axle, frameForward) < 0.0f ? -axle : axle;
+    return beamDir / beamDir.length;
 }
 
 /// Своя ступица: колесо и балка делят узел якоря — ось легитимно проходит
