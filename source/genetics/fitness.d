@@ -6,6 +6,11 @@ import std.typecons : Tuple, tuple;
 
 import dlib.math.vector;
 
+import dlib.core.memory;
+import dlib.core.ownership;
+import dagon.core.event;
+import dagon.ext.newton;
+
 import frame.frame;
 import genetics.buggyast;
 import physics_world;
@@ -251,8 +256,10 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
         return r;
     }
 
-    auto world = acquireWorld();
-    scope (exit) releaseWorld(world);
+    ensureNewtonLoaded();
+    auto world = New!NewtonPhysicsWorld(cast(EventManager)null, cast(Owner)null);
+    world.threadsCount = 0;
+    scope (exit) Delete(world);
 
     auto physics = new BuggyPhysics(buggy, world);
     scope (exit) physics.dispose();

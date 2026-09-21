@@ -9,9 +9,11 @@ import dlib.math.quaternion;
 import dlib.math.matrix;
 import dlib.math.transformation;
 import dlib.core.ownership;
+import dlib.geometry.triangle;
 
 import dagon.core.event;
 import dagon.ext.newton;
+import dagon.graphics.mesh : TriangleSet;
 
 import frame.frame;
 import physics_world.physics;
@@ -143,6 +145,68 @@ final class NewtonCarBody: NewtonRigidBody
         NewtonPhysicsWorld world, Owner owner)
     {
         super(bodyType, shape, mass, world, owner);
+    }
+}
+
+/// Плоская сетка треугольников для `NewtonMeshShape`: грид `w×h` метров в
+/// плоскости XY, все вершины строго на z == 0. Используется как простой
+/// terrain без рельефа.
+final class FlatTriangleSet: TriangleSet
+{
+    private float width_, height_, segs_;
+
+    this(float width, float height, uint segs)
+    {
+        width_ = width;
+        height_ = height;
+        segs_ = segs;
+    }
+
+    int opApply(scope int delegate(Triangle t) dg)
+    {
+        const float stepX = width_ / segs_;
+        const float stepY = height_ / segs_;
+        const float x0 = -width_ * 0.5f;
+        const float y0 = -height_ * 0.5f;
+
+        Triangle tri;
+        tri.materialIndex = 0;
+        foreach (j; 0 .. segs_)
+            foreach (i; 0 .. segs_)
+            {
+                const float x = x0 + i * stepX;
+                const float y = y0 + j * stepY;
+                const Vector3f p00 = Vector3f(x, y, 0.0f);
+                const Vector3f p10 = Vector3f(x + stepX, y, 0.0f);
+                const Vector3f p11 = Vector3f(x + stepX, y + stepY, 0.0f);
+                const Vector3f p01 = Vector3f(x, y + stepY, 0.0f);
+                const Vector3f n = Vector3f(0.0f, 0.0f, 1.0f);
+
+                tri.v[0] = p00;
+                tri.v[1] = p10;
+                tri.v[2] = p11;
+                tri.n[0] = n;
+                tri.n[1] = n;
+                tri.n[2] = n;
+                {
+                    const int r = dg(tri);
+                    if (r)
+                        return r;
+                }
+
+                tri.v[0] = p00;
+                tri.v[1] = p11;
+                tri.v[2] = p01;
+                tri.n[0] = n;
+                tri.n[1] = n;
+                tri.n[2] = n;
+                {
+                    const int r = dg(tri);
+                    if (r)
+                        return r;
+                }
+            }
+        return 0;
     }
 }
 
@@ -441,14 +505,14 @@ final class BuggyPhysics
 
     private void buildGround()
     {
-        // Бокс задаёт полный габарит: размер 1 в Z + тело в z=-0.5 даёт верхнюю
-        // грань ровно на z == 0.
+        // Плоская поверхность как terrain: грид треугольников 120×120 м на
+        // z == 0, упакованный Newton'ом в BVH-дерево (tree collision).
         auto body = New!NewtonCarBody(NewtonRigidBodyType.Static,
-            New!NewtonBoxShape(Vector3f(120.0f, 120.0f, 1.0f), world),
+            New!NewtonMeshShape(New!FlatTriangleSet(120.0f, 120.0f, 45), world),
             0.0f, world, world);
         body.dynamic = false;
         body.kind = BodyKind.ground;
-        body.setTransformation(translationMatrix(vec3(0.0f, 0.0f, -0.5f)));
+        body.setTransformation(translationMatrix(vec3(0.0f, 0.0f, 0.0f)));
         body.update(0.0);
         ground = body;
     }
