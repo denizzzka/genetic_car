@@ -36,9 +36,9 @@ Genotype startGenome(const Grammar gr)
 
     set("frame", [0u]);
     set("startPos", [0u]);
-    set("startX", [u(0.0f, -2.0f, 2.0f)]);
-    set("startY", [u(0.0f, -2.0f, 2.0f)]);
-    set("startZ", [u(0.3f, -2.0f, 2.0f)]);
+    set("startForward", [u(0.0f, -2.0f, 2.0f)]);
+    set("startRight", [u(0.0f, -2.0f, 2.0f)]);
+    set("startUp", [u(0.3f, -2.0f, 2.0f)]);
     set("taper", [u(1.0f, 0.4f, 1.0f)]);
     set("taperPow", [u(1.0f, 0.5f, 4.0f)]);
     set("heading", [mid]);
@@ -55,9 +55,9 @@ Genotype startGenome(const Grammar gr)
     set("beam", [0u]);
     set("startRef", [0u]);
     set("endRef", [0u]);
-    set("destX", [mid]);
-    set("destY", [u(-1.2f, -1.5f, 1.5f)]);
-    set("destZ", [mid]);
+    set("forward", [mid]);
+    set("right", [u(-1.2f, -1.5f, 1.5f)]);
+    set("up", [mid]);
     set("radius", [u(0.05f, 0.02f, 0.06f)]);
     // Активатор-ингибитор Nodal/Lefty на нуле: стартовая пара (когда
     // раздвоится) зеркально-точная; эволюция сама добавит асимметрию,

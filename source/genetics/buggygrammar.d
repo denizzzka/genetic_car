@@ -78,12 +78,15 @@ Grammar buggyGrammar()
     ];
 
     auto idx = new Sampler!Tok("idx", Tok.refIdx, 64);
-    auto destX = new Sampler!Tok("destX", Tok.coord, -1.5f, 1.5f);
-    auto destY = new Sampler!Tok("destY", Tok.coord, -1.5f, 1.5f);
-    auto destZ = new Sampler!Tok("destZ", Tok.coord, -1.5f, 1.5f);
-    auto startX = new Sampler!Tok("startX", Tok.coord, -2.0f, 2.0f);
-    auto startY = new Sampler!Tok("startY", Tok.coord, -2.0f, 2.0f);
-    auto startZ = new Sampler!Tok("startZ", Tok.coord, -2.0f, 2.0f);
+    // Направления turtle: дельта «вперёд» идёт по заголовку, «вправо» —
+    // перпендикулярно от него, «вверх» — вертикально. Три токена всё так же
+    // `Tok.coord`, но гены называются по смыслу, а не по осям X/Y/Z.
+    auto forward = new Sampler!Tok("forward", Tok.coord, -1.5f, 1.5f);
+    auto right = new Sampler!Tok("right", Tok.coord, -1.5f, 1.5f);
+    auto up = new Sampler!Tok("up", Tok.coord, -1.5f, 1.5f);
+    auto startForward = new Sampler!Tok("startForward", Tok.coord, -2.0f, 2.0f);
+    auto startRight = new Sampler!Tok("startRight", Tok.coord, -2.0f, 2.0f);
+    auto startUp = new Sampler!Tok("startUp", Tok.coord, -2.0f, 2.0f);
     auto radius = new Sampler!Tok("radius", Tok.radius, 0.02f, 0.06f);
     auto taper = new Sampler!Tok("taper", Tok.taper, 0.4f, 1.0f);
     auto taperPow = new Sampler!Tok("taperPow", Tok.taperPow, 0.5f, 4.0f);
@@ -100,13 +103,13 @@ Grammar buggyGrammar()
     ]);
 
     auto startPos = nt("startPos", [
-        new Production([startX, startY, startZ, taper, taperPow, heading, motorPower]),
+        new Production([startForward, startRight, startUp, taper, taperPow, heading, motorPower]),
     ]);
 
     auto endRef = nt("endRef", [
-        new Production([marker(Tok.endNew), destX, destY, destZ]),
+        new Production([marker(Tok.endNew), forward, right, up]),
         new Production([idx]),
-        new Production([marker(Tok.endNear), destX, destY, destZ]),
+        new Production([marker(Tok.endNear), forward, right, up]),
     ]);
 
     auto beamKind = nt("beamKind", [
@@ -148,11 +151,11 @@ Grammar buggyGrammar()
     ]);
 
     auto symbols = [
-        start, startPos, startX, startY, startZ, taper, taperPow, heading, turn,
+        start, startPos, startForward, startRight, startUp, taper, taperPow, heading, turn,
         motorPower,
         segmentList_, segment, segMode, nodal, lefty,
         beamList_, beam, startRef,
-        idx, endRef, destX, destY, destZ, radius, beamKind,
+        idx, endRef, forward, right, up, radius, beamKind,
         anchorMarker, anchorList_, anchor, anchorKind,
     ];
     return new Grammar(start, symbols);
