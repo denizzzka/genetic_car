@@ -452,7 +452,9 @@ final class BuggyPhysics
         return res;
     }
 
-    debug:
+    // Debug-only хелперы обёрнуты в block-scoped `debug { }`: метка `debug:`
+    // в release выключала всю остальную часть класса до его конца.
+    debug {
     /// Сырое (кэшированное dagon'ом) состояние мастера для отладки.
     BodyState dbgMasterState() @property
     {
@@ -464,7 +466,6 @@ final class BuggyPhysics
         return s;
     }
 
-    debug:
     /// Ожидаемые балки ровного монолитного каркаса: какой должна быть каждая
     /// балка по замыслу (на месте закрепления), будучи жёстко приделанной к
     /// мастеру. mid — ожидаемый центр, dir — ожидаемая ось (локальный Y),
@@ -476,7 +477,6 @@ final class BuggyPhysics
         float len;
     }
 
-    debug:
     BeamTarget[] dbgBeamTargets() @property
     {
         BeamTarget[] res;
@@ -498,6 +498,7 @@ final class BuggyPhysics
             res ~= t;
         }
         return res;
+    }
     }
 
     private void buildGround()
