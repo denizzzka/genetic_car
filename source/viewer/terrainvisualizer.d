@@ -45,7 +45,7 @@ final class TerrainVisualizer
     private Mesh meshBoulder_;
 
     /// Окно тайлов вокруг фокуса, как у физики: (windowRadius·2+1)² тайлов.
-    private int windowRadius_ = 2;
+    private int windowRadius_ = 1;
 
     /// Живые сущности тайлов окна (уехавшие выгружаются из мира, но не из кэша).
     private VFTile[long] tiles_;

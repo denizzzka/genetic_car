@@ -114,7 +114,7 @@ final class TerrainWorld
     private TileEntry[long] tiles_;
 
     /// Полуширина окна в тайлах: окно (2·R+1)² тайлов, т.е. 5×5 при R = 2.
-    private int windowRadius_ = 2;
+    private int windowRadius_ = 1;
 
     this(NewtonPhysicsWorld world, TerrainSurface terrain, const TerrainConfig cfg)
     {

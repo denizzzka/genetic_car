@@ -27,7 +27,7 @@ struct TerrainConfig
     int seed = 1337;
 
     /// Размер стороны тайла в метрах (по обеим осям плоскости forward×right).
-    float tileSize = 16.0f;
+    float tileSize = 8.0f;
 
     /// Число ячеек тайла на сторону: grid W = cells+1 вершин на сторону,
     /// шаг cell = tileSize / cells.
@@ -55,9 +55,10 @@ struct TerrainConfig
     float lacunarity = 2.0f;
     float gain = 0.5f;
 
-    /// Радиусы булыжников и лимит на тайл.
+    /// Радиусы булыжников: у старта они минимальны и накатываются до
+    /// максимума по мере удаления (тот же rampLength, что у рельефа).
     float boulderRadiusMin = 0.25f;
-    float boulderRadiusMax = 0.8f;
+    float boulderRadiusMax = 0.5f;
     uint maxBouldersPerTile = 8;
 
     /// Не сеять булыжники ближе этой дистанции к origin — старт чистый.
@@ -157,6 +158,16 @@ private BoulderData[] buildBoulders(const TerrainConfig cfg, int tx, int ty)
     const vec3 corner = origin
         + forward * (cast(float) tx * cfg.tileSize)
         + right * (cast(float) ty * cfg.tileSize);
+    const vec3 tileCenter = corner
+        + forward * (cfg.tileSize * 0.5f)
+        + right * (cfg.tileSize * 0.5f);
+    // Диапазон радиусов растёт с удалением от старта синхронно с усложнением
+    // рельефа (тот же накат rampLength), но в пределах диапазона размер
+    // рандомный — камни не одинаковые даже на одном удалении.
+    const float d = hypot(dot(tileCenter - origin, forward), dot(tileCenter - origin, right));
+    const float t = smoothstep01(d / cfg.rampLength);
+    const float rLo = mix(cfg.boulderRadiusMin, cfg.boulderRadiusMax, t) * 0.75f;
+    const float rHi = mix(cfg.boulderRadiusMin, cfg.boulderRadiusMax, t);
     BoulderData[] res;
     foreach (_; 0 .. cfg.maxBouldersPerTile)
     {
@@ -168,9 +179,7 @@ private BoulderData[] buildBoulders(const TerrainConfig cfg, int tx, int ty)
         BoulderData b;
         b.alongForward = lf;
         b.alongRight = lr;
-        b.radius = cfg.boulderRadiusMin
-            + (cfg.boulderRadiusMax - cfg.boulderRadiusMin)
-            * uniform(0.0f, 1.0f, gen);
+        b.radius = uniform(rLo, rHi, gen);
         res ~= b;
     }
     return res;
