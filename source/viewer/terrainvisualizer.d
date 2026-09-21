@@ -20,11 +20,13 @@ struct VFTile
     Entity entity;
 }
 
-/// Булыжник: сущность-сфера, общая для окна позиция пересоздаётся каждый
-/// кадр по активному списку физики. Кэш по id = (ключ тайла, индекс).
+/// Булыжник: сущность-камень, меш берётся из общего пула по id (форма
+/// псевдослучайная), масштаб — радиус физики × рандомный фактор. Кэш по id =
+/// (ключ тайла, индекс); сущность переживает уход тайла из окна.
 struct VFBoulder
 {
     Entity entity;
+    float scaleFactor = 1.0f;
 }
 
 /**
@@ -33,8 +35,9 @@ struct VFBoulder
  * Строит меши тайлов из общего shared-кэша (physics_world.terrain) вокруг
  * фокуса (живой машины или origin), по мере езды подвозит новые тайлы и
  * убирает уехавшие. Вершины меша — уже в абсолютных координатах мира dagon
- * (= Newton), поэтому сущности тайлов стоят в origin. Булыжники-сферы
- * «переснимаются» из физики живого заезда каждый кадр.
+ * (= Newton), поэтому сущности тайлов стоят в origin. Булыжники-камни
+ * «переснимаются» из физики живого заезда каждый кадр; коллизии остаются
+ * сферами (NewtonSphereShape), внешний вид — неровный камень.
  */
 final class TerrainVisualizer
 {
@@ -42,7 +45,12 @@ final class TerrainVisualizer
     private TerrainSurface terrain_;
     private Material matTile_;
     private Material matBoulder_;
-    private Mesh meshBoulder_;
+
+    /// Пул готовых камней: несколько десятков заранее построенных форм.
+    /// Булыжник ссылается на меш из пула по псевдослучайному от id слоту —
+    /// нет смысла строить уникальный меш на каждый камень.
+    private Mesh[40] rockMeshes_;
+    private const uint rockPoolSize_ = rockMeshes_.length;
 
     /// Окно тайлов вокруг фокуса, как у физики: (windowRadius·2+1)² тайлов.
     private int windowRadius_ = 1;
@@ -71,7 +79,8 @@ final class TerrainVisualizer
         matBoulder_.roughnessFactor = 0.9f;
         matBoulder_.metallicFactor = 0.0f;
 
-        meshBoulder_ = New!ShapeSphere(1.0f, scene.assetManager);
+        foreach (i; 0 .. rockPoolSize_)
+            rockMeshes_[i] = buildRockMesh(cast(uint) (i * 0x9E3779B9u));
     }
 
     /// Передвинуть окно за фокусом и снять с физики булыжники.
@@ -163,11 +172,12 @@ final class TerrainVisualizer
         }
         tiles_ = null;
 
-        foreach (id, ref b; boulders_)
+        foreach (ref b; boulders_)
             scene_.removeEntity(b.entity, false);
         boulders_ = null;
 
-        Delete(meshBoulder_);
+        foreach (ref m; rockMeshes_)
+            Delete(m);
     }
 
     /// Меш тайла (tx, ty). Вершины — в абсолютных координатах мира dagon
@@ -295,6 +305,136 @@ final class TerrainVisualizer
         return (cast(ulong) key << 20) | cast(ulong)(index & 0xFFFFF);
     }
 
+    /// Геометрия камня: «сфера» с детерминированным от сида радиальным
+    /// джиттером — форма неправильная, как у настоящего камня. Один меш на
+    /// булыжник (по id), масштабируется сущностью до радиуса; коллизия в
+    /// Newton остаётся сферой.
+    private struct RockMeshData
+    {
+        Vector3f[] verts;
+        Vector3f[] normals;
+        Vector2f[] texcoords;
+        uint[3][] tris;
+    }
+
+    private static RockMeshData rockMeshData(uint rings, uint segs, uint seed,
+        float jitter = 1.0f)
+    {
+        RockMeshData d;
+        const uint rows = rings + 1;
+        const uint cols = segs + 1;
+        d.verts.length = rows * cols;
+        d.normals.length = rows * cols;
+        d.texcoords.length = rows * cols;
+        foreach (ir; 0 .. rows)
+        {
+            const float phi = PI * cast(float) ir / cast(float) rings;
+            foreach (isg; 0 .. cols)
+            {
+                const float theta = 2.0f * PI * cast(float) isg / cast(float) segs;
+                Vector3f dir = Vector3f(
+                    sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta));
+                const float r = 1.0f + jitter * (rockJitter(ir, isg, seed) - 1.0f);
+                const size_t i = ir * cols + isg;
+                d.verts[i] = dir * r;
+                d.normals[i] = dir; // гладкая нормаль «сферы»
+                d.texcoords[i] = Vector2f(
+                    cast(float) isg / cast(float) segs,
+                    cast(float) ir / cast(float) rings);
+            }
+        }
+
+        ulong k = 0;
+        d.tris.length = 2 * rings * segs;
+        foreach (ir; 0 .. rings)
+            foreach (isg; 0 .. segs)
+            {
+                const uint i00 = cast(uint)(ir * cols + isg);
+                const uint i01 = cast(uint)(ir * cols + isg + 1);
+                const uint i10 = cast(uint)((ir + 1) * cols + isg);
+                const uint i11 = cast(uint)((ir + 1) * cols + isg + 1);
+                d.tris[k++] = [i00, i10, i11];
+                d.tris[k++] = [i00, i11, i01];
+            }
+        return d;
+    }
+
+    /// Детерминированный радиальный джиттер от (ring, seg, seed): две волны
+    /// FNV-хэша дают неровную, но стабильную форму камня.
+    private static float rockJitter(uint ir, uint isg, uint seed)
+    {
+        uint fnv(uint a, uint b, uint c)
+        {
+            uint h = 2166136261u;
+            h = (h ^ a) * 16777619u;
+            h = (h ^ b) * 16777619u;
+            h = (h ^ c) * 16777619u;
+            return h;
+        }
+        return 1.0f
+            + 0.30f * (unitHash(fnv(ir, isg, seed)) - 0.5f)
+            + 0.12f * (unitHash(fnv(ir, isg, seed ^ 0x9E3779B9u)) - 0.5f);
+    }
+
+    /// Хэш-число [0,1) для поворотов и джиттеров.
+    private static float unitHash(uint x)
+    {
+        x ^= x >> 16;
+        x *= 0x45d9f3bu;
+        x ^= x >> 16;
+        x *= 0x45d9f3bu;
+        x ^= x >> 16;
+        return cast(float)(x & 0xFFFFFF) / cast(float)0xFFFFFF;
+    }
+
+    private Mesh buildRockMesh(uint seed)
+    {
+        const d = rockMeshData(7, 11, seed);
+        auto mesh = New!Mesh(scene_.assetManager);
+        mesh.vertices = New!(Vector3f[])(d.verts.length);
+        mesh.vertices[] = d.verts;
+        mesh.normals = New!(Vector3f[])(d.normals.length);
+        mesh.normals[] = d.normals;
+        mesh.texcoords = New!(Vector2f[])(d.texcoords.length);
+        mesh.texcoords[] = d.texcoords;
+        mesh.indices = New!(uint[3][])(d.tris.length);
+        mesh.indices[] = d.tris;
+        mesh.dataReady = true;
+        mesh.calcBoundingBox();
+        mesh.prepareVAO();
+        return mesh;
+    }
+
+    unittest
+    {
+        // Чистая сфера (jitter = 0): развёртка обязана быть единообразной —
+        // все треугольники фронтом наружу, как у проверенного меша тайла
+        // (cross ребер направлен внутрь: dot < 0).
+        const s = rockMeshData(6, 10, 1, 0.0f);
+        foreach (tri; s.tris)
+        {
+            const v0 = s.verts[tri[0]];
+            const v1 = s.verts[tri[1]];
+            const v2 = s.verts[tri[2]];
+            const n = cross(v1 - v0, v2 - v0);
+            if (n.length < 1e-4f)
+                continue; // вырожденные треугольники у полюсов
+            assert(dot(n, v0 + v1 + v2) < 0.0f, "треугольник развёрнут внутрь");
+        }
+
+        // Сид меняет форму: камни не бывают одинаковыми.
+        const a = rockMeshData(6, 10, 1);
+        const b = rockMeshData(6, 10, 2);
+        bool differs = false;
+        foreach (i; 0 .. a.verts.length)
+            if ((a.verts[i] - b.verts[i]).length > 1e-3f)
+            {
+                differs = true;
+                break;
+            }
+        assert(differs, "форма булыжника зависит от сида");
+    }
+
     private void syncBoulders(LiveBoulder[] active)
     {
         ulong[] present;
@@ -308,11 +448,18 @@ final class TerrainVisualizer
                 {
                     if (boulders_.length > boulderCacheCap)
                         continue;
+                    // Форма из пула по id, поворот и масштаб — от хэша id.
+                    const uint pid = cast(uint) (id ^ (id >> 32));
+                    const size_t slot = cast(size_t) (unitHash(pid)
+                        * cast(float) rockPoolSize_);
                     auto e = scene_.addEntity();
-                    e.drawable = meshBoulder_;
+                    e.drawable = rockMeshes_[slot];
                     e.material = matBoulder_;
+                    e.rotation = rotationQuaternion(Vector3f(0.0f, 1.0f, 0.0f),
+                        2.0f * PI * unitHash(pid * 0x2545F491u));
                     VFBoulder b;
                     b.entity = e;
+                    b.scaleFactor = 0.8f + 0.4f * unitHash(pid ^ 0xA4093822u);
                     boulders_[id] = b;
                     it = id in boulders_;
                 }
@@ -321,7 +468,8 @@ final class TerrainVisualizer
                     scene_.useEntity(it.entity, false);
                 }
                 it.entity.position = lb.position;
-                it.entity.scaling = Vector3f(lb.radius, lb.radius, lb.radius);
+                const float s = lb.radius * it.scaleFactor;
+                it.entity.scaling = Vector3f(s, s, s);
             }
 
         // Исчезнувшие (уехавшие из окна) — прячем, но держим в кэше.

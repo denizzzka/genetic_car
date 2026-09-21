@@ -161,12 +161,12 @@ private BoulderData[] buildBoulders(const TerrainConfig cfg, int tx, int ty)
     const vec3 tileCenter = corner
         + forward * (cfg.tileSize * 0.5f)
         + right * (cfg.tileSize * 0.5f);
-    // Диапазон радиусов растёт с удалением от старта синхронно с усложнением
-    // рельефа (тот же накат rampLength), но в пределах диапазона размер
-    // рандомный — камни не одинаковые даже на одном удалении.
+    // Диапазон радиусов: мелкие камни есть и у старта, крупные добавляются
+    // по мере удаления (тот же накат rampLength). Плюс рандом внутри
+    // диапазона — камни не одинаковые даже на одном удалении.
     const float d = hypot(dot(tileCenter - origin, forward), dot(tileCenter - origin, right));
     const float t = smoothstep01(d / cfg.rampLength);
-    const float rLo = mix(cfg.boulderRadiusMin, cfg.boulderRadiusMax, t) * 0.75f;
+    const float rLo = cfg.boulderRadiusMin * 0.5f;
     const float rHi = mix(cfg.boulderRadiusMin, cfg.boulderRadiusMax, t);
     BoulderData[] res;
     foreach (_; 0 .. cfg.maxBouldersPerTile)
