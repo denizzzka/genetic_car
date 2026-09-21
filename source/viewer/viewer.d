@@ -5,7 +5,8 @@ import dagon.core.keycodes;
 import dagon.core.time;
 import core.thread : Thread;
 import core.atomic : atomicStore, atomicLoad;
-import std.algorithm : min, max, sort;
+import std.algorithm : min, max, sort, map;
+import std.array : array;
 import std.random;
 import std.stdio : writefln;
 import frame.frame;
@@ -50,6 +51,9 @@ class BuggyScene: Scene
 
     enum size_t galleryTop = 5;
     enum float gallerySpacing = 4.0f;
+    /// Подальше назад по курсу (backward — константа каркаса): галерея живёт
+    /// за линией старта и не сливается с симулируемой машиной.
+    enum float galleryBack = 5.0f;
 
     /// Фоновый поток при создании новых поколений
     private Thread jobThread;
@@ -65,6 +69,12 @@ class BuggyScene: Scene
     private FreeviewComponent freeview;
     private bool liveFailed_;
     private bool nWasHandled_;
+
+    /// V: показывать ли живой заезд текущего поколения (визуализация).
+    private bool visualize_;
+
+    /// G-стоп: серию поколений доиграть и остановиться.
+    private bool stopRequested_;
 
     /// Секунд реального времени после схода живого заезда: машина моргает
     /// (видима/скрыта) на этой частоте в ожидании переключения по N.
@@ -200,6 +210,30 @@ class BuggyScene: Scene
         if (freeview !is null && livePhysics !is null)
             freeview.setTargetSmooth(-Vector3f(livePhysics.worldFocus));
 
+        // R — всегда вручную: новое 0-е поколение. Вне фоновой эволюции.
+        if (jobThread is null && eventManager.keyDown[KEY_R])
+        {
+            resetPopulation();
+            if (visualize_)
+            {
+                // Живой просмотр продолжается, но по новому 0-му поколению.
+                stopLiveCar();
+                batch = evaluateStatic(grammar,
+                    population.map!(e => e.genotype).array, evolutionConfig);
+            }
+            else
+                buildGallery();
+            logGeneration();
+            return;
+        }
+
+        // G — запуск/остановка эволюции: только сам отбор, без переключения
+        // экрана. V — визуализация текущего поколения (живой заезд).
+        if (eventManager.keyDown[KEY_G])
+            toggleEvolution();
+        if (eventManager.keyDown[KEY_V])
+            toggleVisualization();
+
         if (jobThread !is null)
         {
             if (atomicLoad(jobDone))
@@ -207,60 +241,91 @@ class BuggyScene: Scene
                 jobThread = null;
                 cur = batch.res;
                 generation++;
-                if (gensDone + 1 < runGens)
+                population = cur;
+                if (stopRequested_ || gensDone + 1 >= runGens)
                 {
-                    gensDone++;
-                    startNextGen();
+                    stopRequested_ = false;
+                    if (visualize_)
+                        startLiveCar();   // следующий спавн возьмёт последний batch
+                    else
+                        buildGallery();
                 }
                 else
                 {
-                    population = cur;
-                    stopLiveCar();
-                    buildGallery();
-                    logGeneration();
+                    gensDone++;
+                    startNextGen();
+                    if (visualize_)
+                        startLiveCar();   // следующий спавн возьмёт новый batch
+                    else
+                        buildGallery();   // «5 лучших» обновляются, когда появились лучше
                 }
+                logGeneration();
             }
-            else
+            else if (visualize_)
                 stepLiveCar(t.delta);
+        }
+        else if (visualize_)
+            stepLiveCar(t.delta);
 
-            // Переключение симулируемой особи — только вручную, по N.
-            // keyPressed — защёлка события; игнорируем повторы, пока клавиша
-            // не отпущена (одно переключение на одно нажатие).
-            const bool nHeld = eventManager.keyPressed[KEY_N];
-            if (nHeld && !nWasHandled_ && livePhysics !is null)
-            {
-                nWasHandled_ = true;
-                if (showNextLiveBuggy())
-                    updateLiveCar();
-            }
-            if (!nHeld)
-                nWasHandled_ = false;
+        updateLiveN();
+    }
+
+    /// G: запустить отбор поколений либо остановить после текущего поколения.
+    private void toggleEvolution()
+    {
+        if (jobThread !is null)
+        {
+            stopRequested_ = true;
             return;
         }
 
-        if (eventManager.keyDown[KEY_R])
-        {
-            resetPopulation();
-            buildGallery();
-            logGeneration();
-        }
-        else if (eventManager.keyDown[KEY_G])
-            submitEvolution(evolutionConfig.generationsPerPress, evolutionConfig);
-    }
-
-    private void submitEvolution(size_t generations, EvolutionConfig cfg)
-    {
         // Сброс до старта: иначе устаревший true от прошлого задания
         // мгновенно применяет результат и гасит live-заезд.
         atomicStore(jobDone, false);
-        runCfg = cfg;
+        runCfg = evolutionConfig;
         cur = population;
-        runGens = generations;
+        runGens = evolutionConfig.generationsPerPress;
         gensDone = 0;
-        jobThread = null;
+        stopRequested_ = false;
         startNextGen();
-        removeCar();
-        startLiveCar();
+        logGeneration();
+    }
+
+    /// V: показать/спрятать живой заезд текущего поколения.
+    private void toggleVisualization()
+    {
+        visualize_ = !visualize_;
+        if (visualize_)
+        {
+            // Свежий batch по текущей популяции (статически, без физического
+            // заезда): и до первого G, и после R batch может не совпадать с
+            // population, а живому просмотру нужны его needPhysics.
+            if (jobThread is null)
+                batch = evaluateStatic(grammar,
+                    population.map!(e => e.genotype).array, evolutionConfig);
+            startLiveCar();
+        }
+        else
+        {
+            stopLiveCar();
+            buildGallery();
+        }
+    }
+
+    /// Переключение симулируемой особи — только вручную, по N.
+    /// keyPressed — защёлка события; игнорируем повторы, пока клавиша
+    /// не отпущена (одно переключение на одно нажатие).
+    private void updateLiveN()
+    {
+        const bool nHeld = eventManager.keyPressed[KEY_N];
+        if (nHeld && !nWasHandled_ && visualize_ && livePhysics !is null)
+        {
+            nWasHandled_ = true;
+            if (showNextLiveBuggy())
+                updateLiveCar();
+        }
+        if (!nHeld)
+            nWasHandled_ = false;
     }
 
     /// Строит партию поколения на главном потоке и запускает её физику в фоне.
@@ -269,9 +334,11 @@ class BuggyScene: Scene
         auto children = buildNextGeneration(grammar, cur, runCfg, rnd);
         batch = evaluateStatic(grammar, children, runCfg);
         jobGen = generation + 1;
-        // Новый batch — следующее поколение: сбрасываем live-цикл, чтобы N
-        // показывал машины текущего поколения, а не досматривал завершившееся.
-        stopLiveCar();
+        // Новый batch — следующее поколение: сброс live-цикла. Текущая машина
+        // продолжает ехать (V не рвётся), а следующий спавн (после схода или
+        // по N) берёт машины уже нового поколения.
+        liveBatch = null;
+        liveBatchIdx = 0;
         atomicStore(jobDone, false);
         jobThread = new Thread({
             runPhysics(batch, runCfg, jobGen);
@@ -489,7 +556,7 @@ class BuggyScene: Scene
             // Buggy раскладывает каркас сам (центр в нуле, колёса на земле);
             // витрине остаётся только сдвиг в свою полосу по X (display-only).
             auto buggy = new Buggy(placedFrame(f.get.frame));
-            drawBuggy(buggy, vec3(laneX, 0.0f, 0.0f));
+            drawBuggy(buggy, vec3(laneX, 0.0f, 0.0f) + backward * galleryBack);
         }
     }
 
