@@ -32,10 +32,14 @@ enum double stallSeconds = 30.0;
 /// качание на месте (< порога) продвижением не считаются.
 enum float stallProgressEps = 0.1f;
 
+/// Высота броска на старт: низ самого низкого колеса ставится на эту высоту
+/// над землёй, дальше физика сама роняет багги на поверхность.
+enum float dropHeight = 0.15f;
+
 /// Раскладка каркаса «на старт»: центрирует горизонтально (средняя X/Y узлов —
-/// в ноль) и сажает низом самого низкого колеса на землю (min Z якоря →
-/// wheelRadius). Единый способ поставить машину — им пользуются и грамматика
-/// (`develop`), и физика (`BuggyPhysics`), и витрина.
+/// в ноль) и сажает низом самого низкого колеса на `dropHeight` над землёй —
+/// багги роняют на поверхность при старте. Единый способ поставить машину —
+/// им пользуются и грамматика (`develop`), и физика (`BuggyPhysics`), и витрина.
 vec3 placeOffset(const Frame f)
 {
     vec3 c = origin;
@@ -47,7 +51,7 @@ vec3 placeOffset(const Frame f)
     float minZ = float.max;
     foreach (a; f.anchors)
         minZ = min(minZ, f.nodes[a.node].pos.z);
-    const float dz = (minZ < float.max) ? wheelRadius - minZ : 0.0f;
+    const float dz = (minZ < float.max) ? wheelRadius + dropHeight - minZ : 0.0f;
 
     return vec3(-c.x, -c.y, dz);
 }

@@ -69,7 +69,7 @@ class BuggyScene: Scene
     /// Секунд реального времени после схода живого заезда: машина моргает
     /// (видима/скрыта) на этой частоте в ожидании переключения по N.
     private double liveFailTime;
-    private enum liveBlinkHz = 4.0f;
+    private enum float liveBlinkHz = 2.0f;
 
     /// Визуализатор процедурной поверхности (общий shared-кэш с фитнесом).
     private TerrainVisualizer terrainVis;
