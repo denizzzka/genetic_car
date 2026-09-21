@@ -763,6 +763,16 @@ final class BuggyPhysics
         return master.position.xyz;
     }
 
+    /// Направление «вверх» рамы в координатах каркаса: на старте — строго +Z.
+    /// По нему `runFailure` судит о перевороте (крен/тангаж).
+    vec3 bodyUp() @property
+    {
+        if (master is null)
+            return Vector3f(0.0f, 0.0f, 1.0f);
+        const vec3 upNewton = master.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
+        return toCarPos(upNewton);
+    }
+
     /// Накопленное время симуляции без продвижения вперёд по курсу (-Y
     /// каркаса). Превышение `stallSeconds` — сход с дистанции.
     double stallTime() @property
@@ -848,7 +858,16 @@ string runFailure(BuggyPhysics physics)
     if (wheels.length == 0)
         return "не осталось колёс";
 
-    foreach (s; wheels)
+    // Переворот — по наклону рамы, а не по высоте ступицы: подъём колеса на
+    // крене, отрыве или бугре переворотом не является. Допускаем до
+    // `maxTiltDegrees` крена (вбок) и тангажа (вперёд/назад).
+    const vec3 up = physics.bodyUp();
+    const float rollDeg = atan2(up.x, up.z) * 180.0f / PI;
+    const float pitchDeg = atan2(up.y, up.z) * 180.0f / PI;
+    if (abs(rollDeg) > maxTiltDegrees || abs(pitchDeg) > maxTiltDegrees)
+        return "машина перевернулась";
+
+    foreach (wi, s; wheels)
     {
         if (!isFinite(s.position.x) || !isFinite(s.position.y)
             || !isFinite(s.position.z))
@@ -857,9 +876,22 @@ string runFailure(BuggyPhysics physics)
         // Так колесо не «проваливается» на бугре и не «парит» над ложбиной.
         const float g = physics.groundHeightAt(s.position.xyz);
         if (s.position.z < g + physicsWheelBelow)
+        {
+            // Сторожок: ранние машины почти стоят и не прыгают, ниже земли
+            // уходить не должны. Если сюда попали — печатаем состояние и
+            // роняем debug-сборку, чтобы поймать сбой ровно на месте.
+            debug
+            {
+                import std.stdio : writefln;
+                writefln("СТОРОЖОК: колесо[%d] провалилось:"
+                    ~ " pos=(%.3f, %.3f, %.3f) z=%.3f g=%.3f"
+                    ~ " z-g=%.3f порог=%.3f",
+                    wi, s.position.x, s.position.y, s.position.z,
+                    g, s.position.z - g, physicsWheelBelow);
+                assert(false, "сторожок: колесо провалилось под землю");
+            }
             return "колесо провалилось под землю";
-        if (s.position.z > g + wheelRadius + physicsWheelLift)
-            return "машина перевернулась";
+        }
     }
 
     foreach (s; physics.beamStates())
