@@ -284,7 +284,8 @@ class BuggyScene: Scene
         atomicStore(jobDone, false);
         runCfg = evolutionConfig;
         cur = population;
-        runGens = evolutionConfig.generationsPerPress;
+        // G — toggle: эволюция идёт, пока её снова не остановит G.
+        runGens = size_t.max;
         gensDone = 0;
         stopRequested_ = false;
         startNextGen();
