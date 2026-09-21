@@ -77,6 +77,13 @@ class BuggyScene: Scene
 
     override void afterLoad()
     {
+        // BuggyScene создан через New! (dlib): GC не сканирует dlib-память.
+        // Регистрируем объект сцены как GC-диапазон, чтобы ссылки в его полях
+        // (grammar, population, terrainVis) не уносились сборщиком.
+        // afterLoad, как и update, может быть вызван позже при загрузке сцены.
+        import core.memory: GC;
+        GC.addRange(cast(void*)this, __traits(classInstanceSize, BuggyScene));
+
         eventManager.trackUpDownState = true;
         grammar = buggyGrammar();
         rnd = Random(42);
@@ -128,18 +135,6 @@ class BuggyScene: Scene
         resetPopulation();
         buildGallery();
         logGeneration();
-
-        /*
-        BuggyScene is dlib-allocated (New!), so the GC can't see
-        references to objects (grammar, population) stored in its fields.
-        After enough GC pressure, these objects get collected, and the
-        next access SIGSEGVs.
-
-        It is need to register the scene's memory as a GC range so
-        the GC scans its fields for pointers.
-        */
-        import core.memory: GC;
-        GC.addRange(cast(void*)this, __traits(classInstanceSize, BuggyScene));
     }
 
     /// Текстура-градиент для балок вдоль их длины. Цилиндр балки ориентирован
@@ -184,7 +179,9 @@ class BuggyScene: Scene
         super.update(t);
 
         // Окно поверхности за машиной (или в origin, пока машин нет).
-        terrainVis.update(livePhysics);
+        // afterLoad может не завершиться к первому кадру — terrainVis ещё null.
+        if (terrainVis !is null)
+            terrainVis.update(livePhysics);
 
         if (jobThread !is null)
         {
