@@ -82,9 +82,10 @@ struct BoulderData
 /// из кэша как immutable и после этого никогда не мутируется.
 class TerrainTileData
 {
-    /// W·W высот вдоль `up`. Индекс `[ky·W + kx]`: kx — столбец вдоль
-    /// `forward` (от угла тайла), ky — ряд вдоль `right`. Порядок совпадает
-    /// с буфером heightfield Newton 1:1 (см. terrainworld.d).
+    /// W·W высот вдоль `up`. Индекс `[f·W + r]`: f — ряд вдоль `forward`
+    /// (от угла тайла), r — столбец вдоль `right`. Это ровно порядок
+    /// heightfield Newton (`[zRow·W + xCol]`, z = локальный forward,
+    /// x = локальный right), поэтому физика забирает высоты 1:1, без поворота.
     float[] heights;
 
     /// Булыжники тайла.
@@ -233,13 +234,13 @@ shared class TerrainSurface
 
             auto t = new TerrainTileData;
             t.heights = new float[W * W];
-            foreach (ky; 0 .. W)
-                foreach (kx; 0 .. W)
+            foreach (f; 0 .. W)
+                foreach (r; 0 .. W)
                 {
                     const vec3 p = corner
-                        + forward * (cast(float) kx * cell)
-                        + right * (cast(float) ky * cell);
-                    t.heights[ky * W + kx] = terrainHeightAt(cfg_, p);
+                        + forward * (cast(float) f * cell)
+                        + right * (cast(float) r * cell);
+                    t.heights[f * W + r] = terrainHeightAt(cfg_, p);
                 }
             t.boulders = buildBoulders(cfg_, tx, ty);
 
@@ -296,12 +297,37 @@ unittest
     const W = t.config.cells + 1;
     const a = t.tileData(0, 0);
     const b = t.tileData(0, 1);
-    foreach (kx; 0 .. W)
+    foreach (f; 0 .. W)
     {
-        const float ha = a.heights[(W - 1) * W + kx];
-        const float hb = b.heights[0 * W + kx];
+        const float ha = a.heights[f * W + (W - 1)];
+        const float hb = b.heights[f * W + 0];
         assert(abs(ha - hb) < 1e-6f, "высоты смежной грани совпадают");
     }
+}
+
+unittest
+{
+    // Порядок хранения совпадает с heightfield Newton: heights[f·W + r]
+    // отвечает физической точке (forward = f, right = r). Тогда физика
+    // забирает буфер 1:1, без транспонирования, и стыки плиток остаются
+    // бесшовными (грань одного тайла — та же аналитическая кривая, что у
+    // соседа).
+    auto t = sharedTerrain();
+    const cfg = t.config;
+    const uint W = cfg.cells + 1;
+    const float cell = cfg.tileSize / cast(float) cfg.cells;
+    const tile = t.tileData(0, 0);
+
+    const vec3 corner = origin + forward * (-gridHalfShift(cfg))
+        + right * (-gridHalfShift(cfg));
+    foreach (f; 0 .. W)
+        foreach (r; 0 .. W)
+        {
+            const vec3 p = corner + forward * (cast(float) f * cell)
+                + right * (cast(float) r * cell);
+            assert(abs(tile.heights[f * W + r] - terrainHeightAt(cfg, p)) < 1e-6f,
+                "heights[f·W + r] отвечает точке (forward = f, right = r)");
+        }
 }
 
 private float smoothstep01(float t)

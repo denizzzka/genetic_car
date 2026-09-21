@@ -18,10 +18,9 @@ import frame.frame : origin, frameForward = forward, frameRight = right;
 import physics_world.physics;
 import physics_world.terrain;
 
-/// Heightfield-коллизия одного тайла земли. Буферы копируются из immutable-
-/// тайла 1:1 (без переворота строк): индексу (kx вдоль forward, ky вдоль
-/// right) отвечает буфер heights[ky·W + kx], а Newton читает с угла (0,0)
-/// вдоль локальных +X и +Z.
+/// Heightfield-коллизия одного тайла земли. Тайл уже хранит высоты в порядке
+/// Newton (`heights[f·W + r]`: локальный X — вдоль `right`, локальный Z —
+/// вдоль `forward`), поэтому буферы копируются 1:1, без переворота осей.
 /// Перенос тайла на место — трансформацией тела (toNewtonPos угла тайла), а
 /// не shape: матрица на heightfield внутри shape даёт NaN AABB
 /// (см. GroundHeightfield).
@@ -41,11 +40,8 @@ final class TerrainHeightfield : NewtonCollisionShape
         const size_t n = W * W;
         elevations_ = New!(float[])(n);
         attributes_ = New!(ubyte[])(n);
-        foreach (i; 0 .. n)
-        {
-            elevations_[i] = tile.heights[i];
-            attributes_[i] = 0;
-        }
+        elevations_[] = tile.heights[];
+        attributes_[] = 0;
 
         const float cell = cfg.tileSize / cast(float) cfg.cells;
         newtonCollision = NewtonCreateHeightFieldCollision(world.newtonWorld,

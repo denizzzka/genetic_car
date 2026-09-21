@@ -246,7 +246,9 @@ final class TerrainVisualizer
             foreach (kx; 0 .. W)
             {
                 const size_t i = ky * W + kx;
-                const float h = tile.heights[i];
+                // Сетка высот хранится как [forward·W + right], а вершина
+                // этой итерации — (forward = kx, right = ky).
+                const float h = tile.heights[kx * W + ky];
                 const vec3 p = corner
                     + frameForward * (cast(float) kx * cell)
                     + frameRight * (cast(float) ky * cell);
@@ -254,17 +256,18 @@ final class TerrainVisualizer
                 const vec3 v = toNewtonPos(p) + vec3(0.0f, h, 0.0f);
                 mesh.vertices[i] = v;
 
-                // Нормаль центральными разностями по сетке высот.
-                const float hR = (kx + 1 < W) ? tile.heights[ky * W + kx + 1]
-                    : tile.heights[ky * W + kx - 1];
-                const float hL = (kx > 0) ? tile.heights[ky * W + kx - 1]
-                    : tile.heights[ky * W + kx + 1];
-                const float hF = (ky + 1 < W) ? tile.heights[(ky + 1) * W + kx]
-                    : tile.heights[(ky - 1) * W + kx];
-                const float hB = (ky > 0) ? tile.heights[(ky - 1) * W + kx]
-                    : tile.heights[(ky + 1) * W + kx];
-                const float gu = (hR - hL) / (2.0f * cell);
-                const float gv = (hF - hB) / (2.0f * cell);
+                // Нормаль центральными разностями по сетке высот: вдоль
+                // forward меняется старший индекс, вдоль right — младший.
+                const float hFw = (kx + 1 < W) ? tile.heights[(kx + 1) * W + ky]
+                    : tile.heights[(kx - 1) * W + ky];
+                const float hBk = (kx > 0) ? tile.heights[(kx - 1) * W + ky]
+                    : tile.heights[(kx + 1) * W + ky];
+                const float hRt = (ky + 1 < W) ? tile.heights[kx * W + ky + 1]
+                    : tile.heights[kx * W + ky - 1];
+                const float hLf = (ky > 0) ? tile.heights[kx * W + ky - 1]
+                    : tile.heights[kx * W + ky + 1];
+                const float gu = (hFw - hBk) / (2.0f * cell);
+                const float gv = (hRt - hLf) / (2.0f * cell);
                 mesh.normals[i] = Vector3f(-gu, 1.0f, gv).normalized;
 
                 mesh.texcoords[i] = Vector2f(
