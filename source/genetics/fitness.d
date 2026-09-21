@@ -52,6 +52,11 @@ enum float footprintTolerance = 1.0f;
 enum float targetFrameHeight = 2.5f;
 enum float frameHeightTolerance = 0.5f;
 
+/// Нижний порог морфологических множителей (footprint, высота): суррогат
+/// лишь сглаживает отбор, а не зануляет каркас. Плоский/узкий основатель
+/// получает порог вместо ~e^-25 и остаётся видимым отбору и физике.
+enum float morphologyFloor = 0.01f;
+
 /// Допуски положения центра масс внутри габарита: по XY — к центру
 /// колёсного footprint, по Z — к верхней границе клиренса (maxClearance).
 enum float comXYTolerance = 0.5f;
@@ -155,12 +160,15 @@ float buggyFitness(const Frame f, const Ast ast)
     const float ybase = ymax - ymin;
 
     const dims = footprintExtents(f);
-    const float phiFootprint = exp(-((dims[0] - targetFootprintLong) / footprintTolerance) ^^ 2)
+    const float footprintRaw = exp(-((dims[0] - targetFootprintLong) / footprintTolerance) ^^ 2)
         * exp(-((dims[1] - targetFootprintShort) / footprintTolerance) ^^ 2);
+    const float phiFootprint = max(footprintRaw, morphologyFloor);
 
     // Заполнение высоты: размах узлов каркаса по Z (не только колёс).
     const float height = frameZRange(f);
-    const float phiHeight = exp(-((height - targetFrameHeight) / frameHeightTolerance) ^^ 2);
+    const float phiHeight = max(
+        exp(-((height - targetFrameHeight) / frameHeightTolerance) ^^ 2),
+        morphologyFloor);
 
     const float nodeSym = symmetryRatio(f);
     const float wheelSym = wheelSymmetry(f);

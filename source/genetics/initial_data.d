@@ -107,6 +107,13 @@ unittest
     assert(f.motorPower > 99.0f && f.motorPower < 101.0f,
         "стартовая сила мотора берётся из гена motorPower");
 
+    // Стартовый каркас — плоский и узкий, но морфологический суррогат не
+    // должен его занулять: иначе всё нулевое поколение «проваливается» и
+    // основатель не попадает даже в физику.
+    import genetics.fitness : buggyFitness;
+    assert(buggyFitness(f) > 0.0f,
+        "статический фитнес стартового каркаса обязан быть больше нуля");
+
     auto rnd = Random(1);
     mutate(genome, 1, rnd);
     assert(genome.genes.length == gr.symbols.length);
