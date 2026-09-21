@@ -55,6 +55,9 @@ final class TerrainVisualizer
     /// Окно тайлов вокруг фокуса, как у физики: (windowRadius·2+1)² тайлов.
     private int windowRadius_ = 1;
 
+    /// Пока булыжники мешают — не показываем (физика и тайлы не задеты).
+    private bool renderBoulders_ = false;
+
     /// Живые сущности тайлов окна (уехавшие выгружаются из мира, но не из кэша).
     private VFTile[long] tiles_;
     private enum size_t tileCacheCap = 72;
@@ -89,6 +92,8 @@ final class TerrainVisualizer
         const vec3 focus = (live is null) ? origin : live.surfaceFocus;
         updateTiles(focus);
 
+        if (!renderBoulders_)
+            return;
         if (live is null || live.terrainWorld is null)
             syncBoulders(null);
         else
