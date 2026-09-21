@@ -529,7 +529,7 @@ final class BuggyPhysics
         master.kind = BodyKind.master;
         master.autoSleep = false;
         master.collidable = false; // коллизии считают балки и колёса
-        master.gravity = Vector3f(0.0f, 0.0f, -9.80665f);
+        master.gravity = gravity;
         master.linearDamping = bodyDamping;
         master.angularDamping = Vector3f(bodyDamping, bodyDamping, bodyDamping);
 
@@ -686,7 +686,7 @@ final class BuggyPhysics
             wheel.kind = BodyKind.wheel;
             wheel.index = i;
             wheel.autoSleep = false;
-            wheel.gravity = Vector3f(0.0f, 0.0f, -9.80665f);
+            wheel.gravity = gravity;
             wheel.linearDamping = bodyDamping;
             wheel.angularDamping = Vector3f(bodyDamping, bodyDamping, bodyDamping);
             // Инерция полого цилиндра, ось вращения — локальный Y.

@@ -49,6 +49,12 @@ enum float minMotorPower = 1.0f;
 enum float groundFriction = 0.9f;
 enum float bodyDamping = 0.5f;
 
+/// Направление носа машины («вперёд»); курс движения — в сторону −Y.
+immutable Vector3f forward = Vector3f(0.0f, 1.0f, 0.0f);
+
+/// Ускорение свободного падения физического мира: вниз по вертикали.
+immutable Vector3f gravity = Vector3f(0.0f, 0.0f, -9.80665f);
+
 /// Транспортное состояние тела: позиция и ориентация в координатах машины.
 /// Совпадает с трансформацией Dagon-сущности под carRoot:
 /// `entity.position = state.position; entity.rotation = state.orientation;`
