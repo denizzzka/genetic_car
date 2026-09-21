@@ -18,10 +18,10 @@ import dagon.ext.newton;
 
 import frame.frame : Frame, frameUp = up, frameForward = forward;
 
-/// Ось колеса якоря: перпендикуляр «своей» балке узла в горизонтальной
-/// плоскости (`up × балка`). Своей считается балка, у которой эта ось ближе
-/// всего к поперечной оси колеса (`frameForward`) — то есть балка, лежащая
-/// вдоль хода (рука/лонжерон, на которой висит колесо). Знак оси выбирается
+/// Ось колеса якоря: самая поперечная из двух горизонтальных направлений
+/// «своей» балки узла — либо вдоль самой балки (балка-ось, «гироскутер»:
+/// колёса на концах перекладины крутятся вокруг неё), либо перпендикулярно ей
+/// (`up × балка`, рука/лонжерон, на которой висит колесо). Знак оси выбирается
 /// так, чтобы она смотрела в сторону `frameForward`. У сиротливого узла без
 /// балок (или при вертикальной балке) — прямо `frameForward`, как у старинной
 /// глобальной расстановки.
@@ -37,11 +37,17 @@ vec3 wheelAxle(const Frame frame, size_t anchorIdx)
         const vec3 p = frame.nodes[node].pos;
         const vec3 q = frame.nodes[(b.a == node) ? b.b : b.a].pos;
         const vec3 flat = (q - p) - frameUp * dot(q - p, frameUp);
-        const vec3 cand = cross(frameUp, flat);
-        const float len = cand.length;
+        const float len = flat.length;
         if (len < 1e-5f)
             continue;
-        const float score = abs(dot(cand / len, frameForward));
+        const vec3 along = flat / len;
+        const vec3 perp = cross(frameUp, along);
+        // Ось — более поперечный кандидат: сама балка (гироскутер) или
+        // перпендикуляр к ней (рука). При равенстве — перпендикуляр.
+        const float scoreAlong = abs(dot(along, frameForward));
+        const float scorePerp = abs(dot(perp, frameForward));
+        const vec3 cand = scorePerp >= scoreAlong ? perp : along;
+        const float score = scoreAlong > scorePerp ? scoreAlong : scorePerp;
         if (score > bestScore)
         {
             bestScore = score;

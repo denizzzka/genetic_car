@@ -511,28 +511,29 @@ class BuggyScene: Scene
             e.scaling = Vector3f(b.radius, length, b.radius);
         }
 
-        foreach (anchor; buggy.frame.anchors)
+        foreach (i, anchor; buggy.frame.anchors)
         {
             const pos = buggy.frame.nodes[anchor.node].pos + off;
+            const vec3 axle = wheelAxle(buggy.frame, i);
             final switch (anchor.kind)
             {
                 case AnchorKind.wheel:
-                    addWheel(pos, matWheel);
+                    addWheel(pos, axle, matWheel);
                     break;
                 case AnchorKind.motorWheel:
-                    addWheel(pos, matDriveWheel);
+                    addWheel(pos, axle, matDriveWheel);
                     break;
             }
         }
     }
 
-    private void addWheel(const vec3 pos, Material mat)
+    private void addWheel(const vec3 pos, const vec3 axle, Material mat)
     {
         auto e = addEntity(carRoot);
         e.drawable = meshWheel;
         e.material = mat;
         e.position = pos;
-        e.rotation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
+        e.rotation = rotationBetween(Vector3f(0, 1, 0), axle);
     }
 }
 

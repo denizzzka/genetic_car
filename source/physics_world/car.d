@@ -807,7 +807,8 @@ final class BuggyPhysics
             const float axial = 0.5f * (r2 + ri2) * mass;
             wheel.setMassMatrix(mass, perp, axial, perp);
 
-            // Ось цилиндра (локальный Y) — перпендикуляр «своей» балке узла
+            // Ось цилиндра (локальный Y) — самая поперечная ось «своей» балки
+            // узла: вдоль балки-оси (гироскутер) либо перпендикулярно руке
             // (см. `wheelAxle`), поэтому ось не «гуляет» вдоль рамы.
             const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), wheelAxle(frame, i));
             wheel.setTransformation(newtonBodyMatrix(nodePos, q));

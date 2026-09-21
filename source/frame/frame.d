@@ -8,14 +8,15 @@ import dlib.math.vector;
  * right — вправо, forward — вперёд, up — вверх (константы ниже).
  */
 
-/// Ортонормированный базис каркаса: вправо (`right`), вперёд (`forward`),
-/// вверх (`up`); отрицания — left/backward/down. Им пользуются стартовый
-/// геном (initial_data) и грамматика (buggygrammar).
-immutable vec3 forward  = vec3( 1.0f,  0.0f,  0.0f);
-immutable vec3 right    = vec3( 0.0f,  1.0f,  0.0f);
+/// Ортонормированный базис каркаса, согласованный с физикой: ось X —
+/// поперечная (left/right), ось Y — продольная по ходу (forward/backward,
+/// курс фитнеса — forward, т.е. −Y), ось Z — вверх (up/down).
+/// Им пользуются стартовый геном (initial_data) и грамматика (buggygrammar).
+immutable vec3 right    = vec3( 1.0f,  0.0f,  0.0f);
+immutable vec3 forward  = vec3( 0.0f, -1.0f,  0.0f);
 immutable vec3 up       = vec3( 0.0f,  0.0f,  1.0f);
-immutable vec3 backward = vec3(-1.0f,  0.0f,  0.0f);
-immutable vec3 left     = vec3( 0.0f, -1.0f,  0.0f);
+immutable vec3 backward = vec3( 0.0f,  1.0f,  0.0f);
+immutable vec3 left     = vec3(-1.0f,  0.0f,  0.0f);
 immutable vec3 down     = vec3( 0.0f,  0.0f, -1.0f);
 
 /// Начало координат каркаса (нулевой вектор).
