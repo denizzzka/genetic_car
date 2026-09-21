@@ -18,6 +18,9 @@ immutable vec3 backward = vec3(-1.0f,  0.0f,  0.0f);
 immutable vec3 left     = vec3( 0.0f, -1.0f,  0.0f);
 immutable vec3 down     = vec3( 0.0f,  0.0f, -1.0f);
 
+/// Начало координат каркаса (нулевой вектор).
+immutable vec3 origin = vec3(0.0f, 0.0f, 0.0f);
+
 /// Тип якоря (колеса).
 /// Колёса сделаны отдельными Anchor, а не общими "шарнирами", потому что
 /// более общие шарниры не позволяют применять оптимизации в физическом
@@ -135,8 +138,8 @@ unittest
     // Разорванный каркас не связан.
     Frame g;
     g.nodes = [
-        Node(vec3(0.0f, 0.0f, 0.0f)),
-        Node(vec3(0.0f, 1.0f, 0.0f)),
+        Node(origin),
+        Node(right),
     ];
     assert(!isConnected(g));
 

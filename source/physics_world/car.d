@@ -64,7 +64,7 @@ unittest
     frame.anchors ~= Anchor(rr, AnchorKind.motorWheel);
     frame.motorPower = initialMotorPower;
 
-    auto physics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
+    auto physics = new BuggyPhysics(new Buggy(frame, origin));
     scope (exit) physics.dispose();
 
     const double dt = 1.0 / 60.0;
@@ -266,7 +266,7 @@ final class BuggyPhysics
             world.sensorGroupId, world.sensorGroupId, &sensorNoOverlap, null);
 
         // Подъём: низ самого низкого колеса на z == 0.
-        vec3 lift = vec3(0.0f);
+        vec3 lift = origin;
         float minZ = float.max;
         foreach (a; buggy_.frame.anchors)
             minZ = min(minZ, buggy_.frame.nodes[a.node].pos.z);
@@ -513,7 +513,7 @@ final class BuggyPhysics
 
         // Мастер: масса и центр масс по балкам, инерция от AABB каркаса.
         float totalMass = 0.0f;
-        vec3 sumM = vec3(0.0f);
+        vec3 sumM = origin;
         foreach (b; frame.beams)
         {
             const vec3 a = frame.nodes[b.a].pos + posOffset;
@@ -762,7 +762,7 @@ unittest
 {
     // canDrive: решает, стоит ли запускать физический заезд.
     Frame f;
-    f.nodes = [Node(vec3(0.0f)), Node(vec3(0.0f, 1.0f, 0.0f))];
+    f.nodes = [Node(origin), Node(frame.frame.right)];
     f.beams = [Beam(0, 1, 0.05f)];
 
     f.anchors = [Anchor(0, AnchorKind.wheel)];
@@ -809,7 +809,7 @@ unittest
     good.anchors ~= Anchor(3, AnchorKind.motorWheel);
     good.anchors ~= Anchor(4, AnchorKind.motorWheel);
     {
-        auto physics = new BuggyPhysics(new Buggy(good, vec3(0.0f)));
+        auto physics = new BuggyPhysics(new Buggy(good, origin));
         scope (exit) physics.dispose();
         physics.settle(1.0 / 60.0, 30);
         assert(physics.beamFailure() == BeamFailure.none,
@@ -825,7 +825,7 @@ unittest
     dup.anchors ~= Anchor(4, AnchorKind.motorWheel);
     dup.anchors ~= Anchor(3, AnchorKind.motorWheel);
     {
-        auto physics = new BuggyPhysics(new Buggy(dup, vec3(0.0f)));
+        auto physics = new BuggyPhysics(new Buggy(dup, origin));
         scope (exit) physics.dispose();
         physics.settle(1.0 / 60.0, 30);
         assert(physics.beamFailure() == BeamFailure.wheelWheel,

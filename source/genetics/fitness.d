@@ -93,7 +93,7 @@ float buggyFitness(const Frame f, const Ast ast)
     const size_t V = f.nodes.length;
 
     // Аппроксимация центра масс: масса балки ∝ r²·len, центр — середина.
-    vec3 com = vec3(0.0f);
+    vec3 com = origin;
     float totalMass = 0.0f;
     foreach (b; f.beams)
     {
@@ -707,8 +707,8 @@ unittest
 
     // Каркас без колёс — 0.
     Frame noWheels;
-    noWheels.nodes ~= Node(vec3(0.0f, 0.0f, 0.0f));
-    noWheels.nodes ~= Node(vec3(0.0f, 1.0f, 0.0f));
+    noWheels.nodes ~= Node(origin);
+    noWheels.nodes ~= Node(right);
     noWheels.beams ~= Beam(0, 1, 0.05f);
     assert(buggyFitness(noWheels) == 0.0f);
 
@@ -729,7 +729,7 @@ unittest
     // Балки, торчащие ниже колёс: узел опускается под плоскость земли
     // (под нижнюю точку колёс) — физическая отбраковка.
     Frame underGround = symmetricBuggyFrame();
-    underGround.nodes ~= Node(vec3(0.0f, 0.0f, -1.0f));
+    underGround.nodes ~= Node(down);
     underGround.beams ~= Beam(0, underGround.nodes.length - 1, 0.04f);
     assert(buggyFitness(underGround) == 0.0f,
         "балка ниже уровня земли должна отбраковываться");
@@ -795,7 +795,7 @@ unittest
     // Ненулевой активатор без ингибитора при ровной паре рождает сдвиг twin.
     aD.segments ~= SegmentAst(true, 0.0f, []);
     aD.segments[0].beams ~= BeamAst(StartRef(StartRefKind.last, 0),
-        EndRef(EndRefKind.newNode, vec3(0.0f, 0.0f, 0.0f), 0),
+        EndRef(EndRefKind.newNode, origin, 0),
         0.04f, 0.1f, 0.0f, BeamKind.normal, 0.0f);
 
     const f0 = buggyFitness(symmetricBuggyFrame(), a0);
@@ -821,12 +821,12 @@ unittest
 {
     // Физический слой: заезд простейшего багги конечен, счёт нормирован
     // в (0,1] и не зависит от статики. Пустой каркас — ровно 0.
-    const p = physicsFitness(new Buggy(symmetricBuggyFrame(), vec3(0.0f)), 1.0).score;
+    const p = physicsFitness(new Buggy(symmetricBuggyFrame(), origin), 1.0).score;
     assert(isFinite(p) && p >= 0.0f && p <= 1.0f,
         "счёт заезда нормирован и не разлетается");
 
     Frame empty;
-    assert(physicsFitness(new Buggy(empty, vec3(0.0f)), 1.0).score == 0.0f,
+    assert(physicsFitness(new Buggy(empty, origin), 1.0).score == 0.0f,
         "каркас без колёс не выезжает из нуля");
 }
 

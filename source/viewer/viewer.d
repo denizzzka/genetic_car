@@ -267,7 +267,7 @@ class BuggyScene: Scene
             if (frame.anchors.length < 2 || !canDrive(frame))
                 continue;
 
-            auto physics = new BuggyPhysics(new Buggy(frame, vec3(0.0f)));
+            auto physics = new BuggyPhysics(new Buggy(frame, origin));
             physics.settle(physicsDt,
                 cast(int)(physicsSettleSeconds / physicsDt));
             const settleFailure = runFailure(physics);
@@ -490,7 +490,7 @@ class BuggyScene: Scene
     /// сдвигает в свою полосу вдоль X (в координатах машины).
     private vec3 laneOffset(const Frame f, float laneX)
     {
-        vec3 c = vec3(0.0f);
+        vec3 c = origin;
         foreach (n; f.nodes)
             c += n.pos;
         if (f.nodes.length > 0)

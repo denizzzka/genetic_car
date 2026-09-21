@@ -462,7 +462,7 @@ unittest
     // в пределах допуска — возникает замкнутая петля без нового узла.
     Terminal!Tok[] t;
     // Seed: начало координат, смещение нулевое.
-    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
+    t ~= dirCoords(origin, 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
 
@@ -501,7 +501,7 @@ unittest
     // endNear далеко от структуры ведёт себя как endNew — новый узел.
     Terminal!Tok[] t;
     // Seed: начало координат.
-    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
+    t ~= dirCoords(origin, 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
 
@@ -528,7 +528,7 @@ unittest
     // направление. Заголовок π/2 поворачивает дельту (1,0,0) в мировые (0,1,0).
     Terminal!Tok[] t;
     // Seed: начало координат.
-    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
+    t ~= dirCoords(origin, 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 1.5707963f);
     t ~= new Terminal!Tok(Tok.segStart);
 
@@ -569,7 +569,7 @@ unittest
     // поэтому пары геометрически симметричны вокруг нуля.
     Terminal!Tok[] t;
     // Seed: начало координат — ось сегмента X == 0.
-    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
+    t ~= dirCoords(origin, 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
@@ -631,7 +631,7 @@ unittest
     // twin — в (-c,c) вокруг оси сегмента (X узла старта).
     Terminal!Tok[] t;
     // Seed: начало координат — ось сегмента X == 0.
-    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
+    t ~= dirCoords(origin, 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.78539815f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
@@ -699,7 +699,7 @@ unittest
     // ни один узел не дублируется.
     Terminal!Tok[] t;
     // Seed: начало координат.
-    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
+    t ~= dirCoords(origin, 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
 
@@ -731,7 +731,7 @@ unittest
     // несколько отростков-«пальцев», каждый в своей зеркальной паре.
     Terminal!Tok[] t;
     // Seed: начало координат — база «запястья».
-    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
+    t ~= dirCoords(origin, 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
@@ -833,7 +833,7 @@ unittest
     // построения (0.5 в конце); параметры живут в AST.
     Terminal!Tok[] t;
     // Seed: начало координат.
-    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
+    t ~= dirCoords(origin, 1.0f);
     t ~= new Terminal!Tok(Tok.taper, 0.5f);
     t ~= new Terminal!Tok(Tok.taperPow, 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
@@ -872,8 +872,8 @@ unittest
     // Вырожденная балка и разорванный каркас отбрасываются.
     Frame f;
     f.nodes = [
-        Node(vec3(0.0f, 0.0f, 0.0f)),
-        Node(vec3(0.0f, 1.0f, 0.0f)),
+        Node(origin),
+        Node(right),
     ];
     f.beams = [Beam(0, 0, 0.04f)];
     f.anchors = [Anchor(0, AnchorKind.wheel)];
@@ -897,7 +897,7 @@ unittest
 {
     // Длины балок ограничены: минимум 5 см, максимум 3 метра.
     Frame tooShort;
-    tooShort.nodes = [Node(vec3(0.0f, 0.0f, 0.0f)), Node(vec3(0.04f, 0.0f, 0.0f))];
+    tooShort.nodes = [Node(origin), Node(vec3(0.04f, 0.0f, 0.0f))];
     tooShort.beams = [Beam(0, 1, 0.04f)];
     tooShort.anchors = [Anchor(0, AnchorKind.wheel)];
     assert(4.0f < 100.0f * minBeamLength, "балка короче 5 см");
@@ -905,19 +905,19 @@ unittest
 
     // Ровно 5 см — на границе допустимого.
     Frame exactMin;
-    exactMin.nodes = [Node(vec3(0.0f, 0.0f, 0.0f)), Node(vec3(minBeamLength, 0.0f, 0.0f))];
+    exactMin.nodes = [Node(origin), Node(vec3(minBeamLength, 0.0f, 0.0f))];
     exactMin.beams = [Beam(0, 1, 0.04f)];
     exactMin.anchors = [Anchor(0, AnchorKind.wheel), Anchor(1, AnchorKind.wheel)];
     assert(!isValidFrame(exactMin).isNull, "балка ровно 5 см — на границе, валидна");
 
     Frame tooLong;
-    tooLong.nodes = [Node(vec3(0.0f, 0.0f, 0.0f)), Node(vec3(3.5f, 0.0f, 0.0f))];
+    tooLong.nodes = [Node(origin), Node(vec3(3.5f, 0.0f, 0.0f))];
     tooLong.beams = [Beam(0, 1, 0.04f)];
     tooLong.anchors = [Anchor(0, AnchorKind.wheel)];
     assert(isValidFrame(tooLong).isNull, "балка длиннее 3 м — невалидный каркас");
 
     Frame exactMax;
-    exactMax.nodes = [Node(vec3(0.0f, 0.0f, 0.0f)), Node(vec3(maxBeamLength, 0.0f, 0.0f))];
+    exactMax.nodes = [Node(origin), Node(vec3(maxBeamLength, 0.0f, 0.0f))];
     exactMax.beams = [Beam(0, 1, 0.04f)];
     exactMax.anchors = [Anchor(0, AnchorKind.wheel), Anchor(1, AnchorKind.wheel)];
     assert(!isValidFrame(exactMax).isNull, "балка ровно 3 м — на границе, валидна");

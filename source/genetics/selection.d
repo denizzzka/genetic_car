@@ -12,6 +12,7 @@ import genetics.fitness;
 import genetics.generation : buildNextGeneration;
 import physics_world;
 import dlib.math.vector;
+import frame.frame;
 
 /// Отобранный индивид: геном и его фитнес (0 — невалидный/неразвиваемый).
 struct Individual
@@ -91,7 +92,7 @@ PhysicsBatch evaluateStatic(const Grammar gr, Genotype[] pop,
             fit = buggyFitness(may.get.frame, may.get.ast);
             if (fit > 0.0f && params.simulateSeconds > 0.0)
             {
-                needPhysics ~= new Buggy(may.get.frame, vec3(0.0f));
+                needPhysics ~= new Buggy(may.get.frame, origin);
                 physIdx ~= i;
             }
         }
