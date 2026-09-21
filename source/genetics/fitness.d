@@ -47,12 +47,10 @@ enum float targetFootprintLong = 3.0f;
 enum float targetFootprintShort = 2.0f;
 enum float footprintTolerance = 1.0f;
 
-/// Целевая высота габаритного параллелепипеда каркаса: заполнение объёма
-/// вверх (размах узлов по Z) и допуск.
+/// Верхняя граница габаритного параллелепипеда каркаса (phiGauge) по Z.
 enum float targetFrameHeight = 2.5f;
-enum float frameHeightTolerance = 0.5f;
 
-/// Нижний порог морфологических множителей (footprint, высота): суррогат
+/// Нижний порог морфологического множителя footprint: суррогат
 /// лишь сглаживает отбор, а не зануляет каркас. Плоский/узкий основатель
 /// получает порог вместо ~e^-25 и остаётся видимым отбору и физике.
 enum float morphologyFloor = 0.01f;
@@ -74,7 +72,6 @@ enum float comZTolerance = 0.5f;
 ///   - компактность — наказание за декоративные тупиковые балки;
 ///   - баланс ведущих колёс по сторонам;
 ///   - габариты — footprint колёс;
-///   - заполнение высоты — размах узлов каркаса по Z;
 ///   - габаритный параллелепипед — штраф за узлы за пределами
 ///     (колёсный AABB по XY + высота от земли до целевой).
 float buggyFitness(const Frame f)
@@ -148,23 +145,11 @@ float buggyFitness(const Frame f, const Ast ast)
         if (n.pos.z < groundZ - epsFlat)
             return 0.0f;
 
-    // Центр масс горизонтально — внутри опорного многоугольника колёс.
-    if (com.x < xmin - epsFlat || com.x > xmax + epsFlat)
-        return 0.0f;
-    if (com.y < ymin - epsFlat || com.y > ymax + epsFlat)
-        return 0.0f;
-
     // ---- Слоты морфологии ----
     const dims = footprintExtents(f);
     const float footprintRaw = exp(-((dims[0] - targetFootprintLong) / footprintTolerance) ^^ 2)
         * exp(-((dims[1] - targetFootprintShort) / footprintTolerance) ^^ 2);
     const float phiFootprint = max(footprintRaw, morphologyFloor);
-
-    // Заполнение высоты: размах узлов каркаса по Z (не только колёс).
-    const float height = frameZRange(f);
-    const float phiHeight = max(
-        exp(-((height - targetFrameHeight) / frameHeightTolerance) ^^ 2),
-        morphologyFloor);
 
     const float nodeSym = symmetryRatio(f);
     const float wheelSym = wheelSymmetry(f);
@@ -203,7 +188,7 @@ float buggyFitness(const Frame f, const Ast ast)
     const float phiGauge = exp(-3.0f * gaugeViolation);
 
     return phiSym * phiRigid * phiCoM * phiFlat * phiCompact * phiDrive
-        * phiFootprint * phiHeight * phiGauge;
+        * phiFootprint * phiGauge;
 }
 
 /// Параметры заезда (физический слой оценки).
@@ -503,22 +488,6 @@ size_t cyclomaticNumber(const Frame f)
     // μ = E - V + c ⩾ 0: в каждой компоненте E ≥ V_c - 1 (петли дают прирост).
     const ptrdiff_t mu = cast(ptrdiff_t) f.beams.length + cast(ptrdiff_t) comps - cast(ptrdiff_t) V;
     return mu > 0 ? cast(size_t) mu : 0;
-}
-
-/// Вертикальный размах всех узлов каркаса (габаритная высота параллелепипеда).
-float frameZRange(const Frame f)
-{
-    if (f.nodes.length == 0)
-        return 0.0f;
-
-    float lo = f.nodes[0].pos.z;
-    float hi = f.nodes[0].pos.z;
-    foreach (n; f.nodes)
-    {
-        lo = min(lo, n.pos.z);
-        hi = max(hi, n.pos.z);
-    }
-    return hi - lo;
 }
 
 /// Положение центра масс в габаритном параллелепипеде: по XY — к центру
