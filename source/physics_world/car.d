@@ -24,6 +24,7 @@ import frame.frame : origin, frameUp = up, frameForward = forward,
 import physics_world.physics;
 import physics_world.terrain;
 import physics_world.terrainworld;
+import physics_world.wheel;
 
 /// Машина: каркас багги вместе с якорями (колёсами). Только данные —
 /// физика физикой занимается отдельно (BuggyPhysics), когда нужен заезд.
@@ -184,7 +185,8 @@ extern(C) void contactDefaultDefault(const NewtonJoint* joint, dFloat timestep, 
  * у каждой балки каркаса — отдельное кинестатическое тело в sensor-группе
  * (контакты регистрируются, но не решаются), у якорей — динамические колёса.
  * Жёсткость каркаса держит «мастер» — тело с массой и инерцией всей рамы
- * (коллизии у него выключены): к нему приварены колёса (BallConstraint)
+ * (коллизии у него выключены): к нему колёса приварены осями (револьте-
+ * шарнир WheelAxleJoint)
  * и из него на каждом шаге пересчитываются трансформы тел балок, так что узлы
  * не разбалтываются и каркас катится как монолит. Задевание балки земли или
  * чужого колеса ловится в sensor-колбэке и жёстко отбраковывает заезд.
@@ -239,7 +241,7 @@ final class BuggyPhysics
     /// Тела колёс по индексам `Frame.anchors`.
     private NewtonCarBody[] wheelBodies;
 
-/// Узел якоря каждого колеса (своя ступица не считается задеванием).
+    /// Узел якоря каждого колеса (своя ступица не считается задеванием).
     private size_t[] wheelNodes;
 
     /// Первый же провал заезда (латится): сенсорные колбэки и геометрия
@@ -675,7 +677,7 @@ final class BuggyPhysics
         foreach (wi, w; wheelBodies)
             if (w is other)
             {
-                if (!isOwnWheel(beamIdx, wi))
+                if (!isOwnWheel(wheelNodes[wi], beamNodeA[beamIdx], beamNodeB[beamIdx]))
                     beamFail_ = BeamFailure.wheel;
                 return;
             }
@@ -774,13 +776,6 @@ final class BuggyPhysics
         return terrainWorld_;
     }
 
-    /// Своя ступица: колесо приварено к концу этой балки.
-    private bool isOwnWheel(size_t beam, size_t wheel)
-    {
-        return wheelNodes[wheel] == beamNodeA[beam]
-            || wheelNodes[wheel] == beamNodeB[beam];
-    }
-
     private void buildWheels()
     {
         const Frame frame = buggy_.frame;
@@ -797,7 +792,6 @@ final class BuggyPhysics
             auto wheel = New!NewtonCarBody(NewtonRigidBodyType.Dynamic,
                 makeAxisYCylinder(wheelRadius, wheelRadius, wheelWidth, world),
                 mass, world, world);
-            // Ось цилиндра (локальный Y) — вдоль поперечной оси машины X.
             wheel.dynamic = true;
             wheel.kind = BodyKind.wheel;
             wheel.index = i;
@@ -813,15 +807,28 @@ final class BuggyPhysics
             const float axial = 0.5f * (r2 + ri2) * mass;
             wheel.setMassMatrix(mass, perp, axial, perp);
 
-            const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
+            // Ось цилиндра (локальный Y) — перпендикуляр «своей» балке узла
+            // (см. `wheelAxle`), поэтому ось не «гуляет» вдоль рамы.
+            const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), wheelAxle(frame, i));
             wheel.setTransformation(newtonBodyMatrix(nodePos, q));
             wheel.update(0.0);
 
-            // Колесо приварено точкой (BallConstraint) к мастер-каркасу в
-            // точке узла якоря: свободно вращается вокруг своей оси, не мешая
-            // качению. Свободное качение и монолитную раму даёт мастер.
+            // Колесо держится на оси, закреплённой одним концом: револьте-
+            // шарнир в точке узла якоря оставляет свободным только спин
+            // колеса вокруг оси, а наклон оси относительно каркаса блокирует.
+            // В отличие от BallConstraint (шаровой шарнир — все три поворота
+            // свободны, колесо болтается вокруг пивота) ось не «гуляет».
             if (master !is null)
-                New!NewtonBallConstraint(world, master, wheel, toNewtonPos(nodePos));
+            {
+                const vec3 pivotNewton = toNewtonPos(nodePos);
+                // Мастер построен поворотом-тождеством, поэтому пивот в его
+                // локальных координатах — просто разность мировых точек.
+                const vec3 pivotMasterLocal = pivotNewton - master.position.xyz;
+                // Шарнир владеет миром (`NewtonConstraint: Owner`, `super(world)`),
+                // поэтому удалять его вручную не нужно: `Delete(world)` (свой мир)
+                // снесёт его сам, а чужой мир из пула переживёт заезд.
+                New!WheelAxleJoint(wheel, master, pivotMasterLocal);
+            }
 
             wheelBodies[i] = wheel;
             wheelNodes[i] = a.node;
