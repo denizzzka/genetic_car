@@ -867,7 +867,7 @@ string runFailure(BuggyPhysics physics)
     if (abs(rollDeg) > maxTiltDegrees || abs(pitchDeg) > maxTiltDegrees)
         return "машина перевернулась";
 
-    foreach (wi, s; wheels)
+    foreach (s; wheels)
     {
         if (!isFinite(s.position.x) || !isFinite(s.position.y)
             || !isFinite(s.position.z))
@@ -876,22 +876,7 @@ string runFailure(BuggyPhysics physics)
         // Так колесо не «проваливается» на бугре и не «парит» над ложбиной.
         const float g = physics.groundHeightAt(s.position.xyz);
         if (s.position.z < g + physicsWheelBelow)
-        {
-            // Сторожок: ранние машины почти стоят и не прыгают, ниже земли
-            // уходить не должны. Если сюда попали — печатаем состояние и
-            // роняем debug-сборку, чтобы поймать сбой ровно на месте.
-            debug
-            {
-                import std.stdio : writefln;
-                writefln("СТОРОЖОК: колесо[%d] провалилось:"
-                    ~ " pos=(%.3f, %.3f, %.3f) z=%.3f g=%.3f"
-                    ~ " z-g=%.3f порог=%.3f",
-                    wi, s.position.x, s.position.y, s.position.z,
-                    g, s.position.z - g, physicsWheelBelow);
-                assert(false, "сторожок: колесо провалилось под землю");
-            }
             return "колесо провалилось под землю";
-        }
     }
 
     foreach (s; physics.beamStates())
