@@ -236,8 +236,8 @@ final class TerrainVisualizer
                 const uint i01 = cast(uint)(ky * W + kx + 1);
                 const uint i10 = cast(uint)((ky + 1) * W + kx);
                 const uint i11 = cast(uint)((ky + 1) * W + kx + 1);
-                mesh.indices[k++] = [i00, i10, i11];
-                mesh.indices[k++] = [i00, i11, i01];
+                mesh.indices[k++] = [i00, i11, i10];
+                mesh.indices[k++] = [i00, i01, i11];
             }
         }
 
