@@ -202,7 +202,7 @@ Nullable!Frame frameFromAst(const Ast ast)
     size_t last = addNode(ast.seed, false, 0.0f);
 
     float heading = ast.heading;
-    auto forward = (float dx, float dy, float dz) {
+    auto turtleDelta = (float dx, float dy, float dz) {
         const c = cos(heading);
         const s = sin(heading);
         return vec3(c * dx - s * dy, s * dx + c * dy, dz);
@@ -262,7 +262,7 @@ Nullable!Frame frameFromAst(const Ast ast)
                 case EndRefKind.newNode:
                 {
                     auto target = result.nodes[start].pos
-                        + forward(b.end.delta.x, b.end.delta.y, b.end.delta.z);
+                        + turtleDelta(b.end.delta.x, b.end.delta.y, b.end.delta.z);
                     end = addNode(target, seg.fork, axis);
                     last = end;
                     break;
@@ -270,7 +270,7 @@ Nullable!Frame frameFromAst(const Ast ast)
                 case EndRefKind.nearNode:
                 {
                     auto target = result.nodes[start].pos
-                        + forward(b.end.delta.x, b.end.delta.y, b.end.delta.z);
+                        + turtleDelta(b.end.delta.x, b.end.delta.y, b.end.delta.z);
                     // Растущий конец сливается с ближайшим существующим узлом
                     // (кроме старта) в пределах mergeRadius — так сами возникают
                     // петли и самосборка каркаса.
@@ -400,6 +400,22 @@ Nullable!Frame toFrame(const Terminal!Tok[] tokens)
     return frameFromAst(ast.get);
 }
 
+version (unittest)
+{
+    /// Дельта конца балки или начальное смещение как «единичный вектор
+    /// направления × множитель длины» (для тестов): возвращает три токена
+    /// `coord` — вперёд, вправо, вверх.
+    Terminal!Tok[] dirCoords(vec3 dir, float len)
+    {
+        const v = dir * len;
+        return [
+            new Terminal!Tok(Tok.coord, v.x),
+            new Terminal!Tok(Tok.coord, v.y),
+            new Terminal!Tok(Tok.coord, v.z),
+        ];
+    }
+}
+
 unittest
 {
     import std.random : Random;
@@ -445,17 +461,15 @@ unittest
     // endNear: растущий конец сливается с ближайшим существующим узлом
     // в пределах допуска — возникает замкнутая петля без нового узла.
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Seed: начало координат, смещение нулевое.
+    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
 
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Первая балка: вперёд на 1.
+    t ~= dirCoords(forward, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -463,9 +477,8 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNear);
-    t ~= new Terminal!Tok(Tok.coord, -0.95f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Вторая балка: назад на 0.95 — попадает в допуск слияния с узлом 0.
+    t ~= dirCoords(backward, 0.95f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -487,17 +500,15 @@ unittest
 {
     // endNear далеко от структуры ведёт себя как endNew — новый узел.
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Seed: начало координат.
+    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
 
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNear);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Растущий конец далеко от структуры: вперёд на 1.
+    t ~= dirCoords(forward, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -516,17 +527,15 @@ unittest
     // Turtle: дельты интерпретируются в системе заголовка, а turn накапливает
     // направление. Заголовок π/2 поворачивает дельту (1,0,0) в мировые (0,1,0).
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Seed: начало координат.
+    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 1.5707963f);
     t ~= new Terminal!Tok(Tok.segStart);
 
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Дельты — единичные векторы в системе заголовка: вперёд×1, затем вправо×1.
+    t ~= dirCoords(forward, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -534,9 +543,7 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= dirCoords(right, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -561,17 +568,15 @@ unittest
     // оси сегмента — X его стартового узла. Старт на узле (0,0,0) даёт ось X==0,
     // поэтому пары геометрически симметричны вокруг нуля.
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Seed: начало координат — ось сегмента X == 0.
+    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Первая балка: вперёд×1; вторая: вправо×1.
+    t ~= dirCoords(forward, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.1f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -579,9 +584,7 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= dirCoords(right, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.1f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -627,18 +630,16 @@ unittest
     // с заголовком. Заголовок π/4 разворачивает дельту (1,0,0) в (c,c),
     // twin — в (-c,c) вокруг оси сегмента (X узла старта).
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Seed: начало координат — ось сегмента X == 0.
+    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.78539815f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
 
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Ветвь — единичный вектор вперёд×1, twin вокруг оси сегмента.
+    t ~= dirCoords(forward, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -663,18 +664,16 @@ unittest
     // Старт вне нуля не прижимается и не рвёт каркас: обе ветви держатся
     // на узле старта, он в своей же оси и сам остаётся одиночным.
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.coord, 0.3f);
-    t ~= new Terminal!Tok(Tok.coord, 0.2f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Seed: старт смещён на (0.3 вперёд, 0.2 вправо) — ось 0.3, не мировой X.
+    t ~= dirCoords(vec3(0.3f, 0.2f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
 
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Ветвь: вперёд×1 от реального старта.
+    t ~= dirCoords(forward, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -699,17 +698,15 @@ unittest
     // Сегмент без раздвоения — медианная одиночная структура без twin:
     // ни один узел не дублируется.
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Seed: начало координат.
+    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
 
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Одиночная балка: направление (1 вперёд, 1 вправо) × 1.
+    t ~= dirCoords(vec3(1.0f, 1.0f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -733,17 +730,15 @@ unittest
     // с последнего. Из одной точки ветвления (база «запястья») выпускаются
     // несколько отростков-«пальцев», каждый в своей зеркальной паре.
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Seed: начало координат — база «запястья».
+    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Рука: вперёд×1.
+    t ~= dirCoords(forward, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -751,9 +746,8 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.refBase);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 0.5f);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Первый палец: направление (0.5 вперёд, 1 вправо) × 1.
+    t ~= dirCoords(vec3(0.5f, 1.0f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -761,9 +755,8 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.refBase);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 1.5f);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Второй палец: направление (1.5 вперёд, 1 вправо) × 1.
+    t ~= dirCoords(vec3(1.5f, 1.0f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -806,17 +799,15 @@ unittest
     // оси (X == axis), остаётся одиночной и медианной — активатор Nodal не
     // рождает twin из того, что на оси. Ось наследуется верно и при этом.
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.coord, 0.7f);
-    t ~= new Terminal!Tok(Tok.coord, 0.2f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Seed: старт на оси сегмента (0.7 вперёд, 0.2 вправо) — ось 0.7.
+    t ~= dirCoords(vec3(0.7f, 0.2f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 1.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Балка растёт строго по оси (вправо×1, вперёд/вверх — 0): «глаз».
+    t ~= dirCoords(right, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.2f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -841,9 +832,8 @@ unittest
     // Морфоген-градиент: радиус балок масштабируется вдоль порядка
     // построения (0.5 в конце); параметры живут в AST.
     Terminal!Tok[] t;
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
-    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    // Seed: начало координат.
+    t ~= dirCoords(vec3(0.0f, 0.0f, 0.0f), 1.0f);
     t ~= new Terminal!Tok(Tok.taper, 0.5f);
     t ~= new Terminal!Tok(Tok.taperPow, 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
@@ -853,9 +843,8 @@ unittest
     {
         t ~= new Terminal!Tok(Tok.refLast);
         t ~= new Terminal!Tok(Tok.endNew);
-        t ~= new Terminal!Tok(Tok.coord, 1.0f);
-        t ~= new Terminal!Tok(Tok.coord, 0.0f);
-        t ~= new Terminal!Tok(Tok.coord, 0.0f);
+        // Первая и вторая балки: вперёд×1.
+        t ~= dirCoords(forward, 1.0f);
         t ~= new Terminal!Tok(Tok.radius, 0.06f);
         t ~= new Terminal!Tok(Tok.nodal, 0.0f);
         t ~= new Terminal!Tok(Tok.lefty, 0.0f);

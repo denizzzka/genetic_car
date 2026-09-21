@@ -36,9 +36,14 @@ Genotype startGenome(const Grammar gr)
 
     set("frame", [0u]);
     set("startPos", [0u]);
-    set("startForward", [u(0.0f, -2.0f, 2.0f)]);
-    set("startRight", [u(0.0f, -2.0f, 2.0f)]);
-    set("startUp", [u(0.3f, -2.0f, 2.0f)]);
+
+    // Seed — смещение точки старта от начала координат как
+    // «единичный вектор направления × множитель длины»: тут вверх на 0.3 м.
+    enum float startLen = 0.3f;
+    const vSeed = up * startLen;
+    set("startForward", [u(vSeed.x, -2.0f, 2.0f)]);
+    set("startRight", [u(vSeed.y, -2.0f, 2.0f)]);
+    set("startUp", [u(vSeed.z, -2.0f, 2.0f)]);
     set("taper", [u(1.0f, 0.4f, 1.0f)]);
     set("taperPow", [u(1.0f, 0.5f, 4.0f)]);
     set("heading", [mid]);
@@ -55,9 +60,14 @@ Genotype startGenome(const Grammar gr)
     set("beam", [0u]);
     set("startRef", [0u]);
     set("endRef", [0u]);
-    set("forward", [mid]);
-    set("right", [u(-1.2f, -1.5f, 1.5f)]);
-    set("up", [mid]);
+
+    // Дельта конца балки — «единичный вектор направления × множитель длины»:
+    // 1.2 м в сторону «влево» (отрицательное «вправо»), по вперёд/вверх — ноль.
+    enum float beamLen = 1.2f;
+    const vBeam = left * beamLen;
+    set("forward", [u(vBeam.x, -1.5f, 1.5f)]);
+    set("right", [u(vBeam.y, -1.5f, 1.5f)]);
+    set("up", [u(vBeam.z, -1.5f, 1.5f)]);
     set("radius", [u(0.05f, 0.02f, 0.06f)]);
     // Активатор-ингибитор Nodal/Lefty на нуле: стартовая пара (когда
     // раздвоится) зеркально-точная; эволюция сама добавит асимметрию,
