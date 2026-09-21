@@ -61,6 +61,11 @@ class BuggyScene: Scene
     private double liveSimTime;
     private double liveRunSeconds;
 
+    /// Камера-орбита; в живом заезде плавно ведёт центр масс машины.
+    private FreeviewComponent freeview;
+    private bool liveFailed_;
+    private bool nWasHandled_;
+
     /// Визуализатор процедурной поверхности (общий shared-кэш с фитнесом).
     private TerrainVisualizer terrainVis;
 
@@ -94,7 +99,7 @@ class BuggyScene: Scene
         evolutionConfig.logPhysics = true;
 
         auto camera = addCamera();
-        auto freeview = New!FreeviewComponent(eventManager, camera);
+        freeview = New!FreeviewComponent(eventManager, camera);
         freeview.setZoom(15.0f);
         freeview.setRotation(30.0f, -45.0f, 0.0f);
         freeview.translationStiffness = 0.25f;
@@ -183,6 +188,13 @@ class BuggyScene: Scene
         if (terrainVis !is null)
             terrainVis.update(livePhysics);
 
+        // Камера-орбита плавно ведёт центр массы живой машины; угол обзора
+        // остаётся за мышью (повороты/зум не сбрасываются). Точка орбиты в
+        // FreeviewComponent инвертирована (см. targetEntity: target = -pos),
+        // поэтому передаём позицию с минусом.
+        if (freeview !is null && livePhysics !is null)
+            freeview.setTargetSmooth(-Vector3f(livePhysics.worldFocus));
+
         if (jobThread !is null)
         {
             if (atomicLoad(jobDone))
@@ -205,6 +217,19 @@ class BuggyScene: Scene
             }
             else
                 stepLiveCar();
+
+            // Переключение симулируемой особи — только вручную, по N.
+            // keyPressed — защёлка события; игнорируем повторы, пока клавиша
+            // не отпущена (одно переключение на одно нажатие).
+            const bool nHeld = eventManager.keyPressed[KEY_N];
+            if (nHeld && !nWasHandled_ && livePhysics !is null)
+            {
+                nWasHandled_ = true;
+                if (showNextLiveBuggy())
+                    updateLiveCar();
+            }
+            if (!nHeld)
+                nWasHandled_ = false;
             return;
         }
 
@@ -296,6 +321,7 @@ class BuggyScene: Scene
             liveBatchIdx = attempt + 1;
             livePhysics = physics;
             liveSimTime = 0.0;
+            liveFailed_ = false;
 
             // По одному цилиндру на каждую балку каркаса: порядок совпадает
             // с BeamState[] из beamStates() (по Frame.beams).
@@ -337,16 +363,12 @@ class BuggyScene: Scene
         liveSimTime += physicsDt;
 
         const stepFailure = runFailure(livePhysics);
-        if (stepFailure.length)
+        if (stepFailure.length && !liveFailed_)
         {
-            writefln("live: заезд оборван (%s) — следующая машина", stepFailure);
-            showNextLiveBuggy();
-            updateLiveCar();
-            return;
+            liveFailed_ = true;
+            writefln("live: заезд оборван (%s) — ждём клавиши N", stepFailure);
         }
 
-        if (liveSimTime >= liveRunSeconds)
-            showNextLiveBuggy();
         updateLiveCar();
     }
 

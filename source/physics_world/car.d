@@ -737,6 +737,15 @@ final class BuggyPhysics
         return p - frameUp * p.z;
     }
 
+    /// Мир-позиция мастера (центр массы каркаса) в координатах Dagon/Newton —
+    /// точка, за которой следует камера живого заезда.
+    Vector3f worldFocus() @property
+    {
+        if (master is null)
+            return Vector3f(0.0f, 0.0f, 0.0f);
+        return master.position.xyz;
+    }
+
     /// Активное окно поверхности (если в этом заезде есть рельеф) — для вьюера.
     TerrainWorld terrainWorld() @property
     {
