@@ -31,6 +31,11 @@ enum float epsFlat = 1e-4f;
 /// Нужен, чтобы перейти от центра колёс к плоскости земли (z = zmin - fitnessWheelRadius).
 enum float fitnessWheelRadius = 0.3f;
 
+/// Минимальное расстояние между центрами якорных колёс: два почти совпадающих
+/// цилиндра (колесо-двойник на одном узле) валят GJK в Newton 3.14, поэтому
+/// колёса в точке старта не должны задевать друг друга.
+enum float wheelWheelGateDistance = 2.0f * fitnessWheelRadius + 1e-3f;
+
 /// Максимальный разброс высот колёс, при котором каркас ещё "стоит на полу".
 enum float maxWheelZRange = 0.6f;
 
@@ -89,6 +94,15 @@ float buggyFitness(const Frame f, const Ast ast)
     if (!isConnected(f))
         return 0.0f;
     if (f.anchors.length < 2)
+        return 0.0f;
+
+    // Два якоря на одном узле (или близко друг к другу) дают почти совпадающие
+    // коллайдеры: на вырожденном Minkowski-hull двух идентичных цилиндров
+    // Newton 3.14 рвёт свою книгу граней (dgContactSolver) и падает с SIGSEGV
+    // ещё до contact-колбэка, поэтому каркас, чьи колёса уже в точке старта
+    // задевают друг друга, отбраковываем геометрически (ср. version(none)
+    // тест в car.d — «wheelWheel-отбраковка в fitness'е»).
+    if (wheelAnchorSpacing(f) < wheelWheelGateDistance)
         return 0.0f;
 
     const size_t V = f.nodes.length;
@@ -189,6 +203,17 @@ float buggyFitness(const Frame f, const Ast ast)
 
     return phiSym * phiRigid * phiCoM * phiFlat * phiCompact * phiDrive
         * phiFootprint * phiGauge;
+}
+
+/// Минимальное расстояние между центрами якорных колёс каркаса.
+float wheelAnchorSpacing(const Frame f)
+{
+    float best = float.max;
+    foreach (i, a; f.anchors)
+        foreach (j, b; f.anchors)
+            if (j > i)
+                best = min(best, distance(f.nodes[a.node].pos, f.nodes[b.node].pos));
+    return best;
 }
 
 /// Параметры заезда (физический слой оценки).
