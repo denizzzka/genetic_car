@@ -254,6 +254,14 @@ final class BuggyPhysics
     /// копят сюда причину, `beamFailure()` её выдаёт.
     private BeamFailure beamFail_;
 
+    /// Время симуляции без нового продвижения вперёд по курсу (-Y каркаса).
+    /// Обнуляется в `updateStall`, выливается в сход через `stallTime`.
+    private double stallTime_ = 0.0;
+
+    /// Самая дальняя достигнутая точка по курсу (car-координата Y мастера);
+    /// новый рекорд набега сбрасывает `stallTime_`.
+    private float forwardMinY_ = float.max;
+
     /// Машина-основа
     private const Buggy buggy_;
 
@@ -364,6 +372,7 @@ final class BuggyPhysics
         world.update(dt);
         syncBodies();
         updateBeamPuppets();
+        updateStall(dt);
         if (terrainWorld_ !is null && master !is null)
             terrainWorld_.updateAround(toCarPos(master.position.xyz));
     }
@@ -388,6 +397,27 @@ final class BuggyPhysics
                 const vec3 axle = w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
                 w.addTorque(axle * (throttle * fr.motorPower));
             }
+    }
+
+    /// Учёт застоя по курсу: новый рекорд набега вперёд сбрасывает таймер,
+    /// иначе к нему добавляется время текущего шага. `runFailure` считает
+    /// переполнение `stallSeconds` сходом с дистанции.
+    private void updateStall(double dt)
+    {
+        if (master is null)
+            return;
+        // По курсу — минус Y каркаса, как в fitness-метрике «продвижение вниз».
+        const float fwd = toCarPos(master.position.xyz).y;
+        if (fwd < forwardMinY_ - stallProgressEps)
+        {
+            forwardMinY_ = fwd;
+            stallTime_ = 0.0;
+        }
+        else
+        {
+            forwardMinY_ = min(forwardMinY_, fwd);
+            stallTime_ += dt;
+        }
     }
 
     /// Успокоить машину: шаги симуляции без движения, чтобы осадка рамы и
@@ -746,6 +776,13 @@ final class BuggyPhysics
         return master.position.xyz;
     }
 
+    /// Накопленное время симуляции без продвижения вперёд по курсу (-Y
+    /// каркаса). Превышение `stallSeconds` — сход с дистанции.
+    double stallTime() @property
+    {
+        return stallTime_;
+    }
+
     /// Активное окно поверхности (если в этом заезде есть рельеф) — для вьюера.
     TerrainWorld terrainWorld() @property
     {
@@ -810,6 +847,11 @@ final class BuggyPhysics
 /// Вердикт заезда
 string runFailure(BuggyPhysics physics)
 {
+    // Застой по курсу: без набега вперёд с последней продвинутой точки
+    // столько секунд подряд — это тоже сход с дистанции.
+    if (physics.stallTime() > stallSeconds)
+        return "нет продвижения вперёд";
+
     const wheels = physics.wheelStates();
     if (wheels.length == 0)
         return "не осталось колёс";
@@ -921,4 +963,29 @@ unittest
             "совпадающие колёса должны отбраковываться по столкновению");
     }
     } // version(none) TODO: см. выше
+}
+
+unittest
+{
+    // Застой по курсу — сход: без привода машина стоит на месте, и после
+    // `stallSeconds` симуляционных секунд runFailure объявляет сход.
+    Frame f;
+    f.nodes = [Node(origin), Node(frameRight), Node(frameRight * 2.0f)];
+    f.beams = [Beam(0, 1, 0.04f), Beam(1, 2, 0.04f)];
+    f.anchors = [Anchor(0, AnchorKind.wheel), Anchor(2, AnchorKind.wheel)];
+    const double dt = 1.0 / 60.0;
+
+    auto physics = new BuggyPhysics(new Buggy(f, origin));
+    scope (exit) physics.dispose();
+    physics.settle(dt, 30);
+    assert(physics.stallTime() < stallSeconds
+        && runFailure(physics).length == 0,
+        "усадка без хода — не сход");
+
+    foreach (_; 0 .. cast(size_t)(stallSeconds / dt) + 10)
+        physics.step(dt, 1.0f);
+    assert(physics.stallTime() > stallSeconds,
+        "стоячая машина копит время застоя");
+    assert(runFailure(physics) == "нет продвижения вперёд",
+        "застой по курсу — это тоже сход с дистанции");
 }
