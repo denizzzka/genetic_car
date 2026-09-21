@@ -66,6 +66,11 @@ class BuggyScene: Scene
     private bool liveFailed_;
     private bool nWasHandled_;
 
+    /// Секунд реального времени после схода живого заезда: машина моргает
+    /// (видима/скрыта) на этой частоте в ожидании переключения по N.
+    private double liveFailTime;
+    private enum liveBlinkHz = 4.0f;
+
     /// Визуализатор процедурной поверхности (общий shared-кэш с фитнесом).
     private TerrainVisualizer terrainVis;
 
@@ -216,7 +221,7 @@ class BuggyScene: Scene
                 }
             }
             else
-                stepLiveCar();
+                stepLiveCar(t.delta);
 
             // Переключение симулируемой особи — только вручную, по N.
             // keyPressed — защёлка события; игнорируем повторы, пока клавиша
@@ -298,7 +303,7 @@ class BuggyScene: Scene
                 continue;
 
             // Живой заезд — по той же процедурной поверхности, что и фитнес.
-            auto physics = new BuggyPhysics(new Buggy(frame, origin),
+            auto physics = new BuggyPhysics(new Buggy(placedFrame(frame)),
                 sharedTerrain());
             physics.settle(physicsDt,
                 cast(int)(physicsSettleSeconds / physicsDt));
@@ -322,6 +327,7 @@ class BuggyScene: Scene
             livePhysics = physics;
             liveSimTime = 0.0;
             liveFailed_ = false;
+            liveFailTime = 0.0;
 
             // По одному цилиндру на каждую балку каркаса: порядок совпадает
             // с BeamState[] из beamStates() (по Frame.beams).
@@ -350,7 +356,7 @@ class BuggyScene: Scene
         goto reload;
     }
 
-    private void stepLiveCar()
+    private void stepLiveCar(const double dt)
     {
         if (livePhysics is null)
         {
@@ -359,17 +365,33 @@ class BuggyScene: Scene
             return;
         }
 
+        if (liveFailed_)
+        {
+            // Сход: физика заморожена (машина стоит на месте), остаток заезда
+            // машина моргает 2 Гц до ручного переключения по N.
+            liveFailTime += dt;
+            setLiveVisible((cast(int)(liveFailTime * 2.0 * liveBlinkHz) & 1) == 0);
+            return;
+        }
+
         livePhysics.step(physicsDt, 1.0f);
         liveSimTime += physicsDt;
 
         const stepFailure = runFailure(livePhysics);
-        if (stepFailure.length && !liveFailed_)
+        if (stepFailure.length)
         {
             liveFailed_ = true;
-            writefln("live: заезд оборван (%s) — ждём клавиши N", stepFailure);
+            liveFailTime = 0.0;
+            writefln("live: заезд оборван (%s) — машина заморожена, ждём N", stepFailure);
         }
 
         updateLiveCar();
+    }
+
+    private void setLiveVisible(const bool on)
+    {
+        foreach (e; liveCar)
+            e.visible = on;
     }
 
     private void removeLiveEntities()
@@ -461,19 +483,17 @@ class BuggyScene: Scene
             if (f.isNull)
                 continue;
             const float laneX = i * gallerySpacing - firstX;
-            // Buggy — только каркас для отрисовки; физика строится отдельно
-            // (BuggyPhysics) при оценке заезда. Офсет полосы — отображение,
-            // не геометрия.
-            auto buggy = new Buggy(f.get.frame, laneOffset(f.get.frame, laneX));
-            drawBuggy(buggy);
+            // Buggy раскладывает каркас сам (центр в нуле, колёса на земле);
+            // витрине остаётся только сдвиг в свою полосу по X (display-only).
+            auto buggy = new Buggy(placedFrame(f.get.frame));
+            drawBuggy(buggy, vec3(laneX, 0.0f, 0.0f));
         }
     }
 
-    /// Рисует машину из Buggy: статичные балки и колёса в своей полосе laneX.
-    private void drawBuggy(const Buggy buggy)
+    /// Рисует машину из Buggy: статичные балки и колёса. `off` — сдвиг витрины
+    /// (полоса по X); гравитационный «на старт» каркас уже несёт в себе.
+    private void drawBuggy(const Buggy buggy, const vec3 off)
     {
-        const off = buggy.offset;
-
         foreach (b; buggy.frame.beams)
         {
             const a = buggy.frame.nodes[b.a].pos + off;
@@ -513,32 +533,6 @@ class BuggyScene: Scene
         e.material = mat;
         e.position = pos;
         e.rotation = rotationBetween(Vector3f(0, 1, 0), Vector3f(1, 0, 0));
-    }
-
-    /// Центрует каркас горизонтально по среднему, ставит на землю и
-    /// сдвигает в свою полосу вдоль X (в координатах машины).
-    private vec3 laneOffset(const Frame f, float laneX)
-    {
-        vec3 c = origin;
-        foreach (n; f.nodes)
-            c += n.pos;
-        if (f.nodes.length > 0)
-            c /= f.nodes.length;
-
-        float minZ = float.max;
-        foreach (a; f.anchors)
-            minZ = min(minZ, f.nodes[a.node].pos.z);
-
-        float lift = 0.0f;
-        if (minZ < float.max)
-        {
-            // 0.3 — радиус колеса (physics_world.wheelRadius). Всегда прижимаем
-            // низ самого низкого колеса к земле — даже если эволюция унесла
-            // каркас выше: иначе машины дрейфовали бы вверх и «улетали».
-            lift = 0.3f - minZ;
-        }
-
-        return vec3(laneX - c.x, -c.y, lift);
     }
 }
 

@@ -92,7 +92,7 @@ PhysicsBatch evaluateStatic(const Grammar gr, Genotype[] pop,
             fit = buggyFitness(may.get.frame, may.get.ast);
             if (fit > 0.0f && params.simulateSeconds > 0.0)
             {
-                needPhysics ~= new Buggy(may.get.frame, origin);
+                needPhysics ~= new Buggy(placedFrame(may.get.frame));
                 physIdx ~= i;
             }
         }

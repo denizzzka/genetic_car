@@ -823,12 +823,12 @@ unittest
 {
     // Физический слой: заезд простейшего багги конечен, счёт нормирован
     // в (0,1] и не зависит от статики. Пустой каркас — ровно 0.
-    const p = physicsFitness(new Buggy(symmetricBuggyFrame(), origin), 1.0).score;
+    const p = physicsFitness(new Buggy(placedFrame(symmetricBuggyFrame())), 1.0).score;
     assert(isFinite(p) && p >= 0.0f && p <= 1.0f,
         "счёт заезда нормирован и не разлетается");
 
     Frame empty;
-    assert(physicsFitness(new Buggy(empty, origin), 1.0).score == 0.0f,
+    assert(physicsFitness(new Buggy(placedFrame(empty)), 1.0).score == 0.0f,
         "каркас без колёс не выезжает из нуля");
 }
 

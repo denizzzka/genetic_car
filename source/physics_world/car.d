@@ -25,21 +25,17 @@ import physics_world.physics;
 import physics_world.terrain;
 import physics_world.terrainworld;
 
-/// Машина для отрисовки: каркас багги вместе с якорями (колёсами) и офсет,
-/// приводящий каркас к удобному месту. Только данные — физика физикой
-/// занимается отдельно (BuggyPhysics), когда нужен заезд.
+/// Машина: каркас багги вместе с якорями (колёсами). Только данные —
+/// физика физикой занимается отдельно (BuggyPhysics), когда нужен заезд.
+/// Кадр ожидается уже разложенным (`placedFrame`): центр в нуле, низом
+/// колеса на землю — тот, что приходит от вызывающего кода.
 class Buggy
 {
-    /// Каркас багги: узлы (позиции), балки, якоря.
+    /// Каркас багги: узлы (позиции), балки, якоря (разложен `placedFrame`).
     Frame frame;
 
-    /// Смещение отображения, приводящее каркас к началу координат.
-    /// Не меняет геометрию, применяется только при отрисовке.
-    vec3 offset;
-
-    this(Frame frame, vec3 offset)
+    this(Frame frame)
     {
-        this.offset = offset;
         this.frame = frame;
     }
 }
@@ -73,7 +69,7 @@ unittest
     frame.anchors ~= Anchor(rr, AnchorKind.motorWheel);
     frame.motorPower = initialMotorPower;
 
-    auto physics = new BuggyPhysics(new Buggy(frame, origin));
+    auto physics = new BuggyPhysics(new Buggy(placedFrame(frame)));
     scope (exit) physics.dispose();
 
     const double dt = 1.0 / 60.0;
@@ -243,12 +239,8 @@ final class BuggyPhysics
     /// Тела колёс по индексам `Frame.anchors`.
     private NewtonCarBody[] wheelBodies;
 
-    /// Узел якоря каждого колеса (своя ступица не считается задеванием).
+/// Узел якоря каждого колеса (своя ступица не считается задеванием).
     private size_t[] wheelNodes;
-
-    /// Сдвиг узлов каркаса в физических координатах: низ самого низкого
-    /// колеса на z == 0 (как в вьюере).
-    private vec3 posOffset;
 
     /// Первый же провал заезда (латится): сенсорные колбэки и геометрия
     /// копят сюда причину, `beamFailure()` её выдаёт.
@@ -305,15 +297,7 @@ final class BuggyPhysics
         NewtonMaterialSetCollisionCallback(world.newtonWorld,
             world.sensorGroupId, world.sensorGroupId, &sensorNoOverlap, null);
 
-        // Подъём: низ самого низкого колеса на z == 0.
-        vec3 lift = origin;
-        float minZ = float.max;
-        foreach (a; buggy_.frame.anchors)
-            minZ = min(minZ, buggy_.frame.nodes[a.node].pos.z);
-        if (minZ < float.max)
-            lift.z = wheelRadius - minZ;
-        posOffset = lift;
-
+        // Каркас в Buggy уже разложен конструктором (center + на землю).
         buildGround();
         buildFrame();
         buildWheels();
@@ -502,8 +486,8 @@ final class BuggyPhysics
         Quaternionf mt = toCarRot(master.rotation); // истинное вращение мастера
         foreach (i, b; buggy_.frame.beams)
         {
-            const vec3 a = fr.nodes[b.a].pos + posOffset;
-            const vec3 c = fr.nodes[b.b].pos + posOffset;
+            const vec3 a = fr.nodes[b.a].pos;
+            const vec3 c = fr.nodes[b.b].pos;
             const vec3 d = c - a;
             if (d.length < 1e-5f)
                 continue;
@@ -558,8 +542,8 @@ final class BuggyPhysics
         // Массы у балок нет — мост (master) несёт всю раму и тянет балки.
         foreach (i, b; frame.beams)
         {
-            const vec3 a = frame.nodes[b.a].pos + posOffset;
-            const vec3 c = frame.nodes[b.b].pos + posOffset;
+            const vec3 a = frame.nodes[b.a].pos;
+            const vec3 c = frame.nodes[b.b].pos;
             const vec3 dir = c - a;
             const float len = dir.length;
             if (len < 1e-5f)
@@ -598,8 +582,8 @@ final class BuggyPhysics
         vec3 sumM = origin;
         foreach (b; frame.beams)
         {
-            const vec3 a = frame.nodes[b.a].pos + posOffset;
-            const vec3 b2 = frame.nodes[b.b].pos + posOffset;
+            const vec3 a = frame.nodes[b.a].pos;
+            const vec3 b2 = frame.nodes[b.b].pos;
             const float len = (b2 - a).length;
             if (len < 1e-5f)
                 continue;
@@ -626,7 +610,7 @@ final class BuggyPhysics
         vec3 minP = vec3(float.max), maxP = vec3(-float.max);
         foreach (n; frame.nodes)
         {
-            const vec3 p = n.pos + posOffset;
+            const vec3 p = n.pos;
             minP.x = min(minP.x, p.x);
             minP.y = min(minP.y, p.y);
             minP.z = min(minP.z, p.z);
@@ -804,7 +788,7 @@ final class BuggyPhysics
 
         foreach (i, a; frame.anchors)
         {
-            const vec3 nodePos = frame.nodes[a.node].pos + posOffset;
+            const vec3 nodePos = frame.nodes[a.node].pos;
 
             float mass = cast(float)(wheelDensity * PI
                 * (wheelRadius * wheelRadius - wheelInnerRadius * wheelInnerRadius)
@@ -940,7 +924,7 @@ unittest
     good.anchors ~= Anchor(3, AnchorKind.motorWheel);
     good.anchors ~= Anchor(4, AnchorKind.motorWheel);
     {
-        auto physics = new BuggyPhysics(new Buggy(good, origin));
+        auto physics = new BuggyPhysics(new Buggy(placedFrame(good)));
         scope (exit) physics.dispose();
         physics.settle(1.0 / 60.0, 30);
         assert(physics.beamFailure() == BeamFailure.none,
@@ -956,7 +940,7 @@ unittest
     dup.anchors ~= Anchor(4, AnchorKind.motorWheel);
     dup.anchors ~= Anchor(3, AnchorKind.motorWheel);
     {
-        auto physics = new BuggyPhysics(new Buggy(dup, origin));
+        auto physics = new BuggyPhysics(new Buggy(placedFrame(dup)));
         scope (exit) physics.dispose();
         physics.settle(1.0 / 60.0, 30);
         assert(physics.beamFailure() == BeamFailure.wheelWheel,
@@ -975,7 +959,7 @@ unittest
     f.anchors = [Anchor(0, AnchorKind.wheel), Anchor(2, AnchorKind.wheel)];
     const double dt = 1.0 / 60.0;
 
-    auto physics = new BuggyPhysics(new Buggy(f, origin));
+    auto physics = new BuggyPhysics(new Buggy(placedFrame(f)));
     scope (exit) physics.dispose();
     physics.settle(dt, 30);
     assert(physics.stallTime() < stallSeconds

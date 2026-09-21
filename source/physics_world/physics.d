@@ -1,6 +1,7 @@
 module physics_world.physics;
 
 import std.math;
+import std.algorithm : min;
 import std.exception : enforce;
 
 import dlib.core.memory;
@@ -10,6 +11,8 @@ import dlib.math.quaternion;
 import dlib.math.transformation;
 
 import dagon.ext.newton;
+
+import frame.frame : Frame, Node, origin;
 
 /// Радиус колеса. Совпадает с внешним радиусом визуального тора и
 /// коллизионного цилиндра: Solid-цилиндр Newton радиусом 0.3 × шириной 0.2.
@@ -28,6 +31,42 @@ enum double stallSeconds = 30.0;
 /// Чистый набег вперёд по курсу, обнуляющий таймер застоя: дрожание и
 /// качание на месте (< порога) продвижением не считаются.
 enum float stallProgressEps = 0.1f;
+
+/// Раскладка каркаса «на старт»: центрирует горизонтально (средняя X/Y узлов —
+/// в ноль) и сажает низом самого низкого колеса на землю (min Z якоря →
+/// wheelRadius). Единый способ поставить машину — им пользуются и грамматика
+/// (`develop`), и физика (`BuggyPhysics`), и витрина.
+vec3 placeOffset(const Frame f)
+{
+    vec3 c = origin;
+    foreach (n; f.nodes)
+        c += n.pos;
+    if (f.nodes.length > 0)
+        c /= f.nodes.length;
+
+    float minZ = float.max;
+    foreach (a; f.anchors)
+        minZ = min(minZ, f.nodes[a.node].pos.z);
+    const float dz = (minZ < float.max) ? wheelRadius - minZ : 0.0f;
+
+    return vec3(-c.x, -c.y, dz);
+}
+
+/// Копия каркаса, разложенная `placeOffset`: узлы сдвинуты так, что каркас
+/// отцентрован и низом колеса стоит на земле. Массивы копируются — узел
+/// никогда не делит память с исходным каркасом.
+Frame placedFrame(const Frame f)
+{
+    const vec3 off = placeOffset(f);
+    Frame r;
+    r.nodes = f.nodes.dup;
+    r.beams = f.beams.dup;
+    r.anchors = f.anchors.dup;
+    r.motorPower = f.motorPower;
+    foreach (ref n; r.nodes)
+        n.pos += off;
+    return r;
+}
 
 /// Внутренний радиус «отверстия» колеса (покрышка — полый цилиндр).
 /// Нужен только для массы и тензора инерции; коллизия — по внешней
