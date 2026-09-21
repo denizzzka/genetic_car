@@ -1,15 +1,18 @@
 module genetics.initial_data;
 
-// Стартовый геном эволюции: одна балка и два якоря, собранные в кодовоны
-// напрямую, без кодирования из готового фрейма.
+// Стартовый геном эволюции: две балки подряд с общей средней нодой и два
+// якоря, собранные в кодовоны напрямую.
 
 import frame.frame;
 import genetics.sge;
 import genetics.buggygrammar;
 
-/// Стартовый геном: одна поперечная балка («гироскутер») и два якоря
-/// (колесо + моторное колесо). Дальше эволюция сама добавит структуру,
-/// если это выгодно.
+/// Стартовый геном: две поперечные балки подряд («гироскутер» с нодой
+/// посередине) и два якоря (колесо + моторное колесо) на внешних концах.
+/// Цепочка из двух балок важна кодированием: у гена `beamList` больше одного
+/// кодона, поэтому точечные мутации могут как укорачивать, так и наращивать
+/// число балок, а средняя нода даёт точку ветвления. Дальше эволюция сама
+/// добавит структуру, если это выгодно.
 Genotype startGenome(const Grammar gr)
 {
     auto gt = new Genotype(gr.symbols.length);
@@ -56,32 +59,38 @@ Genotype startGenome(const Grammar gr)
     set("segment", [0u]);
     set("segMode", [0u]);
 
-    set("beamList", [1u]);
+    // Две балки подряд: `beamList = [0, 1]` — сначала «продолжить»
+    // (продукция [beam, beamList]), затем «закончить» ([beam]). Обе растут
+    // из последнего созданного узла: первая — из seed, вторая — из средней
+    // ноды, поэтому `startRef` — refLast на оба кодирующих кодона.
+    set("beamList", [0u, 1u]);
     set("beam", [0u]);
-    set("startRef", [0u]);
-    set("endRef", [0u]);
+    set("startRef", [0u, 0u]);
+    set("endRef", [0u, 0u]);
 
-    // Дельта конца балки — «единичный вектор направления × множитель длины»:
-    // 1.2 м поперёк хода (на манер гироскутера), по ходу/вверх — ноль.
+    // Дельта конца каждой балки — «единичный вектор направления × множитель
+    // длины»: по половине поперечного пролёта (0.6 + 0.6 = 1.2 м суммарно,
+    // на манер гироскутера), по ходу/вверх — ноль. По кодону на балку.
     enum float beamLen = 1.2f;
-    const vBeam = left * beamLen;
-    set("forward", [u(vBeam.x, -1.5f, 1.5f)]);
-    set("right", [u(vBeam.y, -1.5f, 1.5f)]);
-    set("up", [u(vBeam.z, -1.5f, 1.5f)]);
-    set("radius", [u(0.05f, 0.02f, 0.06f)]);
+    const vBeam = left * (beamLen / 2.0f);
+    set("forward", [u(vBeam.x, -1.5f, 1.5f), u(vBeam.x, -1.5f, 1.5f)]);
+    set("right", [u(vBeam.y, -1.5f, 1.5f), u(vBeam.y, -1.5f, 1.5f)]);
+    set("up", [u(vBeam.z, -1.5f, 1.5f), u(vBeam.z, -1.5f, 1.5f)]);
+    set("radius", [u(0.05f, 0.02f, 0.06f), u(0.05f, 0.02f, 0.06f)]);
     // Активатор-ингибитор Nodal/Lefty на нуле: стартовая пара (когда
     // раздвоится) зеркально-точная; эволюция сама добавит асимметрию,
     // если это выгодно.
-    set("nodal", [mid]);
-    set("lefty", [0u]);
+    set("nodal", [mid, mid]);
+    set("lefty", [0u, 0u]);
     set("beamKind", [0u]);
-    set("turn", [mid]);
+    set("turn", [mid, mid]);
 
     set("anchorMarker", [0u]);
     set("anchorList", [0u, 1u]);
     set("anchor", [0u, 0u]);
     set("anchorKind", [0u, 1u]);
-    set("idx", [0u, 1u]);
+    // Якоря на внешних концах цепочки: seed — узел 0, конец второй балки — 2.
+    set("idx", [0u, 2u]);
 
     return gt;
 }
@@ -98,11 +107,14 @@ unittest
     auto may = develop(gr, genome);
     assert(!may.isNull, "стартовая хромосома должна развиваться");
     const f = may.get.frame;
-    assert(f.nodes.length == 2);
-    assert(f.beams.length == 1);
+    // Две балки подряд: 0—1 и 1—2, средняя нода 1 общая.
+    assert(f.nodes.length == 3);
+    assert(f.beams.length == 2);
+    assert(f.beams[0].a == 0 && f.beams[0].b == 1);
+    assert(f.beams[1].a == 1 && f.beams[1].b == 2);
     assert(f.anchors.length == 2);
     assert(f.anchors[0].kind == AnchorKind.wheel && f.anchors[0].node == 0);
-    assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 1);
+    assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 2);
     assert(f.totalBeamLength > 0.0f);
     assert(f.motorPower > 99.0f && f.motorPower < 101.0f,
         "стартовая сила мотора берётся из гена motorPower");

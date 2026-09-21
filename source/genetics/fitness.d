@@ -70,7 +70,6 @@ enum float comZTolerance = 0.5f;
 ///   - симметрия через плоскость X=0 (канализация из грамматики);
 ///   - жёсткость — петли в графе балок (цикломатическое число);
 ///   - положение центра масс — к центру габарита на земле, как можно выше;
-///   - колёсная база — продольный разброс колёс;
 ///   - плоскостность колёс по высоте;
 ///   - компактность — наказание за декоративные тупиковые балки;
 ///   - баланс ведущих колёс по сторонам;
@@ -156,9 +155,6 @@ float buggyFitness(const Frame f, const Ast ast)
         return 0.0f;
 
     // ---- Слоты морфологии ----
-    const float xspan = xmax - xmin;
-    const float ybase = ymax - ymin;
-
     const dims = footprintExtents(f);
     const float footprintRaw = exp(-((dims[0] - targetFootprintLong) / footprintTolerance) ^^ 2)
         * exp(-((dims[1] - targetFootprintShort) / footprintTolerance) ^^ 2);
@@ -181,9 +177,6 @@ float buggyFitness(const Frame f, const Ast ast)
     const float phiRigid = 0.5f + 0.5f * (1.0f - exp(-0.4f * cast(float) cycles));
 
     const float phiCoM = comCentering(f, com);
-
-    const float phiAxis = ramp(ybase, 0.15f, 0.6f)
-        * sigmoid(ybase / max(xspan, 1e-3f) - 0.8f);
 
     const float phiFlat = 1.0f - clamp(zrange / maxWheelZRange, 0.0f, 1.0f);
 
@@ -209,7 +202,7 @@ float buggyFitness(const Frame f, const Ast ast)
     const float gaugeViolation = nodesOutsideGauge / cast(float) f.nodes.length;
     const float phiGauge = exp(-3.0f * gaugeViolation);
 
-    return phiSym * phiRigid * phiCoM * phiAxis * phiFlat * phiCompact * phiDrive
+    return phiSym * phiRigid * phiCoM * phiFlat * phiCompact * phiDrive
         * phiFootprint * phiHeight * phiGauge;
 }
 
@@ -687,16 +680,6 @@ float motorBalance(const Frame f)
 
     const size_t total = left + right;
     return 1.0f - cast(float) (left > right ? left - right : right - left) / max(1.0f, cast(float) total);
-}
-
-private float ramp(float v, float lo, float hi)
-{
-    return clamp((v - lo) / max(hi - lo, 1e-6f), 0.0f, 1.0f);
-}
-
-private float sigmoid(float x)
-{
-    return 1.0f / (1.0f + exp(-x));
 }
 
 unittest
