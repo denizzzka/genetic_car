@@ -254,7 +254,9 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
     auto world = acquireWorld();
     scope (exit) releaseWorld(world);
 
-    auto physics = new BuggyPhysics(buggy, world);
+    // Единая процедурная поверхность на весь процесс: фитнес-заезды гоняют
+    // по общему shared-кэшу тайлов (см. physics_world.terrain).
+    auto physics = new BuggyPhysics(buggy, world, sharedTerrain());
     scope (exit) physics.dispose();
 
     physics.settle(physicsDt,

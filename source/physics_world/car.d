@@ -13,8 +13,17 @@ import dlib.core.ownership;
 import dagon.core.event;
 import dagon.ext.newton;
 
-import frame.frame;
+// Имена dlib.math.transformation (up/forward/right — шаблоны) конфликтуют с
+// базисом каркаса; нужные оси каркаса переименовываем локально.
+// Имена dlib.math.transformation (up/forward/right — шаблоны) конфликтуют с
+// базисом каркаса; нужные оси каркаса переименовываем локально. Остальной
+// frame.frame импортируется поимённо.
+import frame.frame : origin, frameUp = up, frameForward = forward,
+    frameRight = right, Frame, Node, Beam, Anchor, AnchorKind, BeamKind,
+    isConnected, initialMotorPower;
 import physics_world.physics;
+import physics_world.terrain;
+import physics_world.terrainworld;
 
 /// Машина для отрисовки: каркас багги вместе с якорями (колёсами) и офсет,
 /// приводящий каркас к удобному месту. Только данные — физика физикой
@@ -191,7 +200,27 @@ final class BuggyPhysics
     private NewtonPhysicsWorld world;
 
     /// Тело земли: статичный body с плоским heightfield, верх на y == 0.
+    /// В terrain-режиме (terrain_ != null) земли нет — её ведёт terrainWorld_.
     private NewtonCarBody ground;
+
+    /// Общая процедурная поверхность (shared-кэш фитнес-пула и вьюера).
+    /// При null заезд идёт по прежней плоскости y == 0.
+    //
+    // TODO: террейн (и кэш, и окно) логичнее держать не в BuggyPhysics, а в
+    // мировом объекте: земля — содержимое мира, а «плоская/рельефная» земля —
+    // свойство мира. Это уберёт тереновый параметр из обоих конструкторов и
+    // ветвления в groundHeightAt/runFailure/beamUnderground, заодно снесёт
+    // порядок сноса окна из dispose(). Но NewtonPhysicsWorld — код dagon
+    // (внешняя зависимость), поэтому мир надо унаследовать (он не final,
+    // как и dlib Owner) — например class BuggyWorld : NewtonPhysicsWorld с
+    // setTerrain/reset/groundHeightAt. Решающий нюанс — пул: миры
+    // переиспользуются без NewtonDestroy, поэтому снести окно и обнулить
+    // террейн обязан release() (worldpool) перед NewtonDestroyAllBodies,
+    // иначе после рельефного заезда следующий «плоский» получит рельеф.
+    private TerrainSurface terrain_;
+
+    /// Стримингуемое окно поверхности в нашем мире (появляется в buildGround).
+    private TerrainWorld terrainWorld_;
 
     /// «Мастер» каркаса: единый центр масс и инерции рамы. Он же везёт
     /// тела балок — их трансформы жёстко пересчитываются из мастера каждый
@@ -234,17 +263,20 @@ final class BuggyPhysics
     private bool ownsWorld_;
 
     /// Свой мир: создаётся локально и забирается с собой (тесты/вьюер).
-    this(const Buggy buggy)
+    this(const Buggy buggy, TerrainSurface terrain = null)
     {
         ensureNewtonLoaded();
-        this(buggy, New!NewtonPhysicsWorld(cast(EventManager)null, cast(Owner)null));
+        this(buggy, New!NewtonPhysicsWorld(cast(EventManager)null, cast(Owner)null),
+            terrain);
         ownsWorld_ = true;
     }
 
-    this(const Buggy buggy, NewtonPhysicsWorld pooledWorld)
+    this(const Buggy buggy, NewtonPhysicsWorld pooledWorld,
+        TerrainSurface terrain = null)
     {
         ensureNewtonLoaded();
         buggy_ = buggy;
+        terrain_ = terrain;
 
         // Конструктор NewtonPhysicsWorld просит EventManager, но хранит его
         // только для проформы: симуляции он не касается. Передаём null.
@@ -287,6 +319,14 @@ final class BuggyPhysics
 
     void dispose()
     {
+        // Тайлы поверхности сносятся ДО того, как мир покинет пул
+        // (NewtonDestroyAllBodies) или будет уничтожен: иначе двойное
+        // освобождение ground/boulder-тел.
+        if (terrainWorld_ !is null)
+        {
+            terrainWorld_.dispose();
+            terrainWorld_ = null;
+        }
         if (world !is null)
         {
             // Свой мир уничтожаем целиком (NewtonDestroy). Чужой (из пула)
@@ -296,6 +336,7 @@ final class BuggyPhysics
             world = null;
         }
         ground = null;
+        terrain_ = null;
         master = null;
         beamLocal.length = 0;
         beamLocalQuat.length = 0;
@@ -323,6 +364,8 @@ final class BuggyPhysics
         world.update(dt);
         syncBodies();
         updateBeamPuppets();
+        if (terrainWorld_ !is null && master !is null)
+            terrainWorld_.updateAround(toCarPos(master.position.xyz));
     }
 
     /// Момент полного газа на каждое мотор-колесо, разложенный по `throttle`.
@@ -445,6 +488,15 @@ final class BuggyPhysics
 
     private void buildGround()
     {
+        if (terrain_ !is null)
+        {
+            // Процедурная поверхность: окно из тайлов вокруг старта. Ground-тело
+            // и булыжники тайлов живут в TerrainWorld — здесь они не нужны.
+            terrainWorld_ = new TerrainWorld(world, terrain_, terrain_.config);
+            terrainWorld_.updateAround(origin);
+            return;
+        }
+
         // Земля-heightfield в координатах мира Newton: плоскость XZ на y == 0,
         // вверх оси — +Y (см. carToNewtonQuat). Грань прежнего бокса лежала на
         // z == 0 координат каркаса, что в Newton совпадает с y == 0.
@@ -642,9 +694,10 @@ final class BuggyPhysics
     }
 
     /// Геометрическая проверка «рама под землёй»: низшая точка поверхности
-    /// любой балки ниже `-beamGroundEps`. Не зависит от контактов Newton —
-    /// ловит и глухое погружение, и проскакивание между шагами проверки.
-    /// Высота здесь — координата Y мира Newton (земля — плоскость XZ).
+    /// любой балки ниже локальной земли (плоскость y == 0 или рельеф процедурной
+    /// поверхности, см. groundHeightAt) минус `beamGroundEps`. Не зависит от
+    /// контактов Newton — ловит и глухое погружение, и проскакивание между
+    /// шагами проверки. Высота здесь — координата Y мира Newton.
     private bool beamUnderground()
     {
         if (master is null)
@@ -654,16 +707,40 @@ final class BuggyPhysics
         {
             if (b is null)
                 continue;
-            // Ось цилиндра — локальный Y; низшая точка балки над землёй.
-            // Именно rotate, а не `*`: у dlib quat*vec это кватернионное
-            // произведение, а не поворот вектора.
             const vec3 dir = b.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
-            const float half = beamLen[i] * 0.5f;
-            const float low = (b.position.y - dir.y * half) - fr.beams[i].radius;
-            if (low < -beamGroundEps)
+            const vec3 lowWorld = b.position.xyz - dir * (beamLen[i] * 0.5f);
+            const vec3 lowCar = toCarPos(lowWorld);
+            const float ground = groundHeightAt(lowCar);
+            if (lowCar.z - fr.beams[i].radius < ground - beamGroundEps)
                 return true;
         }
         return false;
+    }
+
+    /// Высота локальной земли в точке на плоскости каркаса (компоненты вдоль
+    /// `forward` и `right`): 0 для плоской земли, процедурная высота вдоль `up`
+    /// для поверхности.
+    float groundHeightAt(const vec3 p)
+    {
+        if (terrain_ is null)
+            return 0.0f;
+        return terrain_.heightAt(p);
+    }
+
+    /// Фокус поверхности для стриминга окна: мастер, спроецированный на
+    /// плоскость каркаса (вдоль `up` = 0).
+    vec3 surfaceFocus() @property
+    {
+        if (master is null)
+            return origin;
+        const vec3 p = toCarPos(master.position.xyz);
+        return p - frameUp * p.z;
+    }
+
+    /// Активное окно поверхности (если в этом заезде есть рельеф) — для вьюера.
+    TerrainWorld terrainWorld() @property
+    {
+        return terrainWorld_;
     }
 
     /// Своя ступица: колесо приварено к концу этой балки.
@@ -733,9 +810,12 @@ string runFailure(BuggyPhysics physics)
         if (!isFinite(s.position.x) || !isFinite(s.position.y)
             || !isFinite(s.position.z))
             return "каркас разлетелся";
-        if (s.position.z < physicsWheelBelow)
+        // Локальная земля под колесом: 0 на плоскости, рельеф на поверхности.
+        // Так колесо не «проваливается» на бугре и не «парит» над ложбиной.
+        const float g = physics.groundHeightAt(s.position.xyz);
+        if (s.position.z < g + physicsWheelBelow)
             return "колесо провалилось под землю";
-        if (s.position.z > wheelRadius + physicsWheelLift)
+        if (s.position.z > g + wheelRadius + physicsWheelLift)
             return "машина перевернулась";
     }
 
@@ -762,7 +842,7 @@ unittest
 {
     // canDrive: решает, стоит ли запускать физический заезд.
     Frame f;
-    f.nodes = [Node(origin), Node(frame.frame.right)];
+    f.nodes = [Node(origin), Node(frameRight)];
     f.beams = [Beam(0, 1, 0.05f)];
 
     f.anchors = [Anchor(0, AnchorKind.wheel)];

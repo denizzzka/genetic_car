@@ -5,6 +5,7 @@ copyright "Copyright © 2026, Denis Feklushkin"
 license "proprietary"
 dependency "dagon" version="~>1.6.0"
 dependency "dagon:newton" version="~>1.6.0"
+dependency "fast_noise" version="~>1.0.5"
 
 // Копии libnewton.so + libdg*.so (copyFiles из dagon:newton) складываются в
 // корень проекта; dlopen по имени ищет их только через LD_LIBRARY_PATH,

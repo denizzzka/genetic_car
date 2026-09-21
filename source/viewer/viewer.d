@@ -11,6 +11,7 @@ import std.stdio : writefln;
 import frame.frame;
 import genetics;
 import physics_world;
+import viewer.terrainvisualizer;
 
 class BuggyScene: Scene
 {
@@ -59,6 +60,9 @@ class BuggyScene: Scene
     private Entity[] liveCar;
     private double liveSimTime;
     private double liveRunSeconds;
+
+    /// Визуализатор процедурной поверхности (общий shared-кэш с фитнесом).
+    private TerrainVisualizer terrainVis;
 
     private Buggy[] liveBatch;
     private size_t liveBatchIdx;
@@ -117,8 +121,9 @@ class BuggyScene: Scene
         matDriveWheel.roughnessFactor = 0.9f;
         matDriveWheel.metallicFactor = 0.0f;
 
-        auto ePlane = addEntity();
-        ePlane.drawable = New!ShapePlane(12.0f, 12.0f, 1, assetManager);
+        // Плоская «земля» больше не нужна: её рисует процедурная поверхность
+        // TerrainVisualizer (общий shared-кэш с фитнесом).
+        terrainVis = new TerrainVisualizer(this, sharedTerrain());
 
         resetPopulation();
         buildGallery();
@@ -177,6 +182,9 @@ class BuggyScene: Scene
     override void update(Time t)
     {
         super.update(t);
+
+        // Окно поверхности за машиной (или в origin, пока машин нет).
+        terrainVis.update(livePhysics);
 
         if (jobThread !is null)
         {
@@ -267,7 +275,9 @@ class BuggyScene: Scene
             if (frame.anchors.length < 2 || !canDrive(frame))
                 continue;
 
-            auto physics = new BuggyPhysics(new Buggy(frame, origin));
+            // Живой заезд — по той же процедурной поверхности, что и фитнес.
+            auto physics = new BuggyPhysics(new Buggy(frame, origin),
+                sharedTerrain());
             physics.settle(physicsDt,
                 cast(int)(physicsSettleSeconds / physicsDt));
             const settleFailure = runFailure(physics);
