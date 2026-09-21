@@ -10,6 +10,7 @@
 		"bindbc-sdl": "1.5.2",
 		"bindbc-spirvcross": "0.1.1",
 		"dagon": "1.6.1",
-		"dlib": "1.6.0"
+		"dlib": "1.6.0",
+		"fast_noise": "1.0.5"
 	}
 }
