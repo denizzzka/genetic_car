@@ -154,12 +154,14 @@ class BuggyScene: Scene
         matBeam.baseColorTexture = buildBeamGradientTexture();
 
         matWheel = addMaterial();
-        matWheel.baseColorFactor = Color4f(0.08f, 0.08f, 0.08f, 1.0f);
+        matWheel.baseColorFactor = Color4f(1, 1, 1, 1);
+        matWheel.baseColorTexture = buildTireTexture(Color4f(0.08f, 0.08f, 0.09f, 1.0f));
         matWheel.roughnessFactor = 0.9f;
         matWheel.metallicFactor = 0.0f;
 
         matDriveWheel = addMaterial();
-        matDriveWheel.baseColorFactor = Color4f(0.6f, 0.1f, 0.1f, 1.0f);
+        matDriveWheel.baseColorFactor = Color4f(1, 1, 1, 1);
+        matDriveWheel.baseColorTexture = buildTireTexture(Color4f(0.55f, 0.08f, 0.08f, 1.0f));
         matDriveWheel.roughnessFactor = 0.9f;
         matDriveWheel.metallicFactor = 0.0f;
 
@@ -195,6 +197,32 @@ class BuggyScene: Scene
             foreach (x; 0 .. imgW)
                 img[x, y] = c;
         }
+
+        auto tex = New!Texture(this);
+        tex.createFromImage(img, false);
+        Delete(img);
+        return tex;
+    }
+
+    /// Текстура покрышки: базовая резина `base` + одна светлая радиальная
+    /// полоса на всю ширину протектора. Полоса асимметрична по окружности,
+    /// поэтому по её повороту видно вращение колеса. UV тора: u — кругом
+    /// (окружность), v — поперёк трубы (ширина покрышки).
+    private Texture buildTireTexture(const Color4f base)
+    {
+        const int imgW = 64;
+        const int imgH = 8;
+        const Color4f stripe = Color4f(0.9f, 0.9f, 0.8f, 1.0f);
+
+        SuperImage img = unmanagedImage(imgW, imgH, 4, 8);
+        foreach (y; 0 .. imgH)
+            foreach (x; 0 .. imgW)
+                img[x, y] = base;
+
+        // Полоса — один сектор окружности (~1/8), во всю ширину покрышки.
+        foreach (y; 0 .. imgH)
+            foreach (x; imgW / 2 - imgW / 16 .. imgW / 2 + imgW / 16)
+                img[x, y] = stripe;
 
         auto tex = New!Texture(this);
         tex.createFromImage(img, false);
