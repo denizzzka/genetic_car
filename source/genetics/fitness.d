@@ -1,8 +1,7 @@
 module genetics.fitness;
 
+import std.algorithm : min, max, clamp;
 import std.math;
-import std.algorithm : min, max, clamp, sort;
-import std.typecons : Tuple, tuple;
 
 import dlib.math.vector;
 
@@ -46,20 +45,17 @@ enum float maxClearance = 2.0f;
 /// Разумный потолок сложности каркаса.
 enum size_t maxBeamCount = 64;
 
-/// Потолок сторон footprint колёс (минимальный прямоугольник в плоскости
-/// XY, без фиксации ориентации) и допуск. Ограничение одностороннее: каркас
-/// не должен быть больше потолка, а быть меньше — свободно. Ящик длинный:
-/// до 3 по курсу (длинная сторона) и до 2.5 поперёк (короткая).
-enum float targetFootprintLong = 3.0f;
-enum float targetFootprintShort = 2.5f;
-enum float footprintTolerance = 1.0f;
+/// Габаритный ящик каркаса — единый односторонний потолок размера:
+/// 3 по курсу (размах) × 2.5 поперёк × 2.5 над землёй, центр встаёт на
+/// середину колёсного footprint. Каркас меньше ящика ничем не наказывается;
+/// узлы и колёса за его гранью штрафуются долей (phiBox).
+enum float boxCourseHalf = 1.5f;
+enum float boxWidthHalf = 1.25f;
+enum float boxHeight = 2.5f;
 
-/// Верхняя граница габаритного параллелепипеда каркаса (phiGauge) по Z.
-enum float targetFrameHeight = 2.5f;
-
-/// Нижний порог морфологического множителя footprint: суррогат
-/// лишь сглаживает отбор, а не зануляет каркас. Плоский/узкий основатель
-/// получает порог вместо ~e^-25 и остаётся видимым отбору и физике.
+/// Нижний порог морфологического множителя phiBox: суррогат
+/// лишь сглаживает отбор, а не зануляет каркас. Основатель, вылезший за
+/// ящик, получает порог вместо ~e^-25 и остаётся видимым отбору и физике.
 enum float morphologyFloor = 0.01f;
 
 /// Допуски положения центра масс внутри габарита: по XY — к центру
@@ -77,10 +73,9 @@ enum float comZTolerance = 0.5f;
 ///   - положение центра масс — к центру габарита на земле, как можно выше;
 ///   - плоскостность колёс по высоте;
 ///   - компактность — наказание за декоративные тупиковые балки;
-///   - баланс ведущих колёс по сторонам;
-///   - габариты — footprint колёс;
-///   - габаритный параллелепипед — штраф за узлы за пределами
-///     (колёсный AABB по XY + высота от земли до целевой).
+    ///   - баланс ведущих колёс по сторонам;
+    ///   - габаритный ящик — один параллелепипед 3×2.5×2.5 вокруг центра
+    ///     колёс: узлы за его гранью штрафуются долей.
 float buggyFitness(const Frame f)
 {
     return buggyFitness(f, Ast.init);
@@ -162,16 +157,6 @@ float buggyFitness(const Frame f, const Ast ast)
             return 0.0f;
 
     // ---- Слоты морфологии ----
-    const dims = footprintExtents(f);
-    // Потолок размера, не правило: штрафуем только стороны оболочки сверх
-    // цели, а каркас меньше целого footprint ничем не наказывается.
-    float footprintRaw = 1.0f;
-    if (dims[0] > targetFootprintLong)
-        footprintRaw *= exp(-((dims[0] - targetFootprintLong) / footprintTolerance) ^^ 2);
-    if (dims[1] > targetFootprintShort)
-        footprintRaw *= exp(-((dims[1] - targetFootprintShort) / footprintTolerance) ^^ 2);
-    const float phiFootprint = max(footprintRaw, morphologyFloor);
-
     const float nodeSym = symmetryRatio(f);
     const float wheelSym = wheelSymmetry(f);
     const float pairSym = beamMassSymmetry(f);
@@ -192,24 +177,27 @@ float buggyFitness(const Frame f, const Ast ast)
 
     const float phiDrive = 0.5f + 0.5f * motorBalance(f);
 
-    // Балки за габаритом: доля узлов за пределами параллелепипеда
-    // (колёсный AABB по XY + от земли до целевой высоты по Z)
-    // гасит фитнес экспоненциально — параллелепипед не должен
-    // обрастать лишними элементами за пределами габарита.
-    float nodesOutsideGauge = 0;
+    // Габаритный ящик — единый потолок размера: параллелепипед
+    // 3(курс) × 2.5(поперёк) × 2.5(высота над землёй), центр по колёсному
+    // footprint. Доля узлов за его гранью гасит фитнес экспоненциально —
+    // каркас не должен обрастать элементами за пределами габарита, а быть
+    // меньше ящика — свободно.
+    const float cx = 0.5f * (xmin + xmax);
+    const float cy = 0.5f * (ymin + ymax);
+    float outsideBox = 0;
     foreach (n; f.nodes)
     {
-        const bool inX = n.pos.x >= xmin - epsFlat && n.pos.x <= xmax + epsFlat;
-        const bool inY = n.pos.y >= ymin - epsFlat && n.pos.y <= ymax + epsFlat;
-        const bool inZ = n.pos.z >= groundZ - epsFlat && n.pos.z <= groundZ + targetFrameHeight + epsFlat;
-        if (!(inX && inY && inZ))
-            nodesOutsideGauge += 1.0f;
+        const bool inBox = abs(n.pos.x - cx) <= boxWidthHalf + epsFlat
+            && abs(n.pos.y - cy) <= boxCourseHalf + epsFlat
+            && n.pos.z >= groundZ - epsFlat && n.pos.z <= groundZ + boxHeight + epsFlat;
+        if (!inBox)
+            outsideBox += 1.0f;
     }
-    const float gaugeViolation = nodesOutsideGauge / cast(float) f.nodes.length;
-    const float phiGauge = exp(-3.0f * gaugeViolation);
+    const float boxViolation = outsideBox / cast(float) f.nodes.length;
+    const float phiBox = max(exp(-3.0f * boxViolation), morphologyFloor);
 
     return phiSym * phiRigid * phiCoM * phiFlat * phiCompact * phiDrive
-        * phiFootprint * phiGauge;
+        * phiBox;
 }
 
 /// Минимальное расстояние между центрами якорных колёс каркаса.
@@ -562,86 +550,6 @@ float aabbDiagonal(const Frame f)
     return (hi - lo).length;
 }
 
-/// Длинная и короткая стороны бокса выпуклой оболочки колёс в плоскости XY,
-/// у ориентации, где он ближе всего к целевому прямоугольнику (2.5×3).
-/// Ориентация каркаса не важна: повёрнутая «диагональ» не раздувает стороны.
-Tuple!(float, float) footprintExtents(const Frame f)
-{
-    vec3[] pts;
-    pts.reserve(f.anchors.length);
-    foreach (a; f.anchors)
-        pts ~= f.nodes[a.node].pos;
-
-    auto crossZ = (vec3 o, vec3 a, vec3 b) {
-        return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-    };
-
-    sort!"a.x != b.x ? a.x < b.x : a.y < b.y"(pts);
-
-    vec3[] hull;
-    vec3[] lower;
-    foreach (p; pts)
-    {
-        while (lower.length >= 2 && crossZ(lower[$ - 2], lower[$ - 1], p) <= 0.0f)
-            lower.length -= 1;
-        lower ~= p;
-    }
-    vec3[] upper;
-    foreach_reverse (p; pts)
-    {
-        while (upper.length >= 2 && crossZ(upper[$ - 2], upper[$ - 1], p) <= 0.0f)
-            upper.length -= 1;
-        upper ~= p;
-    }
-    if (lower.length >= 2 && upper.length >= 2)
-        hull = lower[0 .. $ - 1] ~ upper[0 .. $ - 1];
-
-    if (hull.length < 3)
-    {
-        float longest = 0.0f;
-        foreach (p; pts)
-            foreach (q; pts)
-                longest = max(longest, distance(p, q));
-        return tuple(longest, 0.0f);
-    }
-
-    // Ориентация, чей box ближе всего к целевому прямоугольнику.
-    float bestDist = float.max;
-    float longSide, shortSide;
-    foreach (i; 0 .. hull.length)
-    {
-        const a = hull[i];
-        const b = hull[(i + 1) % hull.length];
-        vec3 e = b - a;
-        const el = e.length;
-        if (el < 1e-6f)
-            continue;
-        e /= el;
-
-        float minU = float.max, maxU = -float.max;
-        float minV = float.max, maxV = -float.max;
-        foreach (p; hull)
-        {
-            const u = e.x * p.x + e.y * p.y;
-            const v = -e.y * p.x + e.x * p.y;
-            minU = min(minU, u); maxU = max(maxU, u);
-            minV = min(minV, v); maxV = max(maxV, v);
-        }
-        const w = maxU - minU;
-        const h = maxV - minV;
-        const lo = min(w, h);
-        const hi = max(w, h);
-        const dist = (hi - targetFootprintLong) ^^ 2 + (lo - targetFootprintShort) ^^ 2;
-        if (dist < bestDist)
-        {
-            bestDist = dist;
-            longSide = hi;
-            shortSide = lo;
-        }
-    }
-    return tuple(longSide, shortSide);
-}
-
 /// Число "декоративных" тупиков: узлы степени 1 без колеса.
 size_t nonAnchorLeaves(const Frame f)
 {
@@ -752,16 +660,16 @@ unittest
     assert(tall > flat, "поощрение заполнения высоты габаритного параллелепипеда");
 
     // Балки за габаритом: идентичные каркасы, отличающиеся только одним узлом
-    // (внутри колёсного AABB против выступающего наружу), — выступающий
-    // получает меньший фитнес. deadRatio у обоих одинаков (1/7), отличие — phiGauge.
+    // (внутри ящика против выступающего наружу), — выступающий получает
+    // меньший фитнес. deadRatio у обоих одинаков (1/6), отличие — phiBox.
     Frame inside = symmetricBuggyFrame();
     inside.nodes ~= Node(vec3(0.3f, 0.0f, 0.4f));
     inside.beams ~= Beam(0, inside.nodes.length - 1, 0.04f);
     Frame outside = symmetricBuggyFrame();
     outside.nodes ~= Node(vec3(1.5f, 0.0f, 0.4f));
     outside.beams ~= Beam(0, outside.nodes.length - 1, 0.04f);
-    assert(outside.nodes[$ - 1].pos.x > 0.7f + epsFlat,
-        "узел теста обязан выступать за X AABB колёс (0.7)");
+    assert(outside.nodes[$ - 1].pos.x > boxWidthHalf + epsFlat,
+        "узел теста обязан выступать за полуширину ящика (1.25)");
     assert(buggyFitness(inside) > 0.0f && buggyFitness(outside) > 0.0f);
     assert(buggyFitness(inside) > buggyFitness(outside),
         "балка за пределами габаритного параллелепипеда должна понижать фитнес");
@@ -832,36 +740,6 @@ private Frame tallBuggyFrame()
     f.nodes ~= Node(vec3(0.0f, 0.0f, 2.5f));
     f.beams ~= Beam(0, f.nodes.length - 1, 0.045f); // от центра (узел 0) вверх
     return f;
-}
-
-unittest
-{
-    // footprintExtents — box оболочки, ближайший к целевому 2.5×3; поворот
-    // каркаса на 45° не должен увеличивать стороны.
-    auto wheels = [tuple(0.7f, 0.7f), tuple(-0.7f, 0.7f), tuple(-0.7f, -0.7f), tuple(0.7f, -0.7f)];
-
-    Frame sq;
-    foreach (p; wheels)
-    {
-        sq.nodes ~= Node(vec3(p[0], p[1], 0.3f));
-        sq.anchors ~= Anchor(sq.nodes.length - 1, AnchorKind.wheel);
-    }
-    const d1 = footprintExtents(sq);
-    assert(abs(d1[0] - 1.4f) < 1e-3f && abs(d1[1] - 1.4f) < 1e-3f,
-        "осевая квадратная оболочка 1.4×1.4");
-
-    Frame rot;
-    const float c = cos(PI / 4.0f), s = sin(PI / 4.0f);
-    foreach (p; wheels)
-    {
-        const float x = p[0] * c - p[1] * s;
-        const float y = p[0] * s + p[1] * c;
-        rot.nodes ~= Node(vec3(x, y, 0.3f));
-        rot.anchors ~= Anchor(rot.nodes.length - 1, AnchorKind.wheel);
-    }
-    const d2 = footprintExtents(rot);
-    assert(abs(d2[0] - 1.4f) < 1e-2f && abs(d2[1] - 1.4f) < 1e-2f && d2[0] < 1.6f,
-        "поворот на 45° не увеличивает footprint: диагональ не проходит");
 }
 
 private Frame symmetricBuggyFrame()
