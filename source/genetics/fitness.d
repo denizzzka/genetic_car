@@ -35,13 +35,6 @@ enum float fitnessWheelRadius = 0.3f;
 /// колёса в точке старта не должны задевать друг друга.
 enum float wheelWheelGateDistance = 2.0f * fitnessWheelRadius + 1e-3f;
 
-/// Максимальный разброс высот колёс, при котором каркас ещё "стоит на полу".
-enum float maxWheelZRange = 0.6f;
-
-/// Допустимый клиренс (высота центра масс над нижней точкой колёс).
-enum float minClearance = 0.02f;
-enum float maxClearance = 2.0f;
-
 /// Разумный потолок сложности каркаса.
 enum size_t maxBeamCount = 64;
 
@@ -58,11 +51,6 @@ enum float boxHeight = 2.5f;
 /// ящик, получает порог вместо ~e^-25 и остаётся видимым отбору и физике.
 enum float morphologyFloor = 0.01f;
 
-/// Допуски положения центра масс внутри габарита: по XY — к центру
-/// колёсного footprint, по Z — к верхней границе клиренса (maxClearance).
-enum float comXYTolerance = 0.5f;
-enum float comZTolerance = 0.5f;
-
 /// Оценочная фитнес-функция каркаса (без физики).
 ///
 /// Возвращает 0 для физически невыполнимых каркасов и значение в (0,1]
@@ -70,12 +58,9 @@ enum float comZTolerance = 0.5f;
 /// с нижней границей 0.5, чтобы асимметричный каркас не обнулялся):
 ///   - симметрия через плоскость X=0 (канализация из грамматики);
 ///   - жёсткость — петли в графе балок (цикломатическое число);
-///   - положение центра масс — к центру габарита на земле, как можно выше;
-///   - плоскостность колёс по высоте;
-///   - компактность — наказание за декоративные тупиковые балки;
-    ///   - баланс ведущих колёс по сторонам;
-    ///   - габаритный ящик — один параллелепипед 3×2.5×2.5 вокруг центра
-    ///     колёс: узлы за его гранью штрафуются долей.
+///   - баланс ведущих колёс по сторонам;
+///   - габаритный ящик — один параллелепипед 3×2.5×2.5 вокруг центра
+///     колёс: узлы за его гранью штрафуются долей.
 float buggyFitness(const Frame f)
 {
     return buggyFitness(f, Ast.init);
@@ -102,56 +87,30 @@ float buggyFitness(const Frame f, const Ast ast)
     if (wheelAnchorSpacing(f) < wheelWheelGateDistance)
         return 0.0f;
 
-    const size_t V = f.nodes.length;
-
-    // Аппроксимация центра масс: масса балки ∝ r²·len, центр — середина.
-    vec3 com = origin;
-    float totalMass = 0.0f;
-    foreach (b; f.beams)
-    {
-        const vec3 a = f.nodes[b.a].pos;
-        const vec3 d = f.nodes[b.b].pos - a;
-        const float len = d.length;
-        if (len < 1e-5f)
-            continue;
-        const float m = b.radius * b.radius * len;
-        com += (a + 0.5f * d) * m;
-        totalMass += m;
-    }
-    if (totalMass <= 0.0f)
-        return 0.0f;
-    com /= totalMass;
-
-    // Разброс колёс и число ведущих.
+    // Число ведущих колёс и их разброс по сторонам; нижняя точка колёс.
     float xmin = float.max, xmax = -float.max;
     float ymin = float.max, ymax = -float.max;
-    float zmin = float.max, zmax = -float.max;
+    float wheelZmin = float.max;
     size_t nMotor = 0;
     foreach (a; f.anchors)
     {
         const vec3 p = f.nodes[a.node].pos;
         xmin = min(xmin, p.x); xmax = max(xmax, p.x);
         ymin = min(ymin, p.y); ymax = max(ymax, p.y);
-        zmin = min(zmin, p.z); zmax = max(zmax, p.z);
+        wheelZmin = min(wheelZmin, p.z);
         if (a.kind == AnchorKind.motorWheel)
             nMotor += 1;
     }
     if (nMotor == 0)
         return 0.0f;
 
-    const float zrange = zmax - zmin;
-    if (zrange > maxWheelZRange)
-        return 0.0f;
+    // Опора — одно нижнее колесо: земля ложится по его нижней точке
+    // (groundZ), все остальные колёса — где угодно: любой высоты, любого
+    // места по бокам. Ничего ниже её огибающей каркасу нельзя.
+    const float groundZ = wheelZmin - fitnessWheelRadius;
 
-    // Клиренс: высота центра масс над плоскостью земли. Земля — под
-    // нижней точкой колёс: z = zmin - fitnessWheelRadius.
-    const float groundZ = zmin - fitnessWheelRadius;
-    const float clearance = com.z - groundZ;
-    if (clearance < minClearance || clearance > maxClearance)
-        return 0.0f;
-
-    // Балки не должны торчать ниже колёс: ни один узел каркаса не опускается
-    // под плоскость земли. Допуск epsFlat прощает касание, но не проникновение.
+    // Балки не должны зарываться ниже плоскости земли. Допуск epsFlat
+    // прощает касание, но не проникновение.
     foreach (n; f.nodes)
         if (n.pos.z < groundZ - epsFlat)
             return 0.0f;
@@ -166,14 +125,6 @@ float buggyFitness(const Frame f, const Ast ast)
 
     const size_t cycles = cyclomaticNumber(f); // μ = E - V + c
     const float phiRigid = 0.5f + 0.5f * (1.0f - exp(-0.4f * cast(float) cycles));
-
-    const float phiCoM = comCentering(f, com);
-
-    const float phiFlat = 1.0f - clamp(zrange / maxWheelZRange, 0.0f, 1.0f);
-
-    const size_t Vf = cast(size_t) V;
-    const float deadRatio = cast(float) nonAnchorLeaves(f) / Vf;
-    const float phiCompact = exp(-2.0f * deadRatio);
 
     const float phiDrive = 0.5f + 0.5f * motorBalance(f);
 
@@ -196,7 +147,7 @@ float buggyFitness(const Frame f, const Ast ast)
     const float boxViolation = outsideBox / cast(float) f.nodes.length;
     const float phiBox = max(exp(-3.0f * boxViolation), morphologyFloor);
 
-    return phiSym * phiRigid * phiCoM * phiFlat * phiCompact * phiDrive
+    return phiSym * phiRigid * phiDrive
         * phiBox;
 }
 
@@ -510,30 +461,6 @@ size_t cyclomaticNumber(const Frame f)
     return mu > 0 ? cast(size_t) mu : 0;
 }
 
-/// Положение центра масс в габаритном параллелепипеде: по XY — к центру
-/// колёсного footprint, по Z — как можно выше (к верхней границе гейта
-/// клиренса maxClearance). Множитель ∈ (0,1].
-private float comCentering(const Frame f, const vec3 com)
-{
-    float xmin = float.max, xmax = -float.max;
-    float ymin = float.max, ymax = -float.max;
-    float zmin = float.max;
-    foreach (a; f.anchors)
-    {
-        const vec3 p = f.nodes[a.node].pos;
-        xmin = min(xmin, p.x); xmax = max(xmax, p.x);
-        ymin = min(ymin, p.y); ymax = max(ymax, p.y);
-        zmin = min(zmin, p.z);
-    }
-    const float cx = 0.5f * (xmin + xmax);
-    const float cy = 0.5f * (ymin + ymax);
-    const float targetZ = zmin - fitnessWheelRadius + maxClearance;
-
-    return exp(-(((com.x - cx) / comXYTolerance) ^^ 2
-        + ((com.y - cy) / comXYTolerance) ^^ 2
-        + ((targetZ - com.z) / comZTolerance) ^^ 2));
-}
-
 /// Диагональ ограничивающего бокса всех узлов.
 float aabbDiagonal(const Frame f)
 {
@@ -548,28 +475,6 @@ float aabbDiagonal(const Frame f)
         hi.x = max(hi.x, n.pos.x); hi.y = max(hi.y, n.pos.y); hi.z = max(hi.z, n.pos.z);
     }
     return (hi - lo).length;
-}
-
-/// Число "декоративных" тупиков: узлы степени 1 без колеса.
-size_t nonAnchorLeaves(const Frame f)
-{
-    const size_t V = f.nodes.length;
-    size_t[] deg = new size_t[V];
-    bool[] hasAnchor = new bool[V];
-
-    foreach (b; f.beams)
-    {
-        deg[b.a] += 1;
-        deg[b.b] += 1;
-    }
-    foreach (a; f.anchors)
-        hasAnchor[a.node] = true;
-
-    size_t leaves = 0;
-    foreach (i; 0 .. V)
-        if (deg[i] == 1 && !hasAnchor[i])
-            leaves += 1;
-    return leaves;
 }
 
 /// Баланс ведущих колёс по сторонам: 1 — парами, 0 — только с одной стороны.
@@ -652,16 +557,9 @@ unittest
     assert(symFitness > asymFitness,
         "зеркальность колёс и каркаса даёт прирост фитнеса");
 
-    // Заполнение высоты: каркас с вертикальным размахом ближе к габаритной
-    // высоте оценивается выше плоского той же колёсной базы.
-    const float flat = buggyFitness(symmetricBuggyFrame());
-    const float tall = buggyFitness(tallBuggyFrame());
-    assert(tall > 0.0f, "высокий каркас физически выполним");
-    assert(tall > flat, "поощрение заполнения высоты габаритного параллелепипеда");
-
-    // Балки за габаритом: идентичные каркасы, отличающиеся только одним узлом
-    // (внутри ящика против выступающего наружу), — выступающий получает
-    // меньший фитнес. deadRatio у обоих одинаков (1/6), отличие — phiBox.
+    // Балки за габаритом: идентичные каркасы, отличающиеся только одним
+    // узлом (внутри ящика против выступающего наружу), — выступающий
+    // получает меньший фитнес. Отличие — phiBox.
     Frame inside = symmetricBuggyFrame();
     inside.nodes ~= Node(vec3(0.3f, 0.0f, 0.4f));
     inside.beams ~= Beam(0, inside.nodes.length - 1, 0.04f);
@@ -708,19 +606,6 @@ unittest
 
 unittest
 {
-    // comCentering: тот же каркас — выше и ближе к центру footprint лучше.
-    const f = symmetricBuggyFrame();
-    const high  = vec3(0.0f, 0.0f, 2.0f);
-    const low   = vec3(0.0f, 0.0f, 0.5f);
-    const side  = vec3(0.6f, 0.0f, 0.5f);
-    assert(comCentering(f, high) > comCentering(f, low),
-        "ЦТ выше — ближе к целевому положению");
-    assert(comCentering(f, high) > comCentering(f, side),
-        "ЦТ ближе к центру footprint — лучше");
-}
-
-unittest
-{
     // Физический слой: заезд простейшего багги конечен, счёт нормирован
     // в (0,1] и не зависит от статики. Пустой каркас — ровно 0.
     const p = physicsFitness(new Buggy(placedFrame(symmetricBuggyFrame())), 1.0).score;
@@ -730,16 +615,6 @@ unittest
     Frame empty;
     assert(physicsFitness(new Buggy(placedFrame(empty)), 1.0).score == 0.0f,
         "каркас без колёс не выезжает из нуля");
-}
-
-/// Симметричная машина, дополненная вертикальной надстройкой: тот же footprint,
-/// но размах узлов по Z ближе к целевой высоте 2.5 м.
-private Frame tallBuggyFrame()
-{
-    Frame f = symmetricBuggyFrame();
-    f.nodes ~= Node(vec3(0.0f, 0.0f, 2.5f));
-    f.beams ~= Beam(0, f.nodes.length - 1, 0.045f); // от центра (узел 0) вверх
-    return f;
 }
 
 private Frame symmetricBuggyFrame()
