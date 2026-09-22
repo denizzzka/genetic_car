@@ -440,14 +440,15 @@ final class BuggyPhysics
         const Frame fr = buggy_.frame;
         if (fr.motorPower == 0.0f)
             return;
+        const vec3 spin = cross(toNewtonPos(frameUp), toNewtonPos(frameForward));
         foreach (i, a; fr.anchors)
             if (a.kind == AnchorKind.motorWheel && i < wheelBodies.length
                 && wheelBodies[i] !is null)
             {
                 auto w = wheelBodies[i];
-                // Истинная ось колеса: кэш инвертирован, берём сопряжение.
                 const vec3 axle = w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
-                w.addTorque(axle * (throttle * fr.motorPower));
+                const vec3 dir = (dot(axle, spin) < 0.0f) ? -axle : axle;
+                w.addTorque(dir * (throttle * fr.motorPower));
             }
     }
 
