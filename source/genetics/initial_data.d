@@ -50,7 +50,7 @@ Genotype startGenome(const Grammar gr)
     set("taper", [u(1.0f, 0.4f, 1.0f)]);
     set("taperPow", [u(1.0f, 0.5f, 4.0f)]);
     set("heading", [mid]);
-    set("motorPower", [u(initialMotorPower, 0.0f, 200.0f)]);
+    set("motorPower", [u(initialMotorPower, -200.0f, 200.0f)]);
 
     // Один одиночный (медианный) сегмент без раздвоения: из него эволюция
     // либо вырастит пару ветвей (сегмент раздвоится — «лишняя пара

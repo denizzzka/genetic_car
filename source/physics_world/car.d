@@ -19,7 +19,8 @@ import dagon.ext.newton;
 // базисом каркаса; нужные оси каркаса переименовываем локально. Остальной
 // frame.frame импортируется поимённо.
 import frame.frame : origin, frameUp = up, frameForward = forward,
-    frameRight = right, Frame, Node, Beam, Anchor, AnchorKind, BeamKind,
+    frameRight = right, frameBackward = backward,
+    Frame, Node, Beam, Anchor, AnchorKind, BeamKind,
     isConnected, initialMotorPower;
 import physics_world.physics;
 import physics_world.terrain;
@@ -78,14 +79,14 @@ unittest
     // Плоская земля, мотор-колёса: успокоить раму, затем заезд на полном газу.
     physics.settle(dt, 120);
 
-    double avgY()
+    vec3 avgPos()
     {
-        double y = 0.0;
+        vec3 p = vec3(0.0f, 0.0f, 0.0f);
         foreach (s; physics.wheelStates())
-            y += s.position.y;
-        return y / physics.wheelStates().length;
+            p += s.position;
+        return p / physics.wheelStates().length;
     }
-    const double startY = avgY;
+    const vec3 start = avgPos;
 
     // ~9 секунд заезда — машина должна остаться на земле,
     // не разлететься и не провалиться сквозь неё.
@@ -106,8 +107,71 @@ unittest
     }
 
     // За ~9 секунд заезда машина должна заметно уехать вперёд по курсу.
-    assert(-(avgY - startY) > 1.0,
+    assert(dot(avgPos - start, frameForward) > 1.0,
         "мотор-колёса не везут машину — момент не передаётся раме");
+}
+
+unittest
+{
+    import std.math : isFinite;
+
+    // Отрицательный момент — смена направления привода: тот же багги
+    // с motorPower < 0 должен поехать назад (по backward).
+    Frame frame;
+    size_t node(vec3 pos)
+    {
+        frame.nodes ~= Node(pos);
+        return frame.nodes.length - 1;
+    }
+
+    const c = node(vec3(0.0f, 0.0f, 0.8f));
+    const fl = node(vec3(0.6f, 0.7f, 0.3f));
+    const fr = node(vec3(-0.6f, 0.7f, 0.3f));
+    const rl = node(vec3(0.6f, -0.7f, 0.3f));
+    const rr = node(vec3(-0.6f, -0.7f, 0.3f));
+    frame.beams ~= Beam(c, fl, 0.045f);
+    frame.beams ~= Beam(c, fr, 0.045f);
+    frame.beams ~= Beam(c, rl, 0.05f);
+    frame.beams ~= Beam(c, rr, 0.05f);
+    frame.beams ~= Beam(fl, fr, 0.045f);
+    frame.beams ~= Beam(rl, rr, 0.05f);
+    frame.anchors ~= Anchor(fl, AnchorKind.wheel);
+    frame.anchors ~= Anchor(fr, AnchorKind.wheel);
+    frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
+    frame.anchors ~= Anchor(rr, AnchorKind.motorWheel);
+    frame.motorPower = -initialMotorPower;
+
+    auto physics = new BuggyPhysics(new Buggy(placedFrame(frame)));
+    scope (exit) physics.dispose();
+
+    const double dt = 1.0 / 60.0;
+    physics.settle(dt, 120);
+
+    vec3 avgPos()
+    {
+        vec3 p = vec3(0.0f, 0.0f, 0.0f);
+        foreach (s; physics.wheelStates())
+            p += s.position;
+        return p / physics.wheelStates().length;
+    }
+    const vec3 start = avgPos;
+
+    foreach (i; 0 .. 540)
+        physics.step(dt, 1.0f);
+
+    foreach (s; physics.wheelStates())
+    {
+        assert(isFinite(s.position.x) && isFinite(s.position.y) && isFinite(s.position.z),
+            "позиция колеса не конечна — машина разлетелась");
+        assert(s.position.z > -0.1f, "колесо провалилось под землю");
+        assert(s.position.z <= wheelRadius + 0.25f, "колесо парит над землёй");
+    }
+
+    // Отрицательный момент должен развернуть машину: движение по backward.
+    const vec3 end = avgPos;
+    const vec3 travel = end - start;
+    assert(dot(travel, frameBackward) > 1.0,
+        "отрицательный motorPower должен ехать в обратную сторону (backward)");
 }
 
 /**
@@ -119,7 +183,7 @@ unittest
  */
 bool canDrive(const Frame f)
 {
-    if (f.motorPower <= minMotorPower)
+    if (abs(f.motorPower) <= minMotorPower)
         return false;
     foreach (a; f.anchors)
         if (a.kind == AnchorKind.motorWheel)
@@ -364,9 +428,9 @@ final class BuggyPhysics
     }
 
     /// Момент полного газа на каждое мотор-колесо, разложенный по `throttle`.
-    /// Сила мотора — наследуемый параметр каркаса (`Frame.motorPower`).
-    /// Момент прикладывается вокруг оси колеса (локальный Y цилиндра) так,
-    /// чтобы закрутка +X катила машину по курсу -Y.
+    /// Сила мотора — наследуемый параметр каркаса (`Frame.motorPower`),
+    /// знак силы — направление привода: положительный момент едет вперёд по
+    /// курсу, отрицательный разворачивает вращение и едет назад (backward).
     private void applyDrive(float throttle)
     {
         if (throttle == 0.0f || master is null)
@@ -914,6 +978,9 @@ unittest
 
     f.motorPower = minMotorPower + 1.0f;
     assert(canDrive(f), "мотор-колесо с заметным моментом — привод есть");
+
+    f.motorPower = -(minMotorPower + 1.0f);
+    assert(canDrive(f), "отрицательный момент — такой же привод, только назад");
 }
 
 unittest

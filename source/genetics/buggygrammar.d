@@ -92,9 +92,7 @@ Grammar buggyGrammar()
     auto taperPow = new Sampler!Tok("taperPow", Tok.taperPow, 0.5f, 4.0f);
     auto heading = new Sampler!Tok("heading", Tok.heading, -3.1416f, 3.1416f);
     auto turn = new Sampler!Tok("turn", Tok.turn, -1.5708f, 1.5708f);
-    // Сила мотор-колёс, Н·м: от почти стоячей машины до агрессивной,
-    // способной вилли; эволюция ищет окно между «не едет» и «опрокидывается».
-    auto motorPower = new Sampler!Tok("motorPower", Tok.motorPower, 0.0f, 200.0f);
+    auto motorPower = new Sampler!Tok("motorPower", Tok.motorPower, -200.0f, 200.0f);
 
     auto startRef = nt("startRef", [
         new Production([marker(Tok.refLast)]),
