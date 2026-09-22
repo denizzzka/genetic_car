@@ -30,6 +30,10 @@ class BuggyScene: Scene
 
     Entity carRoot;
 
+    /// Корень витрины: «топ-5» галереи живут отдельным поддеревом от живого
+    /// заезда, чтобы перестройка галереи (removeCar) не сносила машину демо.
+    Entity galleryRoot;
+
     /// Геометрия и материалы, переиспользуемые между поколениями:
     /// создаются один раз, чтобы перестройка галереи не накапливала
     /// меши и материалы (dlib-память вне GC, иначе — утечка и крах).
@@ -138,6 +142,9 @@ class BuggyScene: Scene
         carRoot = addEntity();
         carRoot.rotation = rotationQuaternion(Vector3f(1, 0, 0), degtorad(-90.0f));
 
+        galleryRoot = addEntity();
+        galleryRoot.rotation = rotationQuaternion(Vector3f(1, 0, 0), degtorad(-90.0f));
+
         meshBeam = New!ShapeCylinder(1.0f, 1.0f, 8, assetManager);
         meshWheel = New!ShapeTorus(0.2f, 0.1f, 16, 8, assetManager);
 
@@ -234,8 +241,7 @@ class BuggyScene: Scene
                 batch = evaluateStatic(grammar,
                     population.map!(e => e.genotype).array, evolutionConfig);
             }
-            else
-                buildGallery();
+            buildGallery();
             logGeneration();
             return;
         }
@@ -260,8 +266,6 @@ class BuggyScene: Scene
                     stopRequested_ = false;
                     if (visualize_)
                         startLiveCar();   // следующий спавн возьмёт последний batch
-                    else
-                        buildGallery();
                 }
                 else
                 {
@@ -269,9 +273,10 @@ class BuggyScene: Scene
                     startNextGen();
                     if (visualize_)
                         startLiveCar();   // следующий спавн возьмёт новый batch
-                    else
-                        buildGallery();   // «5 лучших» обновляются, когда появились лучше
                 }
+                // «5 лучших» перестраиваются на каждом поколении — и в демо,
+                // и без него: витрина живёт отдельным поддеревом от live-заезда.
+                buildGallery();
                 logGeneration();
             }
             else if (visualize_)
@@ -559,16 +564,16 @@ class BuggyScene: Scene
     private void removeCar()
     {
         Entity[] toRemove;
-        foreach (e; carRoot.children)
+        foreach (e; galleryRoot.children)
             toRemove ~= e;
 
-        // Снимаем детей с корня и из мира: иначе сущности навечно
-        // остаются в carRoot.children и с каждым поколением галерея
+        // Снимаем детей витрины с корня и из мира: иначе сущности навечно
+        // остаются в galleryRoot.children и с каждым поколением галерея
         // накапливает сотни сущностей в сцене.
         foreach (e; toRemove)
         {
             removeEntity(e);
-            carRoot.removeChild(e);
+            galleryRoot.removeChild(e);
         }
     }
 
@@ -611,7 +616,7 @@ class BuggyScene: Scene
             if (length < 1e-5f)
                 continue;
 
-            auto e = addEntity(carRoot);
+            auto e = addEntity(galleryRoot);
             e.drawable = meshBeam;
             e.material = matBeam;
             e.position = (a + b2) * 0.5f;
@@ -637,7 +642,7 @@ class BuggyScene: Scene
 
     private void addWheel(const vec3 pos, const vec3 axle, Material mat)
     {
-        auto e = addEntity(carRoot);
+        auto e = addEntity(galleryRoot);
         e.drawable = meshWheel;
         e.material = mat;
         e.position = pos;
