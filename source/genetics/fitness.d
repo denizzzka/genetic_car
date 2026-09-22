@@ -166,35 +166,24 @@ float wheelAnchorSpacing(const Frame f)
     return best;
 }
 
-/// Параметры заезда (физический слой оценки).
-enum double physicsDt = 1.0 / 60.0;       ///< шаг симуляции (стабильный dt)
-enum double physicsSimSeconds = 3.0;      ///< длительность заезда особи, сек
+enum double physicsDt = 1.0 / 60.0;
+enum double physicsSimSeconds = 3.0;
+enum double physicsSettleSeconds = 1.0;
 enum float physicsNominalSpeed = 4.0f;    ///< м/с фитнеса — дистанция-норма
-enum double physicsSettleSeconds = 1.0;   ///< успокоение осадки перед стартом
+enum float physicsSpeedCap = 2.0f;        ///< потолок бонуса за скорость доезда
 
-/// Итог физического заезда одной машины.
-///
-/// Помимо мультипликатора `score` в фитнес отдаёт телеметрию для вывода:
-/// фактически пройденную дистанцию (`distance`), сколько было колёс/балок и что
-/// оборвало заезд (`why`), если `survived` ложно.
 struct PhysicsResult
 {
-    float score = 0.0f;    // вклад в фитнес: (0..1]; 0 — не доехала
-    bool survived = false; // заезд дошёл до конца, не развалившись
-    double distance = 0.0; // пройденная дистанция по курсу (-Y), м
-    size_t wheels = 0;     // выставленное число колёс
-    size_t beams = 0;      // выставленное число балок
-    string why = "";       // причина обрыва (пусто — успех)
+    float score = 0.0f;
+    bool survived = false;
+    double distance = 0.0;
+    double reachTime = 0.0;
+    size_t wheels = 0;
+    size_t beams = 0;
+    string why = "";
 }
 
-/// Физический слой оценки: заезд на мотор-колёсах по плоской земле.
-///
-/// На ведущие колёса подаётся момент `Frame.motorPower` (наследуемый ген) —
-/// машина едет сама. Счёт — продвижение центра колёс ВНИЗ по курсу (-Y) за
-/// `seconds` секунд, нормированное на `physicsNominalSpeed·seconds` → (0,1].
-/// Живучесть: любое колесо провалилось под землю, зависло (переворот, съезд)
-/// или каркас разлетелся — заезд обрывается, счёт 0. Симуляция строится на
-/// `BuggyPhysics` отдельно, фитнес только читает её наружу.
+/// Счёт — доля полной дистанции × средняя скорость доезда (в долях номинала).
 PhysicsResult physicsFitness(const Buggy buggy, double seconds)
 {
     PhysicsResult r;
@@ -215,8 +204,6 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
     auto world = acquireWorld();
     scope (exit) releaseWorld(world);
 
-    // Единая процедурная поверхность на весь процесс: фитнес-заезды гоняют
-    // по общему shared-кэшу тайлов (см. physics_world.terrain).
     auto physics = new BuggyPhysics(buggy, world, sharedTerrain());
     scope (exit) physics.dispose();
 
@@ -240,9 +227,9 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
         startY += s.position.y;
     startY /= wheels.length;
 
-    // Продвижение по курсу — максимум дистанции, преодолённой вниз (-Y).
     double farthest = 0.0;
-    foreach (_; 0 .. steps)
+    double reachTime = seconds;
+    foreach (i; 0 .. steps)
     {
         physics.step(physicsDt, 1.0f);
 
@@ -258,18 +245,42 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
         foreach (s; wheels)
             curY += s.position.y;
         curY /= wheels.length;
-        const double downhill = startY - curY;     // +Y — вверх по склону
-        farthest = max(farthest, downhill);
+        const double downhill = startY - curY;   // +Y — вверх по склону
+        if (downhill > farthest)
+        {
+            farthest = downhill;
+            reachTime = physicsDt * (i + 1);
+        }
     }
 
     r.distance = farthest;
+    r.reachTime = reachTime;
     if (r.why.length != 0)
         return r;
 
-    const double target = physicsNominalSpeed * seconds;
     r.survived = true;
-    r.score = clamp(cast(float)(farthest / target), 0.0f, 1.0f);
+    r.score = finishScore(farthest, seconds, reachTime);
     return r;
+}
+
+/// Счёт заезда: доля полной дистанции × средняя скорость доезда (в долях номинала).
+private float finishScore(double farthest, double seconds, double reachTime)
+{
+    const double distanceFrac = farthest / (physicsNominalSpeed * seconds);
+    const double speedRatio = farthest / (physicsNominalSpeed * reachTime);
+    return clamp(cast(float)(distanceFrac * speedRatio), 0.0f, physicsSpeedCap);
+}
+
+unittest
+{
+    // finishScore: и общая дистанция, и скорость доезда влияют на счёт
+    // мультипликативно; быстрее и дальше — выше.
+    assert(finishScore(12.0, 3.0, 3.0) == 1.0f);
+    assert(finishScore(6.0, 3.0, 3.0) == 0.25f);
+    assert(finishScore(6.0, 3.0, 1.5) == 0.5f);
+    assert(finishScore(12.0, 3.0, 1.5) == 2.0f);
+    assert(finishScore(24.0, 3.0, 1.5) == physicsSpeedCap);
+    assert(finishScore(0.0, 3.0, 3.0) == 0.0f);
 }
 
 /// Доля узлов, у которых есть зеркальный партнёр через плоскость X=0.
