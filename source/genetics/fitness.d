@@ -46,8 +46,9 @@ enum float maxClearance = 2.0f;
 /// Разумный потолок сложности каркаса.
 enum size_t maxBeamCount = 64;
 
-/// Целевые стороны footprint колёс (минимальный прямоугольник в плоскости
-/// XY, без фиксации ориентации) и допуск.
+/// Потолок сторон footprint колёс (минимальный прямоугольник в плоскости
+/// XY, без фиксации ориентации) и допуск. Ограничение одностороннее: каркас
+/// не должен быть больше потолка, а быть меньше — свободно.
 enum float targetFootprintLong = 3.0f;
 enum float targetFootprintShort = 2.0f;
 enum float footprintTolerance = 1.0f;
@@ -161,8 +162,13 @@ float buggyFitness(const Frame f, const Ast ast)
 
     // ---- Слоты морфологии ----
     const dims = footprintExtents(f);
-    const float footprintRaw = exp(-((dims[0] - targetFootprintLong) / footprintTolerance) ^^ 2)
-        * exp(-((dims[1] - targetFootprintShort) / footprintTolerance) ^^ 2);
+    // Потолок размера, не правило: штрафуем только стороны оболочки сверх
+    // цели, а каркас меньше целого footprint ничем не наказывается.
+    float footprintRaw = 1.0f;
+    if (dims[0] > targetFootprintLong)
+        footprintRaw *= exp(-((dims[0] - targetFootprintLong) / footprintTolerance) ^^ 2);
+    if (dims[1] > targetFootprintShort)
+        footprintRaw *= exp(-((dims[1] - targetFootprintShort) / footprintTolerance) ^^ 2);
     const float phiFootprint = max(footprintRaw, morphologyFloor);
 
     const float nodeSym = symmetryRatio(f);
