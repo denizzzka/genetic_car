@@ -59,12 +59,14 @@ unittest
     const fr = node(vec3(-0.6f, 0.7f, 0.3f));
     const rl = node(vec3(0.6f, -0.7f, 0.3f));
     const rr = node(vec3(-0.6f, -0.7f, 0.3f));
+    // Поперечные балки первыми: у каждого колеса ось — своя поперечина
+    // (как у листового узла), а не наклонная диагональ к центру.
+    frame.beams ~= Beam(fl, fr, 0.045f);
+    frame.beams ~= Beam(rl, rr, 0.05f);
     frame.beams ~= Beam(c, fl, 0.045f);
     frame.beams ~= Beam(c, fr, 0.045f);
     frame.beams ~= Beam(c, rl, 0.05f);
     frame.beams ~= Beam(c, rr, 0.05f);
-    frame.beams ~= Beam(fl, fr, 0.045f);
-    frame.beams ~= Beam(rl, rr, 0.05f);
     frame.anchors ~= Anchor(fl, AnchorKind.wheel);
     frame.anchors ~= Anchor(fr, AnchorKind.wheel);
     frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
@@ -130,12 +132,13 @@ unittest
     const fr = node(vec3(-0.6f, 0.7f, 0.3f));
     const rl = node(vec3(0.6f, -0.7f, 0.3f));
     const rr = node(vec3(-0.6f, -0.7f, 0.3f));
+    // Поперечные балки первыми — ось каждого колеса своя, поперечная.
+    frame.beams ~= Beam(fl, fr, 0.045f);
+    frame.beams ~= Beam(rl, rr, 0.05f);
     frame.beams ~= Beam(c, fl, 0.045f);
     frame.beams ~= Beam(c, fr, 0.045f);
     frame.beams ~= Beam(c, rl, 0.05f);
     frame.beams ~= Beam(c, rr, 0.05f);
-    frame.beams ~= Beam(fl, fr, 0.045f);
-    frame.beams ~= Beam(rl, rr, 0.05f);
     frame.anchors ~= Anchor(fl, AnchorKind.wheel);
     frame.anchors ~= Anchor(fr, AnchorKind.wheel);
     frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
@@ -358,6 +361,11 @@ final class BuggyPhysics
     /// Узел якоря каждого колеса (своя ступица не считается задеванием).
     private size_t[] wheelNodes;
 
+    /// Знак момента привода каждого колеса, выданный на старте: все колёса
+    /// тянут особь к цели независимо от разворота оси, и знак не
+    /// пересматривается по мере движения (ориентация колеса не влияет).
+    private float[] wheelDriveSign;
+
     /// Первый же провал заезда (латится): сенсорные колбэки и геометрия
     /// копят сюда причину, `beamFailure()` её выдаёт.
     private BeamFailure beamFail_;
@@ -455,6 +463,7 @@ final class BuggyPhysics
         beamNodeB.length = 0;
         wheelBodies.length = 0;
         wheelNodes.length = 0;
+        wheelDriveSign.length = 0;
         beamFail_ = BeamFailure.none;
     }
 
@@ -490,14 +499,17 @@ final class BuggyPhysics
         const Frame fr = buggy_.frame;
         if (fr.motorPower == 0.0f)
             return;
-        const vec3 spin = cross(toNewtonPos(frameUp), toNewtonPos(frameForward));
         foreach (i, a; fr.anchors)
             if (a.kind == AnchorKind.motorWheel && i < wheelBodies.length
-                && wheelBodies[i] !is null)
+                && i < wheelDriveSign.length && wheelBodies[i] !is null)
             {
                 auto w = wheelBodies[i];
-                const vec3 axle = w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
-                const vec3 dir = (dot(axle, spin) < 0.0f) ? -axle : axle;
+                // Момент вдоль живой оси колеса (физически вертеться можно
+                // только вокруг неё), а знак — зафиксированный на сборке:
+                // колесо крутится по «генному» направлению оси, текущая
+                // ориентация знак не разворачивает.
+                const vec3 dir = wheelDriveSign[i]
+                    * w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
                 w.addTorque(dir * (throttle * fr.motorPower));
             }
     }
@@ -936,6 +948,7 @@ final class BuggyPhysics
         const Frame frame = buggy_.frame;
         wheelBodies.length = frame.anchors.length;
         wheelNodes.length = frame.anchors.length;
+        wheelDriveSign.length = frame.anchors.length;
 
         foreach (i, a; frame.anchors)
         {
@@ -974,7 +987,8 @@ final class BuggyPhysics
 
             // Ось колеса — направление «своей» балки узла: диск встаёт
             // перпендикулярно балке, а балка проходит сквозь ступицу.
-            const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), wheelAxle(frame.beamDirectionAt(a.node)));
+            const vec3 axleDir = wheelAxle(frame.beamDirectionAt(a.node));
+            const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), axleDir);
             wheel.setTransformation(newtonBodyMatrix(nodePos, q));
             wheel.update(0.0);
 
@@ -997,6 +1011,10 @@ final class BuggyPhysics
 
             wheelBodies[i] = wheel;
             wheelNodes[i] = a.node;
+            // Знак привода — на старте, по «генной» оси: все колёса тянут
+            // особь к цели, независимо от разворота оси, и знак больше
+            // не пересматривается (текущая ориентация не влияет).
+            wheelDriveSign[i] = (dot(axleDir, frameRight) < 0.0f) ? -1.0f : 1.0f;
         }
     }
 }

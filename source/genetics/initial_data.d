@@ -1,7 +1,7 @@
 module genetics.initial_data;
 
 // Стартовый геном эволюции: две балки подряд с общей средней нодой и два
-// якоря, собранные в кодовоны напрямую.
+// моторных якоря, собранные в кодовоны напрямую.
 
 import std.math : abs;
 
@@ -91,7 +91,7 @@ Genotype startGenome(const Grammar gr)
     set("anchorMarker", [0u]);
     set("anchorList", [0u, 1u]);
     set("anchor", [0u, 0u]);
-    set("anchorKind", [0u, 1u]);
+    set("anchorKind", [1u, 1u]);
     // Якоря на внешних концах цепочки: seed — узел 0, конец второй балки — 2.
     set("idx", [0u, 2u]);
     // Радиус колёс: оба якоря стартуют с `defaultWheelRadius`.
@@ -119,7 +119,7 @@ unittest
     assert(f.beams[0].a == 0 && f.beams[0].b == 1);
     assert(f.beams[1].a == 1 && f.beams[1].b == 2);
     assert(f.anchors.length == 2);
-    assert(f.anchors[0].kind == AnchorKind.wheel && f.anchors[0].node == 0);
+    assert(f.anchors[0].kind == AnchorKind.motorWheel && f.anchors[0].node == 0);
     assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 2);
     assert(abs(f.anchors[0].radius - defaultWheelRadius) < 1e-6f
         && abs(f.anchors[1].radius - defaultWheelRadius) < 1e-6f,
