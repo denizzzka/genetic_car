@@ -176,6 +176,52 @@ unittest
         "отрицательный motorPower должен ехать в обратную сторону (backward)");
 }
 
+unittest
+{
+    // Ограничитель крутки: раскрученное сверх лимита колесо должно
+    // снизить скорость обода до wheelMaxSurfaceSpeed (75 км/ч).
+    Frame frame;
+    size_t node(vec3 pos)
+    {
+        frame.nodes ~= Node(pos);
+        return frame.nodes.length - 1;
+    }
+
+    const c = node(vec3(0.0f, 0.0f, 0.8f));
+    const fl = node(vec3(0.6f, 0.7f, 0.3f));
+    const fr = node(vec3(-0.6f, 0.7f, 0.3f));
+    const rl = node(vec3(0.6f, -0.7f, 0.3f));
+    const rr = node(vec3(-0.6f, -0.7f, 0.3f));
+    frame.beams ~= Beam(c, fl, 0.045f);
+    frame.beams ~= Beam(c, fr, 0.045f);
+    frame.beams ~= Beam(c, rl, 0.05f);
+    frame.beams ~= Beam(c, rr, 0.05f);
+    frame.beams ~= Beam(fl, fr, 0.045f);
+    frame.beams ~= Beam(rl, rr, 0.05f);
+    frame.anchors ~= Anchor(fl, AnchorKind.wheel);
+    frame.anchors ~= Anchor(fr, AnchorKind.wheel);
+    frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
+    frame.anchors ~= Anchor(rr, AnchorKind.motorWheel);
+    frame.motorPower = 0.0f;
+
+    auto physics = new BuggyPhysics(new Buggy(placedFrame(frame)));
+    scope (exit) physics.dispose();
+
+    const double dt = 1.0 / 60.0;
+    physics.settle(dt, 120);
+
+    auto w = physics.wheelBodies[0];
+    const vec3 axle = w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
+    w.angularVelocity = axle * 200.0f;
+
+    foreach (i; 0 .. 10)
+        physics.step(dt, 0.0f);
+
+    const float surface = abs(dot(axle, w.angularVelocity)) * wheelRadius;
+    assert(surface <= wheelMaxSurfaceSpeed * 1.05f,
+        "регулятор не удержал скорость обода в пределах лимита");
+}
+
 /**
  * Есть ли у каркаса привод: хотя бы одно мотор-колесо и заметная сила мотора.
  *
@@ -421,6 +467,7 @@ final class BuggyPhysics
             return;
 
         applyDrive(throttle);
+        applyWheelSpinGovernor();
         world.update(dt);
         syncBodies();
         updateBeamPuppets();
@@ -449,6 +496,30 @@ final class BuggyPhysics
                 const vec3 axle = w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
                 const vec3 dir = (dot(axle, spin) < 0.0f) ? -axle : axle;
                 w.addTorque(dir * (throttle * fr.motorPower));
+            }
+    }
+
+    /// Мягкий ограничитель крутки: поверхность колеса не должна двигаться
+    /// быстрее `wheelMaxSurfaceSpeed` (75 км/ч). Превышение `wheelOmegaMax`
+    /// гасится встречным моментом, пропорциональным превышению
+    /// (`wheelSpinGain`) — предел мягкий, буксование и свободный разнос
+    /// ниже лимита ничем не стесняются. Действует на все колёса, не только
+    /// на моторные: с каждой падает отряд, раскрутка любой — по лимиту.
+    private void applyWheelSpinGovernor()
+    {
+        if (master is null)
+            return;
+        foreach (w; wheelBodies)
+            if (w !is null)
+            {
+                const vec3 axle = w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
+                const float spin = dot(axle, w.angularVelocity);
+                const float excess = abs(spin) - wheelOmegaMax;
+                if (excess > 0.0f)
+                {
+                    const float dir = (spin < 0.0f) ? -1.0f : 1.0f;
+                    w.addTorque(axle * (-dir * excess * wheelSpinGain));
+                }
             }
     }
 
