@@ -170,9 +170,11 @@ unittest
     }
 
     // Отрицательный момент должен развернуть машину: движение по backward.
+    // (Offroad-сцепление грунта 0.7/0.55 ниже прежнего 0.9 — колёса буксуют,
+    // порог невысокий, но направление обязано быть backward.)
     const vec3 end = avgPos;
     const vec3 travel = end - start;
-    assert(dot(travel, frameBackward) > 1.0,
+    assert(dot(travel, frameBackward) > 0.5,
         "отрицательный motorPower должен ехать в обратную сторону (backward)");
 }
 
@@ -380,7 +382,7 @@ final class BuggyPhysics
     this(const Buggy buggy, TerrainSurface terrain = null)
     {
         ensureNewtonLoaded();
-        this(buggy, New!NewtonPhysicsWorld(cast(EventManager)null, cast(Owner)null),
+        this(buggy, New!PhysicsWorld(cast(EventManager)null, cast(Owner)null),
             terrain);
         ownsWorld_ = true;
     }
@@ -398,12 +400,13 @@ final class BuggyPhysics
         ownsWorld_ = false;
         world.threadsCount = 0;
 
-        // Трение и упругость — по паре материалов default×default: колёса
-        // катятся по земле, два колеса между собой решаются.
+        // Сцепление и упругость между колёсами (default×default) — прежние:
+        // контакт колёс — провал заезда, пару решать не нужно. Сцепление
+        // колёс о грунт задаёт мир (PhysicsWorld) на паре default×soil.
         NewtonMaterialSetDefaultFriction(world.newtonWorld,
-            world.defaultGroupId, world.defaultGroupId, groundFriction, groundFriction);
+            world.defaultGroupId, world.defaultGroupId, wheelWheelFriction, wheelWheelFriction);
         NewtonMaterialSetDefaultElasticity(world.newtonWorld,
-            world.defaultGroupId, world.defaultGroupId, 0.0f);
+            world.defaultGroupId, world.defaultGroupId, wheelWheelElasticity);
         // Контакт двух обычных тел не меняем, но смотрим (провал wheelWheel).
         NewtonMaterialSetCollisionCallback(world.newtonWorld,
             world.defaultGroupId, world.defaultGroupId, null, &contactDefaultDefault);
@@ -665,6 +668,7 @@ final class BuggyPhysics
             0.0f, world, world);
         body.dynamic = false;
         body.kind = BodyKind.ground;
+        body.groupId = soilGroupIdOf(world);
         body.setTransformation(translationMatrix(vec3(-shape.halfExtent, 0.0f, -shape.halfExtent)));
         body.update(0.0);
         ground = body;
@@ -954,8 +958,12 @@ final class BuggyPhysics
             wheel.index = i;
             wheel.autoSleep = false;
             wheel.gravity = gravity;
-            wheel.linearDamping = bodyDamping;
-            wheel.angularDamping = Vector3f(bodyDamping, bodyDamping, bodyDamping);
+            // Линейное — лёгкий выкат (Crr гасит зацепление, не «воздух»);
+            // угловое: ось спина (локальный Y цилиндра, см. makeAxisYCylinder) —
+            // сопротивление качению по грунту, перпендикулярные оси — прежнее
+            // общее демпфирование.
+            wheel.linearDamping = tireLinearDamping;
+            wheel.angularDamping = Vector3f(bodyDamping, tireRollDamping, bodyDamping);
             // Инерция полого цилиндра, ось вращения — локальный Y.
             const float r2 = r * r;
             const float ri2 = ir * ir;

@@ -5,11 +5,13 @@ import std.algorithm : min;
 import std.exception : enforce;
 
 import dlib.core.memory;
+import dlib.core.ownership;
 import dlib.math.vector;
 import dlib.math.matrix;
 import dlib.math.quaternion;
 import dlib.math.transformation;
 
+import dagon.core.event;
 import dagon.ext.newton;
 
 import frame.frame : Frame, Node, Beam, Anchor, AnchorKind, origin;
@@ -120,10 +122,81 @@ enum float beamGroundEps = 0.02f;
 /// и физический заезд запускать незачем.
 enum float minMotorPower = 1.0f;
 
-/// Наследственные коэффициенты трения и демпфирования: Newton считает их
-/// по паре материалов / телу.
-enum float groundFriction = 0.9f;
+/// Сцепление пары «покрышка × грунт» (сухая почва/глина): статическое —
+/// срыв (зацепление), кинетическое — удержание при скольжении.
+enum float soilFrictionStatic = 0.7f;
+enum float soilFrictionKinetic = 0.55f;
+
+/// Упругость пары «покрышка × грунт»: мягкая покрышка гасит удар о почву,
+/// отскок мал (ближе к мокрой глине, ~0.05).
+enum float soilElasticity = 0.05f;
+
+/// Сцепление пары «колесо × колесо»: контакт колёс — провал заезда, пару
+/// решать не нужно, коэффициент — прежний 0.9, чтобы поведение не менялось.
+enum float wheelWheelFriction = 0.9f;
+enum float wheelWheelElasticity = 0.0f;
+
+/// Общее демпфирование рамы (мастер) и перпендикулярных оси спина осей
+/// колёс: прежнее наследственное значение.
 enum float bodyDamping = 0.5f;
+
+/// Линейное демпфирование колёс: лёгкий выкат по грунту (паразитные потери
+/// в покрышке) — снижено с 0.5, тормозит сцепление, а не «воздух».
+enum float tireLinearDamping = 0.1f;
+
+/// Сопротивление качению (Crr ~ 0.1 по грунту): угловое демпфирование оси
+/// спина колеса — обод выкатывается короче, чем на асфальте.
+enum float tireRollDamping = 0.2f;
+
+/// Контакты балок (sensor) с грунтом разбираются как у dagon для sensor×default:
+/// все точки снимаются, чтобы кинестатическая балка не толкалась землёй.
+/// Сигнала на провал не нужно — раму под землёй ловит геометрическая
+/// beamUnderground().
+extern(C) void physicsSensorGroundContacts(
+    const NewtonJoint* contactJoint, dFloat timestep, int threadIndex)
+{
+    void* next;
+    for (void* c = NewtonContactJointGetFirstContact(contactJoint); c; c = next)
+    {
+        next = NewtonContactJointGetNextContact(contactJoint, c);
+        NewtonContactJointRemoveContact(contactJoint, c);
+    }
+}
+
+/// Мир Newton с подписанной группой материала грунта. Грунт (почва/глина)
+/// получает собственную группу, чтобы сцепление покрышек бралось только с
+/// него (пара default×soil), а пара колесо×колесо (default×default) и всё
+/// прочее осталось как в dagon из коробки.
+final class PhysicsWorld : NewtonPhysicsWorld
+{
+    /// Материальная группа грунта: в ней живут тела земли (плоскость и
+    /// террейн). Колёса катятся по ней с offroad-сцеплением.
+    int soilGroupId;
+
+    this(EventManager eventManager, Owner o)
+    {
+        super(eventManager, o);
+        soilGroupId = createGroupId();
+
+        // Сцепление и упругость — только пара «покрышка × грунт».
+        NewtonMaterialSetDefaultFriction(newtonWorld, defaultGroupId, soilGroupId,
+            soilFrictionStatic, soilFrictionKinetic);
+        NewtonMaterialSetDefaultElasticity(newtonWorld, defaultGroupId, soilGroupId,
+            soilElasticity);
+        // Балки (sensor) по грунту — разбор контактов без толкания.
+        NewtonMaterialSetCollisionCallback(newtonWorld, sensorGroupId, soilGroupId,
+            null, &physicsSensorGroundContacts);
+    }
+}
+
+/// Группа материала грунта мира (см. `PhysicsWorld`). Все миры приложения
+/// создаются как `PhysicsWorld` (пул и одиночные заезды), поэтому каст безопасен.
+int soilGroupIdOf(const NewtonPhysicsWorld world)
+{
+    auto pw = cast(PhysicsWorld) world;
+    assert(pw !is null, "мир обязан создаваться как PhysicsWorld");
+    return pw.soilGroupId;
+}
 
 /// Ориентация физического мира: Newton держит «вверх» вдоль своей Y (земля —
 /// плоскость XZ, у heightfield'а ось высоты — Y), а у каркаса и вьюера
@@ -326,4 +399,19 @@ unittest
         minZ = min(minZ, g.nodes[a.node].pos.z);
     assert(abs(offOld.z - (wheelRadius + dropHeight - minZ)) < 1e-5f,
         "радиус по умолчанию сохраняет прежнюю раскладку");
+}
+
+unittest
+{
+    // Группа материала грунта — отдельная подписанная группа, а не магическое
+    // число: не совпадает со стандартными default/sensor/kinematic мира.
+    ensureNewtonLoaded();
+    auto w = New!PhysicsWorld(cast(EventManager)null, cast(Owner)null);
+    scope (exit) Delete(w);
+    assert(w.soilGroupId == soilGroupIdOf(w),
+        "доступ к группе грунта через хелпер совпадает с полем");
+    assert(w.soilGroupId > 0 && w.soilGroupId != w.defaultGroupId
+        && w.soilGroupId != w.sensorGroupId
+        && w.soilGroupId != w.kinematicGroupId,
+        "грунт живёт в отдельной группе материалов");
 }

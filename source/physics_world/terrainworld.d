@@ -167,6 +167,7 @@ final class TerrainWorld
         ground_ = New!NewtonRigidBody(NewtonRigidBodyType.Static, groundShape_,
             0.0f, world_, world_);
         ground_.dynamic = false;
+        ground_.groupId = soilGroupIdOf(world_);
         const vec3 corner = origin
             + frameForward * (cast(float) tx0 * cfg_.tileSize - gridHalfShift(cfg_))
             + frameRight * (cast(float) ty0 * cfg_.tileSize - gridHalfShift(cfg_));

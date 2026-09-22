@@ -99,7 +99,10 @@ final class NewtonWorldPool
     private static NewtonPhysicsWorld createWorld()
     {
         ensureNewtonLoaded();
-        auto w = New!NewtonPhysicsWorld(cast(EventManager)null, cast(Owner)null);
+        // PhysicsWorld — мир с подписанной группой материала грунта: сцепление
+        // колёс о грунт настраивается один раз при рождении мира и живёт в нём
+        // всё время жизни пула (release() сносит только тела, не материалы).
+        auto w = New!PhysicsWorld(cast(EventManager)null, cast(Owner)null);
         w.threadsCount = 0;
         return w;
     }
