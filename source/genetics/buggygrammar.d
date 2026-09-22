@@ -4,6 +4,7 @@ import std.math;
 import std.typecons: Nullable;
 import dlib.math.vector;
 import frame.frame;
+import physics_world.wheel : defaultWheelRadius;
 import genetics.sge;
 import genetics.buggyast;
 
@@ -130,8 +131,11 @@ Grammar buggyGrammar()
         new Production([t(Tok.anchorKind, AnchorKind.motorWheel)]),
     ]);
 
+    // Радиус колеса якоря: свой у каждого якоря.
+    auto wheelRadius = new Sampler!Tok("wheelRadius", Tok.wheelRadius, 0.05f, 0.375f);
+
     auto anchor = nt("anchor", [
-        new Production([anchorKind, idx]),
+        new Production([anchorKind, idx, wheelRadius]),
     ]);
 
     anchorList_.productions = [
@@ -154,7 +158,7 @@ Grammar buggyGrammar()
         segmentList_, segment, segMode, nodal, lefty,
         beamList_, beam, startRef,
         idx, endRef, forward, right, up, radius, beamKind,
-        anchorMarker, anchorList_, anchor, anchorKind,
+        anchorMarker, anchorList_, anchor, anchorKind, wheelRadius,
     ];
     return new Grammar(start, symbols);
 }
@@ -322,9 +326,9 @@ Nullable!Frame frameFromAst(const Ast ast)
     foreach (a; ast.anchors)
     {
         auto n = cast(size_t) a.idx % result.nodes.length;
-        result.anchors ~= Anchor(n, a.kind);
+        result.anchors ~= Anchor(n, a.kind, a.radius);
         if (forkOf[n] != n)
-            result.anchors ~= Anchor(forkOf[n], a.kind);
+            result.anchors ~= Anchor(forkOf[n], a.kind, a.radius);
     }
     result.motorPower = ast.motorPower;
     return Nullable!Frame(result);
@@ -756,6 +760,51 @@ unittest
     assert(f.get.beams.length == 1);
     assert(f.get.anchors.length == 1,
         "без раздвоения якорь не дублируется");
+    assert(abs(f.get.anchors[0].radius - defaultWheelRadius) < 1e-6f,
+        "вручную собранный поток без wheelRadius даёт якорь заводского размера");
+}
+
+unittest
+{
+    // Генетический радиус колеса проходит от токена через AST в якорь,
+    // включая twin-якорь раздвоенного сегмента — оба колеса fork-пары
+    // получают один размер.
+    Terminal!Tok[] t;
+    // Seed: начало координат — ось сегмента X == 0.
+    t ~= dirCoords(origin, 1.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.fork);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNew);
+    // Ствол: вперёд×1 (по оси, без twin); ветвь: вправо×1 (с twin).
+    t ~= dirCoords(forward, 1.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= dirCoords(right, 1.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.anchors);
+    t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.wheel);
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 2);
+    t ~= new Terminal!Tok(Tok.wheelRadius, 0.37f);
+
+    auto f = toFrame(t);
+    assert(!f.isNull);
+    assert(f.get.anchors.length == 2, "twin-якорь дублируется вместе с узлом");
+    assert(f.get.anchors[0].node == 2 && f.get.anchors[1].node == 3,
+        "колёса висят на концах пары");
+    assert(abs(f.get.anchors[0].radius - 0.37f) < 1e-6f
+        && abs(f.get.anchors[1].radius - 0.37f) < 1e-6f,
+        "радиус несётся в оба якоря fork-пары");
 }
 
 unittest

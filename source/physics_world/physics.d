@@ -12,18 +12,22 @@ import dlib.math.transformation;
 
 import dagon.ext.newton;
 
-import frame.frame : Frame, Node, origin;
+import frame.frame : Frame, Node, Beam, Anchor, AnchorKind, origin;
 
-/// Радиус колеса. Совпадает с внешним радиусом визуального тора и
-/// коллизионного цилиндра: Solid-цилиндр Newton радиусом 0.3 × шириной 0.2.
+/// Радиус колеса по умолчанию, м. Совпадает с внешним радиусом визуального
+/// тора и коллизионного цилиндра. Генетический радиус каждого колеса
+/// масштабируется относительно этого базового: внутренний радиус и ширина
+/// покрышки растут/сжимаются пропорционально.
 enum float wheelRadius = 0.3f;
 
-/// Предельная линейная скорость поверхности колеса (обода), м/с: 75 км/ч.
+/// Предельная линейная скорость поверхности колеса (обода), м/с.
 /// Крутка быстрее гасится мягким регулятором в `BuggyPhysics`.
 enum float wheelMaxSurfaceSpeed = 75.0f / 3.6f;
 
 /// Предельная угловая скорость вращения колеса, рад/с: лимит скорости
-/// обода `wheelMaxSurfaceSpeed` при радиусе `wheelRadius`.
+/// обода `wheelMaxSurfaceSpeed` при базовом радиусе `wheelRadius`. Для
+/// генетического размера колеса предел пересчитывается как
+/// `wheelMaxSurfaceSpeed / radius`.
 enum float wheelOmegaMax = wheelMaxSurfaceSpeed / wheelRadius;
 
 /// Жёсткость регулятора крутки, Н·м на рад/с превышения лимита. Чем
@@ -56,6 +60,7 @@ enum float dropHeight = 0.15f;
 /// в ноль) и сажает низом самого низкого колеса на `dropHeight` над землёй —
 /// багги роняют на поверхность при старте. Единый способ поставить машину —
 /// им пользуются и грамматика (`develop`), и физика (`BuggyPhysics`), и витрина.
+/// Низ каждого колеса считается по его собственному генетическому радиусу.
 vec3 placeOffset(const Frame f)
 {
     vec3 c = origin;
@@ -64,10 +69,10 @@ vec3 placeOffset(const Frame f)
     if (f.nodes.length > 0)
         c /= f.nodes.length;
 
-    float minZ = float.max;
+    float minBottom = float.max;
     foreach (a; f.anchors)
-        minZ = min(minZ, f.nodes[a.node].pos.z);
-    const float dz = (minZ < float.max) ? wheelRadius + dropHeight - minZ : 0.0f;
+        minBottom = min(minBottom, f.nodes[a.node].pos.z - a.radius);
+    const float dz = (minBottom < float.max) ? dropHeight - minBottom : 0.0f;
 
     return vec3(-c.x, -c.y, dz);
 }
@@ -88,12 +93,15 @@ Frame placedFrame(const Frame f)
     return r;
 }
 
-/// Внутренний радиус «отверстия» колеса (покрышка — полый цилиндр).
-/// Нужен только для массы и тензора инерции; коллизия — по внешней
-/// поверхности сплошного цилиндра, как и у исходной опорной функции.
+/// Внутренний радиус «отверстия» колеса (покрышка — полый цилиндр) при
+/// базовом радиусе `wheelRadius`. Нужен только для массы и тензора инерции;
+/// коллизия — по внешней поверхности сплошного цилиндра, как и у исходной
+/// опорной функции. Для генетического радиуса масштабируется пропорционально.
 enum float wheelInnerRadius = 0.22f;
 
-/// Ширина колеса (длина оси цилиндра, равна внешней толщине тора).
+/// Ширина колеса (длина оси цилиндра, равна внешней толщине тора) при
+/// базовом радиусе `wheelRadius`. Масштабируется пропорционально радиусу
+/// генетического колеса.
 enum float wheelWidth = 0.2f;
 
 /// Плотность материала колеса, кг/м^3.
@@ -279,4 +287,43 @@ void ensureNewtonLoaded()
             newtonLoaded_ = true;
         }
     }
+}
+
+unittest
+{
+    // Раскладка на старт учитывает генетический радиус каждого колеса: низ
+    // определяется самым нижним ободом (центр минус радиус), а не позицией
+    // центра — большое колесо поднимает раму выше.
+    Frame f;
+    f.nodes = [Node(origin), Node(vec3(0.0f, 1.0f, 0.0f))];
+    f.beams = [Beam(0, 1, 0.05f)];
+    // Большое колесо (радиус 0.75 м) у узла 0, маленькое (0.05 м) у узла 1.
+    f.anchors = [
+        Anchor(0, AnchorKind.wheel, 0.75f),
+        Anchor(1, AnchorKind.wheel, 0.05f),
+    ];
+
+    const off = placeOffset(f);
+    // Нижний обод большого колеса: 0 - 0.75 = -0.75; подъём — на dropHeight.
+    assert(abs(off.z - (dropHeight + 0.75f)) < 1e-5f,
+        "раскладка садит низ большого колеса на dropHeight");
+    assert(abs((f.nodes[0].pos.z + off.z) - 0.75f - dropHeight) < 1e-5f,
+        "нижняя точка большого колеса оказывается над землёй ровно на dropHeight");
+    assert(abs((f.nodes[1].pos.z + off.z) - 0.05f - dropHeight) > 0.5f,
+        "маленькое колесо парит над землёй — оно не задаёт плоскость старта");
+
+    // Сравнение с прежним поведением: колёса одного базового радиуса.
+    Frame g;
+    g.nodes = [Node(origin), Node(vec3(0.0f, 1.0f, -0.2f))];
+    g.beams = [Beam(0, 1, 0.05f)];
+    g.anchors = [
+        Anchor(0, AnchorKind.wheel),
+        Anchor(1, AnchorKind.motorWheel, 0.3f),
+    ];
+    const offOld = placeOffset(g);
+    float minZ = float.max;
+    foreach (a; g.anchors)
+        minZ = min(minZ, g.nodes[a.node].pos.z);
+    assert(abs(offOld.z - (wheelRadius + dropHeight - minZ)) < 1e-5f,
+        "радиус по умолчанию сохраняет прежнюю раскладку");
 }

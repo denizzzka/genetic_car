@@ -26,14 +26,11 @@ import physics_world;
 /// Порог "узел на плоскости симметрии" (|x| < epsFlat) и порог силы.
 enum float epsFlat = 1e-4f;
 
-/// Радиус колеса, совпадает с physics_world.physics.wheelRadius.
-/// Нужен, чтобы перейти от центра колёс к плоскости земли (z = zmin - fitnessWheelRadius).
-enum float fitnessWheelRadius = 0.3f;
-
-/// Минимальное расстояние между центрами якорных колёс: два почти совпадающих
-/// цилиндра (колесо-двойник на одном узле) валят GJK в Newton 3.14, поэтому
-/// колёса в точке старта не должны задевать друг друга.
-enum float wheelWheelGateDistance = 2.0f * fitnessWheelRadius + 1e-3f;
+/// Малейший гарантированный зазор между колёсными цилиндрами в точке старта:
+/// два почти совпадающих цилиндра (колесо-двойник на одном узле) валят GJK
+/// в Newton 3.14, поэтому разнесение нижних ободов меньше этого порога
+/// отбраковывается геометрически.
+enum float wheelWheelMinGap = 1e-3f;
 
 /// Разумный потолок сложности каркаса.
 enum size_t maxBeamCount = 64;
@@ -81,23 +78,25 @@ float buggyFitness(const Frame f, const Ast ast)
     // Два якоря на одном узле (или близко друг к другу) дают почти совпадающие
     // коллайдеры: на вырожденном Minkowski-hull двух идентичных цилиндров
     // Newton 3.14 рвёт свою книгу граней (dgContactSolver) и падает с SIGSEGV
-    // ещё до contact-колбэка, поэтому каркас, чьи колёса уже в точке старта
-    // задевают друг друга, отбраковываем геометрически (ср. version(none)
-    // тест в car.d — «wheelWheel-отбраковка в fitness'е»).
-    if (wheelAnchorSpacing(f) < wheelWheelGateDistance)
+    // ещё до contact-колбэка, поэтому каркас, чьи нижние ободы уже в точке
+    // старта задевают друг друга (зазор по своим радиусам меньше порога),
+    // отбраковываем геометрически (ср. version(none) тест в car.d —
+    // «wheelWheel-отбраковка в fitness'е»).
+    if (wheelAnchorSpacing(f) < wheelWheelMinGap)
         return 0.0f;
 
     // Число ведущих колёс и их разброс по сторонам; нижняя точка колёс.
     float xmin = float.max, xmax = -float.max;
     float ymin = float.max, ymax = -float.max;
-    float wheelZmin = float.max;
+    float groundZ = float.max;
     size_t nMotor = 0;
     foreach (a; f.anchors)
     {
         const vec3 p = f.nodes[a.node].pos;
         xmin = min(xmin, p.x); xmax = max(xmax, p.x);
         ymin = min(ymin, p.y); ymax = max(ymax, p.y);
-        wheelZmin = min(wheelZmin, p.z);
+        // Низ колеса — его центр минус генетический радиус.
+        groundZ = min(groundZ, p.z - a.radius);
         if (a.kind == AnchorKind.motorWheel)
             nMotor += 1;
     }
@@ -107,7 +106,6 @@ float buggyFitness(const Frame f, const Ast ast)
     // Опора — одно нижнее колесо: земля ложится по его нижней точке
     // (groundZ), все остальные колёса — где угодно: любой высоты, любого
     // места по бокам. Ничего ниже её огибающей каркасу нельзя.
-    const float groundZ = wheelZmin - fitnessWheelRadius;
 
     // Балки не должны зарываться ниже плоскости земли. Допуск epsFlat
     // прощает касание, но не проникновение.
@@ -151,14 +149,20 @@ float buggyFitness(const Frame f, const Ast ast)
         * phiBox;
 }
 
-/// Минимальное расстояние между центрами якорных колёс каркаса.
+/// Минимальный зазор между нижними ободами пар якорных колёс каркаса:
+/// расстояние между центрами минус сумма генетических радиусов. Отрицателен
+/// при перекрытии, нуль — колеса касаются друг друга.
 float wheelAnchorSpacing(const Frame f)
 {
     float best = float.max;
     foreach (i, a; f.anchors)
         foreach (j, b; f.anchors)
             if (j > i)
-                best = min(best, distance(f.nodes[a.node].pos, f.nodes[b.node].pos));
+            {
+                const float gap = distance(f.nodes[a.node].pos, f.nodes[b.node].pos)
+                    - (a.radius + b.radius);
+                best = min(best, gap);
+            }
     return best;
 }
 

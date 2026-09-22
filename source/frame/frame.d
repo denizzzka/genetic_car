@@ -2,6 +2,7 @@ module frame.frame;
 
 import std.math;
 import dlib.math.vector;
+import physics_world.wheel : defaultWheelRadius;
 
 /*
  * Система координат каркаса задаётся его собственным ортонормированным
@@ -37,6 +38,10 @@ struct Anchor
 {
     size_t node;
     AnchorKind kind;
+
+    /// Радиус колеса, м, свой у каждого якоря. По умолчанию —
+    /// `defaultWheelRadius` из физического модуля колёс.
+    float radius = defaultWheelRadius;
 }
 
 /// Тип балки каркаса.

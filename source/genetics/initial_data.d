@@ -3,7 +3,10 @@ module genetics.initial_data;
 // Стартовый геном эволюции: две балки подряд с общей средней нодой и два
 // якоря, собранные в кодовоны напрямую.
 
+import std.math : abs;
+
 import frame.frame;
+import physics_world.wheel : defaultWheelRadius;
 import genetics.sge;
 import genetics.buggygrammar;
 
@@ -91,6 +94,9 @@ Genotype startGenome(const Grammar gr)
     set("anchorKind", [0u, 1u]);
     // Якоря на внешних концах цепочки: seed — узел 0, конец второй балки — 2.
     set("idx", [0u, 2u]);
+    // Радиус колёс: оба якоря стартуют с `defaultWheelRadius`.
+    set("wheelRadius", [u(defaultWheelRadius, 0.05f, 0.375f),
+        u(defaultWheelRadius, 0.05f, 0.375f)]);
 
     return gt;
 }
@@ -115,6 +121,9 @@ unittest
     assert(f.anchors.length == 2);
     assert(f.anchors[0].kind == AnchorKind.wheel && f.anchors[0].node == 0);
     assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 2);
+    assert(abs(f.anchors[0].radius - defaultWheelRadius) < 1e-6f
+        && abs(f.anchors[1].radius - defaultWheelRadius) < 1e-6f,
+        "оба стартовых колеса — заводского радиуса (60 см)");
     assert(f.totalBeamLength > 0.0f);
     assert(f.motorPower > 99.0f && f.motorPower < 101.0f,
         "стартовая сила мотора берётся из гена motorPower");

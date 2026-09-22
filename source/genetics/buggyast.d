@@ -4,6 +4,7 @@ import std.math;
 import std.typecons: Nullable;
 import dlib.math.vector;
 import frame.frame;
+import physics_world.wheel : defaultWheelRadius;
 import genetics.sge;
 
 /**
@@ -77,6 +78,9 @@ enum Tok
     /// Тип якоря-колеса (int-код `AnchorKind`).
     anchorKind,
 
+    /// Радиус колеса якоря (float). Каждый якорь носит свой радиус.
+    wheelRadius,
+
     /// Морфоген: во сколько раз сужается толщина к последней балке
     /// (float, 0.4..1.0). Токен изымается из потока до интерпретации.
     taper,
@@ -138,6 +142,7 @@ struct AnchorAst
 {
     AnchorKind kind;
     size_t idx;
+    float radius = defaultWheelRadius;
 }
 
 struct Ast
@@ -315,6 +320,14 @@ Nullable!Ast buildAst(const Terminal!Tok[] tokens)
         a.idx = tokens[i].i;
         ++i;
 
+        // Радиус колеса — необязательный токен (ручные потоки его опускают,
+        // тогда берётся defaultWheelRadius).
+        if (i < tokens.length && tokens[i].tok == Tok.wheelRadius)
+        {
+            a.radius = tokens[i].f;
+            ++i;
+        }
+
         ast.anchors ~= a;
     }
     return Nullable!Ast(ast);
@@ -372,6 +385,7 @@ unittest
     t ~= new Terminal!Tok(Tok.anchors);
     t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.motorWheel);
     t ~= new Terminal!Tok(Tok.refIdx, cast(int) 3);
+    t ~= new Terminal!Tok(Tok.wheelRadius, 0.28f);
 
     auto ast = buildAst(t);
     assert(!ast.isNull);
@@ -394,4 +408,6 @@ unittest
     assert(ast.get.anchors.length == 1);
     assert(ast.get.anchors[0].kind == AnchorKind.motorWheel);
     assert(ast.get.anchors[0].idx == 3);
+    assert(abs(ast.get.anchors[0].radius - 0.28f) < 1e-6f,
+        "радиус колеса читается в AST из токена wheelRadius");
 }

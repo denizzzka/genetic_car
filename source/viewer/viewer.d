@@ -460,6 +460,9 @@ class BuggyScene: Scene
                 auto e = addEntity(carRoot);
                 e.drawable = meshWheel;
                 e.material = a.kind == AnchorKind.motorWheel ? matDriveWheel : matWheel;
+                // Масштаб под генетический радиус колеса, как и в витрине.
+                const float s = a.radius / wheelRadius;
+                e.scaling = Vector3f(s, s, s);
                 liveCar ~= e;
             }
             return true;
@@ -631,22 +634,27 @@ class BuggyScene: Scene
             final switch (anchor.kind)
             {
                 case AnchorKind.wheel:
-                    addWheel(pos, axle, matWheel);
+                    addWheel(pos, axle, matWheel, anchor.radius);
                     break;
                 case AnchorKind.motorWheel:
-                    addWheel(pos, axle, matDriveWheel);
+                    addWheel(pos, axle, matDriveWheel, anchor.radius);
                     break;
             }
         }
     }
 
-    private void addWheel(const vec3 pos, const vec3 axle, Material mat)
+    private void addWheel(const vec3 pos, const vec3 axle, Material mat,
+        const float radius)
     {
         auto e = addEntity(galleryRoot);
         e.drawable = meshWheel;
         e.material = mat;
         e.position = pos;
         e.rotation = rotationBetween(Vector3f(0, 1, 0), axle);
+        // Масштаб по генетическому радиусу: тор рисуется под базовый
+        // `wheelRadius`, обод вытягивается на свой размер.
+        const float s = radius / wheelRadius;
+        e.scaling = Vector3f(s, s, s);
     }
 }
 

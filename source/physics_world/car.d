@@ -500,7 +500,8 @@ final class BuggyPhysics
     }
 
     /// Мягкий ограничитель крутки: поверхность колеса не должна двигаться
-    /// быстрее `wheelMaxSurfaceSpeed` (75 км/ч). Превышение `wheelOmegaMax`
+    /// быстрее `wheelMaxSurfaceSpeed`. Превышение лимита угловой скорости
+    /// (для генетического радиуса колеса — `wheelMaxSurfaceSpeed / r`)
     /// гасится встречным моментом, пропорциональным превышению
     /// (`wheelSpinGain`) — предел мягкий, буксование и свободный разнос
     /// ниже лимита ничем не стесняются. Действует на все колёса, не только
@@ -509,12 +510,14 @@ final class BuggyPhysics
     {
         if (master is null)
             return;
-        foreach (w; wheelBodies)
+        const Frame fr = buggy_.frame;
+        foreach (i, w; wheelBodies)
             if (w !is null)
             {
                 const vec3 axle = w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
                 const float spin = dot(axle, w.angularVelocity);
-                const float excess = abs(spin) - wheelOmegaMax;
+                const float r = i < fr.anchors.length ? fr.anchors[i].radius : wheelRadius;
+                const float excess = abs(spin) - wheelMaxSurfaceSpeed / r;
                 if (excess > 0.0f)
                 {
                     const float dir = (spin < 0.0f) ? -1.0f : 1.0f;
@@ -934,11 +937,17 @@ final class BuggyPhysics
         {
             const vec3 nodePos = frame.nodes[a.node].pos;
 
+            // Генетический радиус колеса. Внутренний радиус покрышки и её
+            // ширина масштабируются по отношению к базовому `wheelRadius`,
+            // чтобы полое «кольцо» сохраняло пропорции.
+            const float r = a.radius;
+            const float ir = wheelInnerRadius * r / wheelRadius;
+            const float w = wheelWidth * r / wheelRadius;
+
             float mass = cast(float)(wheelDensity * PI
-                * (wheelRadius * wheelRadius - wheelInnerRadius * wheelInnerRadius)
-                * wheelWidth);
+                * (r * r - ir * ir) * w);
             auto wheel = New!NewtonCarBody(NewtonRigidBodyType.Dynamic,
-                makeAxisYCylinder(wheelRadius, wheelRadius, wheelWidth, world),
+                makeAxisYCylinder(r, r, w, world),
                 mass, world, world);
             wheel.dynamic = true;
             wheel.kind = BodyKind.wheel;
@@ -948,9 +957,9 @@ final class BuggyPhysics
             wheel.linearDamping = bodyDamping;
             wheel.angularDamping = Vector3f(bodyDamping, bodyDamping, bodyDamping);
             // Инерция полого цилиндра, ось вращения — локальный Y.
-            const float r2 = wheelRadius * wheelRadius;
-            const float ri2 = wheelInnerRadius * wheelInnerRadius;
-            const float h2 = wheelWidth * wheelWidth;
+            const float r2 = r * r;
+            const float ri2 = ir * ir;
+            const float h2 = w * w;
             const float perp = (3.0f * (r2 + ri2) + h2) / 12.0f * mass;
             const float axial = 0.5f * (r2 + ri2) * mass;
             wheel.setMassMatrix(mass, perp, axial, perp);
