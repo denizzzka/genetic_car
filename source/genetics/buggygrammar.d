@@ -680,9 +680,9 @@ unittest
 
 unittest
 {
-    // Ось раздвоения — локальная (X узла старта сегмента), а не мировая X == 0.
-    // Старт вне нуля не прижимается и не рвёт каркас: обе ветви держатся
-    // на узле старта, он в своей же оси и сам остаётся одиночным.
+    // Ось раздвоения — локальная (X узла старта сегмента), а не мировая X == 0:
+    // ствол идёт от реального старта, ветвь — от его конца, twin зеркалится
+    // вокруг локальной оси старта. Старт не прижимается к нулю и не рвёт каркас.
     Terminal!Tok[] t;
     // Seed: старт смещён на (0.3 вперёд, 0.2 вправо) — ось 0.3, не мировой X.
     t ~= dirCoords(vec3(0.3f, 0.2f, 0.0f), 1.0f);
@@ -692,8 +692,16 @@ unittest
 
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    // Ветвь: вперёд×1 от реального старта.
+    // Ствол: вперёд×1; ветвь: вправо×1.
     t ~= dirCoords(forward, 1.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= dirCoords(right, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
@@ -703,12 +711,18 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == 3,
-        "внеосевой старт: ветвь (1.3) + twin (2*0.3-1.3) вокруг оси 0.3");
-    assert(abs(f.get.nodes[1].pos.x - 1.3f) < 1e-4f,
-        "ветвь растёт от реального старта, старт не прижимается к нулю");
-    assert(abs(f.get.nodes[2].pos.x + 0.7f) < 1e-4f,
-        "twin отражается вокруг оси 0.3, а не мировой X == 0");
+    assert(f.get.nodes.length == 4,
+        "внеосевой старт: ствол + ветвь + twin вокруг локальной оси 0.3");
+    assert(abs(f.get.nodes[0].pos.x - 0.3f) < 1e-4f
+        && abs(f.get.nodes[0].pos.y - 0.2f) < 1e-4f,
+        "старт не прижимается к нулю, остаётся в (0.3, 0.2)");
+    assert(abs(f.get.nodes[1].pos.x - 0.3f) < 1e-4f
+        && abs(f.get.nodes[1].pos.y + 0.8f) < 1e-4f,
+        "ствол идёт вперёд от реального старта: (0.3, -0.8)");
+    assert(abs(f.get.nodes[2].pos.x - 1.3f) < 1e-4f,
+        "ветвь растёт вправо от конца ствола: (1.3, -0.8)");
+    assert(abs(f.get.nodes[3].pos.x + 0.7f) < 1e-4f,
+        "twin отражается вокруг локальной оси 0.3, а не мировой X == 0");
     assert(!isValidFrame(f.get).isNull,
         "обе ветви связаны на узле старта — каркас связен");
 }
@@ -747,8 +761,8 @@ unittest
 unittest
 {
     // refBase — «зачаток»: балка стартует с базового узла сегмента, а не
-    // с последнего. Из одной точки ветвления (база «запястья») выпускаются
-    // несколько отростков-«пальцев», каждый в своей зеркальной паре.
+    // с последнего. Первая балка — ствол форка, из «запястья» базы
+    // выпускаются отростки-«пальцы», каждый в своей зеркальной паре.
     Terminal!Tok[] t;
     // Seed: начало координат — база «запястья».
     t ~= dirCoords(origin, 1.0f);
@@ -786,28 +800,28 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    // 1 база + пара рук + два раза по паре пальцев = 7 узлов.
-    assert(f.get.nodes.length == 7);
-    assert(f.get.beams.length == 6, "три балки раздвоенного сегмента дают три пары");
+    // База + ствол + две пальцевые пары (пальцы и их twin из базы).
+    assert(f.get.nodes.length == 6);
+    assert(f.get.beams.length == 5, "ствол + по паре на каждый палец");
 
-    // Рука: от базы к (1,0,0) и её twin.
-    assert(f.get.beams[0].a == 0 && f.get.beams[0].b == 1);
-    assert(f.get.beams[1].a == 0 && f.get.beams[1].b == 2);
+    // Ствол: рука от базы к (0,-1,0).
+    assert(f.get.beams[0].a == 0 && f.get.beams[0].b == 1,
+        "рука — ствол форка");
 
     // Пальцы стартуют с того же «запястья» (узел 0) — refBase, а не с конца
     // предыдущей балки (node 1). Каждый палец — своя зеркальная пара.
-    assert(f.get.beams[2].a == 0 && f.get.beams[2].b == 3
-        && f.get.beams[3].a == 0 && f.get.beams[3].b == 4,
+    assert(f.get.beams[1].a == 0 && f.get.beams[1].b == 2
+        && f.get.beams[2].a == 0 && f.get.beams[2].b == 3,
         "первый палец и его twin растут из базы сегмента");
-    assert(f.get.beams[4].a == 0 && f.get.beams[4].b == 5
-        && f.get.beams[5].a == 0 && f.get.beams[5].b == 6,
+    assert(f.get.beams[3].a == 0 && f.get.beams[3].b == 4
+        && f.get.beams[4].a == 0 && f.get.beams[4].b == 5,
         "второй палец и его twin — тоже из базы сегмента");
 
-    assert(abs(f.get.nodes[3].pos.x - 0.5f) < 1e-4f
-        && abs(f.get.nodes[4].pos.x + 0.5f) < 1e-4f,
+    assert(abs(f.get.nodes[2].pos.x - 0.5f) < 1e-4f
+        && abs(f.get.nodes[3].pos.x + 0.5f) < 1e-4f,
         "пальцы зеркальны вокруг оси сегмента");
-    assert(abs(f.get.nodes[5].pos.x - 1.5f) < 1e-4f
-        && abs(f.get.nodes[6].pos.x + 1.5f) < 1e-4f,
+    assert(abs(f.get.nodes[4].pos.x - 1.5f) < 1e-4f
+        && abs(f.get.nodes[5].pos.x + 1.5f) < 1e-4f,
         "второй палец отражается так же, и обе пары симметричны");
 
     assert(!isValidFrame(f.get).isNull, "каркас с пальцами остаётся связным");
@@ -839,12 +853,26 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == 2, "балка на оси не рождает twin");
-    assert(f.get.beams.length == 1, "сильный активатор не дублирует «глаз»");
-    assert(abs(f.get.nodes[1].pos.x - 0.7f) < 1e-4f,
-        "«глаз циклопа» остаётся на медианной оси сегмента");
-    assert(f.get.anchors.length == 1,
-        "одиночный медианный узел не дублируется в якорях");
+    // twin рождается и здесь — вокруг локальной оси сегмента (0.7), как и
+    // у любой балки. «Глаза» не бывает: ось зеркала — местная, не мировая.
+    assert(f.get.nodes.length == 3,
+        "балка на оси при внеосевом старте всё равно отражена вокруг 0.7");
+    assert(f.get.beams.length == 2,
+        "балка на оси с twin-радиусом по Nodal");
+    assert(abs(f.get.nodes[1].pos.x - 1.7f) < 1e-4f
+        && abs(f.get.nodes[2].pos.x + 0.3f) < 1e-4f,
+        "twin зеркалится вокруг локальной оси 0.7, а не мировой X == 0");
+    assert(abs(f.get.beams[1].radius - 0.048f) < 1e-4f,
+        "twin-радиус у «глаза» тоже масштабируется активатором Nodal");
+    // Якорь-колесо (refIdx 1) зеркалится вместе с twin-узлом: у нас снова две
+    // пары «глаз на оси + его якорь», только обе на локальной оси 0.7.
+    assert(f.get.anchors.length == 2,
+        "twin «глаза» уносит и свой медианный якорь");
+    assert(abs(f.get.nodes[1].pos.x - 1.7f) < 1e-4f
+        && abs(f.get.nodes[2].pos.x + 0.3f) < 1e-4f,
+        "ствол-«глаз» (1.7) и отражённый twin (-0.3) вокруг локальной оси 0.7");
+    assert(f.get.anchors.length == 2,
+        "у «глаза» twin тоже дублирует якорь вдоль локальной оси");
 }
 
 unittest

@@ -97,8 +97,9 @@ unittest
     {
         assert(isFinite(s.position.x) && isFinite(s.position.y) && isFinite(s.position.z),
             "позиция колеса не конечна — машина разлетелась");
-        assert(s.position.z > -0.1f, "колесо провалилось под землю");
-        assert(s.position.z <= wheelRadius + 0.25f, "колесо парит над землёй");
+        const float g = physics.groundHeightAt(s.position.xyz);
+        assert(s.position.z > g + physicsWheelBelow, "колесо провалилось под землю");
+        assert(s.position.z <= g + wheelRadius + 0.25f, "колесо парит над землёй");
     }
     foreach (s; physics.beamStates())
     {
@@ -163,8 +164,9 @@ unittest
     {
         assert(isFinite(s.position.x) && isFinite(s.position.y) && isFinite(s.position.z),
             "позиция колеса не конечна — машина разлетелась");
-        assert(s.position.z > -0.1f, "колесо провалилось под землю");
-        assert(s.position.z <= wheelRadius + 0.25f, "колесо парит над землёй");
+        const float g = physics.groundHeightAt(s.position.xyz);
+        assert(s.position.z > g + physicsWheelBelow, "колесо провалилось под землю");
+        assert(s.position.z <= g + wheelRadius + 0.25f, "колесо парит над землёй");
     }
 
     // Отрицательный момент должен развернуть машину: движение по backward.
