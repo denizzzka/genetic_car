@@ -84,6 +84,14 @@ class BuggyScene: Scene
     /// Визуализатор процедурной поверхности (общий shared-кэш с фитнесом).
     private TerrainVisualizer terrainVis;
 
+    /// ОТЛАДКА: виртуальная багги вместо физической — фокус окна со смещением
+    /// едет вперёд-влево. Переключение клавишей F отключено; чтобы включить,
+    /// верни ветку обработки в update(). Проверка: следует ли окно тайлов
+    /// и камера за зоной интереса без всей физики.
+    private bool fakeCarMode_;
+    private vec3 fakeFocus_ = origin;
+    private float fakeCarSpeed_ = 8.0f;
+
     private Buggy[] liveBatch;
     private size_t liveBatchIdx;
 
@@ -202,8 +210,18 @@ class BuggyScene: Scene
         // остаётся за мышью (повороты/зум не сбрасываются). Точка орбиты в
         // FreeviewComponent инвертирована (см. targetEntity: target = -pos),
         // поэтому передаём позицию с минусом.
-        if (freeview !is null && livePhysics !is null)
-            freeview.setTargetSmooth(-Vector3f(livePhysics.worldFocus));
+        if (freeview !is null)
+        {
+            if (fakeCarMode_)
+            {
+                // Виртуальная багги: фокус живёт в базuce каркаса (X = forward,
+                // Y = right); в мир dagon/Newton — (fakeFocus_.x, 0, -fakeFocus_.y).
+                freeview.setTargetSmooth(-Vector3f(fakeFocus_.x, 0.0f,
+                    -fakeFocus_.y));
+            }
+            else if (livePhysics !is null)
+                freeview.setTargetSmooth(-Vector3f(livePhysics.worldFocus));
+        }
 
         // R — всегда вручную: новое 0-е поколение. Вне фоновой эволюции.
         if (jobThread is null && eventManager.keyDown[KEY_R])
@@ -265,7 +283,21 @@ class BuggyScene: Scene
         updateLiveN();
 
         if (terrainVis !is null)
-            terrainVis.update(livePhysics);
+        {
+            if (fakeCarMode_)
+            {
+                // Диагональ вперёд-влево в базисе каркаса: forward + right·(-1)
+                // (сдвиг чисто по плоскости, высота не меняется).
+                // Диагональ вперёд-влево в базисе каркаса (forward·(-1) по Y,
+                // right·(-1) по X): сдвиг чисто по плоскости, высота плоская.
+                fakeFocus_ = fakeFocus_
+                    + vec3(0.0f, -fakeCarSpeed_ * t.delta, 0.0f)
+                    - vec3(0.5f * fakeCarSpeed_ * t.delta, 0.0f, 0.0f);
+                terrainVis.updateFocus(fakeFocus_);
+            }
+            else
+                terrainVis.update(livePhysics);
+        }
     }
 
     /// G: запустить отбор поколений либо остановить после текущего поколения.

@@ -1,7 +1,6 @@
 module physics_world.terrain;
 
 import std.math;
-import std.random : Mt19937, uniform;
 import std.algorithm : clamp;
 import core.sync.mutex : Mutex;
 
@@ -23,7 +22,7 @@ import frame.frame;
 /// shared-кэш между фитнес-заездами и вьюером.
 struct TerrainConfig
 {
-    /// Зерно всех генераторов шума и булыжников: тайл полностью детерминирован.
+    /// Зерно генераторов шума: тайл полностью детерминирован.
     int seed = 1337;
 
     /// Размер стороны тайла в метрах (по обеим осям плоскости forward×right).
@@ -55,31 +54,13 @@ struct TerrainConfig
     float lacunarity = 2.0f;
     float gain = 0.5f;
 
-    /// Радиусы булыжников: у старта они минимальны и накатываются до
-    /// максимума по мере удаления (тот же rampLength, что у рельефа).
-    float boulderRadiusMin = 0.25f;
-    float boulderRadiusMax = 0.5f;
-    uint maxBouldersPerTile = 8;
-
-    /// Не сеять булыжники ближе этой дистанции к origin — старт чистый.
-    float spawnClearRadius = 3.0f;
-
     /// Верхняя граница числа тайлов в кэше; при переполнении кэш чистится
     /// целиком. Окно стриминга 5×5 — реально в кэше порядка десятка тайлов.
     size_t cacheCap = 2048;
 }
 
-/// Булыжник: круглое препятствие на местности. Положение — смещение от угла
-/// тайла вдоль `forward` и `right`.
-struct BoulderData
-{
-    float alongForward;
-    float alongRight;
-    float radius;
-}
-
-/// Данные тайла: сетка высот и булыжники. Обычный GC-класс; публикуется
-/// из кэша как immutable и после этого никогда не мутируется.
+/// Данные тайла: сетка высот. Обычный GC-класс; публикуется из кэша как
+/// immutable и после этого никогда не мутируется.
 class TerrainTileData
 {
     /// W·W высот вдоль `up`. Индекс `[f·W + r]`: f — ряд вдоль `forward`
@@ -87,9 +68,6 @@ class TerrainTileData
     /// heightfield Newton (`[zRow·W + xCol]`, z = локальный forward,
     /// x = локальный right), поэтому физика забирает высоты 1:1, без поворота.
     float[] heights;
-
-    /// Булыжники тайла.
-    BoulderData[] boulders;
 }
 
 /// Единая аналитическая поверхность: для точки `p` на плоскости каркаса
@@ -144,15 +122,6 @@ int tileY(long key)
     return cast(int) (key & 0xFFFFFFFF);
 }
 
-/// Детерминированный сид генератора булыжников тайла.
-private ulong tileSeed(const TerrainConfig cfg, int tx, int ty)
-{
-    ulong h = cast(ulong) cfg.seed;
-    h = h * 0x100000001b3 + cast(uint) tx;
-    h = h * 0x100000001b3 + cast(uint) ty;
-    return h;
-}
-
 /// Полтайла: сдвиг сетки тайлов на полтайла по обеим осям, чтобы стартовый
 /// origin лежал в центре тайла, а не на стыке четырёх. На стыке физическое
 /// высотное поле теряет контакт с колесом, и машина проваливается.
@@ -161,37 +130,24 @@ float gridHalfShift(const TerrainConfig cfg) pure nothrow @nogc
     return 0.5f * cfg.tileSize;
 }
 
-private BoulderData[] buildBoulders(const TerrainConfig cfg, int tx, int ty)
+/// Номер тайла, под которым лежит точка фокуса (плоскость каркаса).
+///
+/// Фокус задан в координатах каркаса: `focus.x` — смещение вдоль `right`,
+/// `focus.y = −forward` (у каркаса forward = (0,−1,0)). Корнер тайла (tx, ty):
+/// `corner.x = ty·S − S/2` (right), `corner.y = −(tx·S − S/2)` (forward), т.е.
+/// центр тайла tx отвечает forward = tx·S, центр taйла ty — right = ty·S.
+TileIndex tileIndexAt(const vec3 focus, const TerrainConfig cfg)
+    pure nothrow @nogc
 {
-    auto gen = Mt19937(cast(uint) tileSeed(cfg, tx, ty));
-    const vec3 corner = origin
-        + forward * (cast(float) tx * cfg.tileSize - gridHalfShift(cfg))
-        + right * (cast(float) ty * cfg.tileSize - gridHalfShift(cfg));
-    const vec3 tileCenter = corner
-        + forward * (cfg.tileSize * 0.5f)
-        + right * (cfg.tileSize * 0.5f);
-    // Диапазон радиусов: мелкие камни есть и у старта, крупные добавляются
-    // по мере удаления (тот же накат rampLength). Плюс рандом внутри
-    // диапазона — камни не одинаковые даже на одном удалении.
-    const float d = hypot(dot(tileCenter - origin, forward), dot(tileCenter - origin, right));
-    const float t = smoothstep01(d / cfg.rampLength);
-    const float rLo = cfg.boulderRadiusMin * 0.5f;
-    const float rHi = mix(cfg.boulderRadiusMin, cfg.boulderRadiusMax, t);
-    BoulderData[] res;
-    foreach (_; 0 .. cfg.maxBouldersPerTile)
-    {
-        const float lf = uniform(0.0f, cfg.tileSize, gen);
-        const float lr = uniform(0.0f, cfg.tileSize, gen);
-        const vec3 c = corner + forward * lf + right * lr;
-        if ((c.length) < cfg.spawnClearRadius)
-            continue;
-        BoulderData b;
-        b.alongForward = lf;
-        b.alongRight = lr;
-        b.radius = uniform(rLo, rHi, gen);
-        res ~= b;
-    }
-    return res;
+    const float S = cfg.tileSize;
+    return TileIndex(cast(int) floor(-focus.y / S + 0.5f),
+        cast(int) floor(focus.x / S + 0.5f));
+}
+
+/// Индексы тайла в сетке: tx — вдоль forward, ty — вдоль right.
+struct TileIndex
+{
+    int tx, ty;
 }
 
 /// Shared-кэш процедурной земли: держатель тайлов, общий для всех заездов
@@ -242,7 +198,6 @@ shared class TerrainSurface
                         + right * (cast(float) r * cell);
                     t.heights[f * W + r] = terrainHeightAt(cfg_, p);
                 }
-            t.boulders = buildBoulders(cfg_, tx, ty);
 
             tiles_[key] = cast(shared) t;
             if (tiles_.length > cfg_.cacheCap)
@@ -276,6 +231,26 @@ TerrainSurface sharedTerrain()
             terrainHolder_ = cast(Object) new TerrainSurface(TerrainConfig.init);
         return cast(TerrainSurface) terrainHolder_;
     }
+}
+
+unittest
+{
+    // Индексы тайла из фокуса: ось right (focus.x) даёт индекс ty, ось
+    // forward (focus.y = −forward) — индекс tx. Именно в такой логике дальше
+    // работают и физика окна, и визуализатор.
+    auto t = sharedTerrain();
+    const cfg = t.config;
+    const float S = cfg.tileSize;
+
+    // Фокус по центру тайла (tx=0, ty=1): right = 1,2·S, forward = 0,2·S.
+    // В фокусе forward-координата уходит в y со знаком: focus.y = −forward.
+    const vec3 focus = right * (1.2f * S) + forward * (0.2f * S);
+    const TileIndex c = tileIndexAt(focus, cfg);
+    assert(c.tx == 0 && c.ty == 1,
+        "право/вперёд: tx — forward-индекс, ty — right-индекс");
+
+    const TileIndex c2 = tileIndexAt(origin, cfg);
+    assert(c2.tx == 0 && c2.ty == 0, "origin — центр тайла (0, 0)");
 }
 
 unittest

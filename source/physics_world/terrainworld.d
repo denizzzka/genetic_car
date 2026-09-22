@@ -1,7 +1,6 @@
 module physics_world.terrainworld;
 
 import std.math;
-import std.algorithm : max, min;
 
 import dlib.core.memory;
 import dlib.core.ownership;
@@ -18,34 +17,35 @@ import frame.frame : origin, frameForward = forward, frameRight = right;
 import physics_world.physics;
 import physics_world.terrain;
 
-/// Heightfield-коллизия одного тайла земли. Тайл уже хранит высоты в порядке
-/// Newton (`heights[f·W + r]`: локальный X — вдоль `right`, локальный Z —
-/// вдоль `forward`), поэтому буферы копируются 1:1, без переворота осей.
-/// Перенос тайла на место — трансформацией тела (toNewtonPos угла тайла), а
-/// не shape: матрица на heightfield внутри shape даёт NaN AABB
-/// (см. GroundHeightfield).
-final class TerrainHeightfield : NewtonCollisionShape
+/// Heightfield-коллизия: ОДНА сплошная поверхность на всё окно из
+/// (windowRadius·2+1)² тайлов. Внутренних швов нет — соседние тайлы сшиваются
+/// в один буфер высот 1:1 (они и так аналитически бесшовны), поэтому колесо
+/// не «зацепляется» на стыках отдельных тел. Буфер копируется в локальную
+/// память: Newton 3.14 НЕ копирует высоты (хранит указатели), поэтому массив
+/// живёт всё время жизни коллизии — освобождение в деструкторе.
+final class TerrainWindowHeightfield : NewtonCollisionShape
 {
-    // Newton 3.14 НЕ копирует высоты (хранит указатели), поэтому буферы живут
-    // всё время жизни коллизии — освобождение в деструкторе.
     private float[] elevations_;
     private ubyte[] attributes_;
 
-    this(immutable TerrainTileData tile, const TerrainConfig cfg,
-        NewtonPhysicsWorld world)
+    /// `elevations` — высоты окна в порядке heightfield Newton по сетке
+    /// (tilesPerSide·cells+1)², `cells` ячеек на тайл по обеим осям, `cell` —
+    /// размер ячейки. Сетка сэмплирована на общих для соседних тайлов точках,
+    /// поэтому граница между тайлами — одна и та же строка буфера.
+    this(const float[] elevations, uint cells, uint tilesPerSide,
+        float cell, NewtonPhysicsWorld world)
     {
         super(world);
 
-        const uint W = cfg.cells + 1;
-        const size_t n = W * W;
+        const uint spanCells = tilesPerSide * cells;
+        const size_t n = (spanCells + 1) * (spanCells + 1);
         elevations_ = New!(float[])(n);
         attributes_ = New!(ubyte[])(n);
-        elevations_[] = tile.heights[];
+        elevations_[] = elevations[];
         attributes_[] = 0;
 
-        const float cell = cfg.tileSize / cast(float) cfg.cells;
         newtonCollision = NewtonCreateHeightFieldCollision(world.newtonWorld,
-            cast(int) W, cast(int) W, 1, // gridsDiagonals
+            cast(int) spanCells + 1, cast(int) spanCells + 1, 1, // gridsDiagonals
             0, // elevationdatType: float
             elevations_.ptr, cast(char*) attributes_.ptr,
             1.0f, // verticalScale
@@ -60,57 +60,29 @@ final class TerrainHeightfield : NewtonCollisionShape
     }
 }
 
-/// Плотность материала булыжника, кг/м³ (скальная порода).
-enum float boulderDensity = 2400.0f;
-
-/// Динамический булыжник: сфера, которую можно сдвинуть колесом.
-/// Обычный NewtonRigidBody (НЕ NewtonCarBody): контакт с балкой-сенсором
-/// просто регистрируется и не фейлит заезд, а колёса толкают его честно.
-final class TerrainBoulderBody : NewtonRigidBody
-{
-    this(float radius, float mass, NewtonPhysicsWorld world)
-    {
-        super(NewtonRigidBodyType.Dynamic, New!NewtonSphereShape(radius, world),
-            mass, world, world);
-    }
-}
-
-/// Живой булыжник для вьюера: кем-ключ тайла, индекс в нём и текущая поза.
-struct LiveBoulder
-{
-    long key;
-    size_t index;
-    Vector3f position; ///< координаты мира dagon (= Newton)
-    float radius;
-}
-
-/// Один стримингуемый тайл поверхности: ground-тело с heightfield и статично
-/// наложенные динамические булыжники.
-private struct TileEntry
-{
-    TerrainHeightfield shape;
-    NewtonRigidBody ground;
-    NewtonRigidBody[] boulders;
-}
-
 /**
  * Физическое окно земли вокруг машины.
  *
- * Держит в мире Newton кольцо из (windowRadius·2+1)² тайлов вокруг фокуса
- * (точка на плоскости каркаса forward×right): по мере езды вперёд снесённые
- * тайлы уничтожаются, новые — создаются из общего shared-кэша. Каждому
- * инстансу BuggyPhysics — собственный TerrainWorld (у каждого заезда свой
- * мир), кэш высот общий.
+ * Держит в мире Newton сплошную поверхность из (windowRadius·2+1)² тайлов
+ * вокруг фокуса (точка на плоскости каркаса forward×right), сшитую в один
+ * heightfield — у выезда за окно тело пересобирается из общего shared-кэша
+ * тайлов с новым центром. Каждому инстансу BuggyPhysics — собственный
+ * TerrainWorld (у каждого заезда свой мир), кэш высот общий.
  */
 final class TerrainWorld
 {
     private NewtonPhysicsWorld world_;
     private TerrainSurface terrain_;
     private TerrainConfig cfg_;
-    private TileEntry[long] tiles_;
 
     /// Полуширина окна в тайлах: окно (2·R+1)² тайлов, т.е. 5×5 при R = 2.
     private int windowRadius_ = 1;
+
+    /// Единственное ground-тело окна и его центр (номер центрального тайла).
+    private TerrainWindowHeightfield groundShape_;
+    private NewtonRigidBody ground_;
+    private int groundTx_ = int.max;
+    private int groundTy_ = int.max;
 
     this(NewtonPhysicsWorld world, TerrainSurface terrain, const TerrainConfig cfg)
     {
@@ -119,123 +91,86 @@ final class TerrainWorld
         cfg_ = cfg;
     }
 
-    /// Продвинуть окно за фокусом (точка на плоскости каркаса): подвезти
-    /// недостающие тайлы, снести выпавшие за окно.
+    /// Продвинуть окно за фокусом (точка на плоскости каркаса): ground окна
+    /// пересобирается только при смене центрального тайла.
     void updateAround(const vec3 focus)
     {
-        const float S = cfg_.tileSize;
-        const int cx = cast(int) floor(focus.x / S + 0.5f);
-        const int cy = cast(int) floor(focus.y / S + 0.5f);
-        const int R = windowRadius_;
+        const TileIndex c = tileIndexAt(focus, cfg_);
 
-        const int tx0 = cx - R, tx1 = cx + R;
-        const int ty0 = cy - R, ty1 = cy + R;
-        foreach (tx; tx0 .. tx1 + 1)
-            foreach (ty; ty0 .. ty1 + 1)
-                ensureTile(tx, ty);
-
-        long[] stale;
-        foreach (key, ref e; tiles_)
+        if (c.tx != groundTx_ || c.ty != groundTy_)
         {
-            const int tx = tileX(key), ty = tileY(key);
-            if (tx < tx0 || tx > tx1 || ty < ty0 || ty > ty1)
-                stale ~= key;
+            rebuildGround(c.tx, c.ty);
+            groundTx_ = c.tx;
+            groundTy_ = c.ty;
         }
-        foreach (key; stale)
-            removeTile(key);
     }
 
-    /// Свежие булыжники окна (для вьюера при живом заезде).
-    LiveBoulder[] activeBoulders()
-    {
-        LiveBoulder[] res;
-        foreach (key, e; tiles_)
-        {
-            size_t i = 0;
-            foreach (b; e.boulders)
-            {
-                b.update(0.0);
-                LiveBoulder lb;
-                lb.key = key;
-                lb.index = i;
-                lb.position = b.position.xyz;
-                lb.radius = boulderRadius(b);
-                res ~= lb;
-                i++;
-            }
-        }
-        return res;
-    }
-
-    /// Снести все тайлы окна: обязательно вызвать до того, как мир уйдёт в
-    /// пул (NewtonDestroyAllBodies) или будет уничтожен, — иначе двойное
+    /// Снести всё окно: обязательно вызвать до того, как мир уйдёт в пул
+    /// (NewtonDestroyAllBodies) или будет уничтожен, — иначе двойное
     /// освобождение тел.
     void dispose()
     {
-        foreach (key; tiles_.keys)
-            removeTile(key);
-        tiles_ = null;
+        if (ground_ !is null)
+        {
+            NewtonDestroyBody(ground_.newtonBody);
+            world_.deleteOwnedObject(ground_);
+            world_.deleteOwnedObject(groundShape_);
+            ground_ = null;
+            groundShape_ = null;
+        }
     }
 
-    private void ensureTile(int tx, int ty)
+    /// Сборка единого ground-тела окна из cached-сеток девяти тайлов: нижний
+    /// левый тайл (tx0, ty0) даёт первые `cells` ячеек по каждой оси, остальные
+    /// — следующие блоки по `cells` ячеек. Смежные тайлы на общей грани имеют
+    /// одинаковые высоты (аналитический кэш), поэтому сшивка бесшовна и без
+    /// пересчёта шума.
+    private void rebuildGround(int cx, int cy)
     {
-        const long key = tileKey(tx, ty);
-        if (key in tiles_)
-            return;
+        if (ground_ !is null)
+        {
+            NewtonDestroyBody(ground_.newtonBody);
+            world_.deleteOwnedObject(ground_);
+            world_.deleteOwnedObject(groundShape_);
+            ground_ = null;
+            groundShape_ = null;
+        }
 
-        immutable tile = terrain_.tileData(tx, ty);
-        const vec3 corner = origin
-            + frameForward * (cast(float) tx * cfg_.tileSize - gridHalfShift(cfg_))
-            + frameRight * (cast(float) ty * cfg_.tileSize - gridHalfShift(cfg_));
+        const int R = windowRadius_;
+        const int tx0 = cx - R, ty0 = cy - R;
+        const uint tilesPerSide = cast(uint)(2 * R + 1);
+        const uint cells = cfg_.cells;
+        const uint spanCells = tilesPerSide * cells;
+        const uint grid = spanCells + 1;
+        const size_t n = grid * grid;
 
-        TileEntry e;
-        e.shape = New!TerrainHeightfield(tile, cfg_, world_);
-        e.ground = New!NewtonRigidBody(NewtonRigidBodyType.Static, e.shape,
+        auto elev = New!(float[])(n);
+        foreach (di; 0 .. tilesPerSide)
+            foreach (dj; 0 .. tilesPerSide)
+            {
+                immutable tile = terrain_.tileData(tx0 + cast(int) di,
+                    ty0 + cast(int) dj);
+                foreach (f; 0 .. cells + 1)
+                    foreach (r; 0 .. cells + 1)
+                    {
+                        const size_t gi = di * cells + f;
+                        const size_t gj = dj * cells + r;
+                        elev[gi * grid + gj] = tile.heights[f * (cells + 1) + r];
+                    }
+            }
+
+        const float cell = cfg_.tileSize / cast(float) cells;
+        groundShape_ = New!TerrainWindowHeightfield(elev, cells, tilesPerSide,
+            cell, world_);
+        Delete(elev);
+
+        ground_ = New!NewtonRigidBody(NewtonRigidBodyType.Static, groundShape_,
             0.0f, world_, world_);
-        e.ground.dynamic = false;
-        e.ground.setTransformation(translationMatrix(toNewtonPos(corner)));
-        e.ground.update(0.0);
-
-        foreach (bi, bd; tile.boulders)
-        {
-            const vec3 ball = corner + frameForward * bd.alongForward
-                + frameRight * bd.alongRight;
-            const float r = bd.radius;
-            const float h = terrain_.heightAt(ball);
-            const float m = 4.0f / 3.0f * PI * r * r * r * boulderDensity;
-            const float i = 0.4f * m * r * r;
-
-            auto b = New!TerrainBoulderBody(r, m, world_);
-            b.dynamic = true;
-            b.gravity = gravity;
-            b.setMassMatrix(m, i, i, i);
-            // Поднятие along `up` над поверхностью, а затем в мир Newton.
-            const vec3 center = toNewtonPos(ball)
-                + vec3(0.0f, h + r, 0.0f);
-            b.setTransformation(translationMatrix(center));
-            b.update(0.0);
-            e.boulders ~= b;
-        }
-
-        tiles_[key] = e;
-    }
-
-    private void removeTile(long key)
-    {
-        auto e = tiles_[key];
-        foreach (b; e.boulders)
-        {
-            NewtonDestroyBody(b.newtonBody);
-            world_.deleteOwnedObject(b);
-        }
-        NewtonDestroyBody(e.ground.newtonBody);
-        world_.deleteOwnedObject(e.ground);
-        world_.deleteOwnedObject(e.shape);
-        tiles_.remove(key);
-    }
-
-    private static float boulderRadius(const NewtonRigidBody b)
-    {
-        return (cast(NewtonSphereShape) b.collisionShape).radius;
+        ground_.dynamic = false;
+        const vec3 corner = origin
+            + frameForward * (cast(float) tx0 * cfg_.tileSize - gridHalfShift(cfg_))
+            + frameRight * (cast(float) ty0 * cfg_.tileSize - gridHalfShift(cfg_));
+        ground_.setTransformation(translationMatrix(toNewtonPos(corner)));
+        ground_.update(0.0);
     }
 }
