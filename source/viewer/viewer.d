@@ -400,6 +400,13 @@ class BuggyScene: Scene
             liveFailed_ = false;
             liveFailTime = 0.0;
 
+            // Мгновенно садим камеру на нового багги: при старте заезда и при
+            // каждом N smoothTarget догонял бы цель несколько секунд с прежней
+            // позиции — за это время машина уезжает по экрану в одну сторону,
+            // а террайн (окно уже перецентрировано) выглядит «едущим » в другую.
+            if (freeview !is null)
+                freeview.setTarget(-Vector3f(livePhysics.worldFocus));
+
             // По одному цилиндру на каждую балку каркаса: порядок совпадает
             // с BeamState[] из beamStates() (по Frame.beams).
             foreach (b; frame.beams)
