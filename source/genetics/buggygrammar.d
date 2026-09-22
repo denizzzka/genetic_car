@@ -522,8 +522,9 @@ unittest
 
 unittest
 {
-    // Turtle: дельты интерпретируются в системе заголовка, а turn накапливает
-    // направление. Заголовок π/2 поворачивает дельту (1,0,0) в мировые (0,1,0).
+    // Turtle: дельты заданы в базисе каркаса, а heading (и кумулятивный turn)
+    // поворачивает их в плоскости X-Y: x' = c·dx − s·dy, y' = s·dx + c·dy.
+    // Проверяем проекции на направления рамы, а не на абсолютные оси.
     Terminal!Tok[] t;
     // Seed: начало координат.
     t ~= dirCoords(origin, 1.0f);
@@ -532,7 +533,7 @@ unittest
 
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    // Дельты — единичные векторы в системе заголовка: вперёд×1, затем вправо×1.
+    // Дельты — единичные векторы в базисе каркаса: вперёд×1, затем вправо×1.
     t ~= dirCoords(forward, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.0f);
@@ -554,17 +555,27 @@ unittest
     assert(f.get.nodes.length == 3);
     const n1 = f.get.nodes[1].pos;
     const n2 = f.get.nodes[2].pos;
-    assert(n1.x < 1e-4f && n1.y > 0.999f,
-        "заголовок π/2 должен развернуть дельту из оси X в ось Y");
-    assert(n2.x < -0.999f && n2.y > 0.999f,
-        "дельта (0,1,0) при заголовке π/2 уходит влево (-X)");
+    // Заголовок π/2 поворачивает дельту вперёд вдоль right-направления рамы.
+    assert(dot(n1, right) > 0.999f,
+        "заголовок π/2 должен развернуть дельту вперёд вдоль right");
+    assert(abs(dot(n1, forward)) < 1e-4f && abs(dot(n1, up)) < 1e-4f,
+        "поворот не уводит дельту наружу плоскости рамы");
+    // Дельту right заголовок π/2 поворачивает вдоль backward; узлы копятся
+    // от предыдущей точки, а не от начала координат.
+    const vec3 d2 = n2 - n1;
+    assert(dot(d2, backward) > 0.999f,
+        "дельту right при заголовке π/2 поворачивает вдоль backward");
+    assert(abs(dot(d2, right)) < 1e-4f && abs(dot(d2, up)) < 1e-4f,
+        "вторая дельта тоже лежит в плоскости рамы");
 }
 
 unittest
 {
-    // Раздвоение (fork): каждая балка раздвоенного сегмента рождает twin вокруг
-    // оси сегмента — X его стартового узла. Старт на узле (0,0,0) даёт ось X==0,
-    // поэтому пары геометрически симметричны вокруг нуля.
+    // Раздвоение (fork): сегмент рисует ствол (первая балка от начала), а из
+    // его конца выпускает пару зеркальных ветвей вокруг оси ствола — оси X
+    // стартового узла. Старт на (0,0,0) даёт ось X==0, поэтому ветви
+    // геометрически симметричны вокруг нуля. Твин-балка получает
+    // radius·(1+nodal).
     Terminal!Tok[] t;
     // Seed: начало координат — ось сегмента X == 0.
     t ~= dirCoords(origin, 1.0f);
@@ -573,7 +584,7 @@ unittest
     t ~= new Terminal!Tok(Tok.fork);
     t ~= new Terminal!Tok(Tok.refLast);
     t ~= new Terminal!Tok(Tok.endNew);
-    // Первая балка: вперёд×1; вторая: вправо×1.
+    // Ствол: вперёд×1; ветвь: вправо×1.
     t ~= dirCoords(forward, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.1f);
@@ -594,29 +605,33 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == 5,
-        "каждый узел раздвоенного сегмента (кроме оси) рождается парой с twin");
-    assert(abs(f.get.nodes[3].pos.x - 1.0f) < 1e-4f
-        && abs(f.get.nodes[3].pos.y - 1.0f) < 1e-4f
-        && abs(f.get.nodes[4].pos.x + 1.0f) < 1e-4f
-        && abs(f.get.nodes[4].pos.y - 1.0f) < 1e-4f,
-        "twin отражается геометрически вокруг оси: (1,1) -> (-1,1)");
+    assert(f.get.nodes.length == 4,
+        "ствол + пара зеркальных ветвей");
+    const n1 = f.get.nodes[1].pos;
+    const n2 = f.get.nodes[2].pos;
+    const n3 = f.get.nodes[3].pos;
+    assert(abs(n1.x) < 1e-4f && abs(n1.y + 1.0f) < 1e-4f,
+        "ствол уходит вперёд: (0,-1)");
+    assert(abs(n2.x - 1.0f) < 1e-4f && abs(n2.y + 1.0f) < 1e-4f,
+        "ветвь идёт вправо от конца ствола: (1,-1)");
+    assert(abs(n3.x + 1.0f) < 1e-4f && abs(n3.y + 1.0f) < 1e-4f,
+        "твин-ветвь зеркальна вокруг оси ствола: (-1,-1)");
 
-    assert(f.get.beams.length == 4);
+    assert(f.get.beams.length == 3);
     assert(f.get.beams[0].a == 0 && f.get.beams[0].b == 1);
-    assert(f.get.beams[1].a == 0 && f.get.beams[1].b == 2,
-        "вторая балка — twin первой через ось сегмента");
-    assert(f.get.beams[2].a == 1 && f.get.beams[2].b == 3);
-    assert(f.get.beams[3].a == 2 && f.get.beams[3].b == 4);
+    assert(f.get.beams[1].a == 1 && f.get.beams[1].b == 2,
+        "вторая балка — ветвь из конца ствола");
+    assert(f.get.beams[2].a == 1 && f.get.beams[2].b == 3,
+        "третья — твин ветви через ось сегмента");
 
-    // Активатор Nodal=0.1 без ингибитора даёт сдвиг s=0.1,
-    // radius twin-балки: 0.04 * (1 + 0.1) = 0.044.
-    assert(abs(f.get.beams[1].radius - 0.044f) < 1e-4f);
-    assert(abs(f.get.beams[3].radius - 0.044f) < 1e-4f);
+    // Nodal=0.1 без ингибитора даёт сдвиг 0.1; радиус твин-балки:
+    // 0.04 · (1 + 0.1) = 0.044.
+    assert(abs(f.get.beams[1].radius - 0.04f) < 1e-4f);
+    assert(abs(f.get.beams[2].radius - 0.044f) < 1e-4f);
 
-    assert(f.get.anchors.length == 2,
-        "якорь дублируется на twin-узел");
-    assert(f.get.anchors[0].node == 1 && f.get.anchors[1].node == 2);
+    assert(f.get.anchors.length == 1,
+        "якорь вешается на конец ствола");
+    assert(f.get.anchors[0].node == 1);
 
     assert(!isValidFrame(f.get).isNull,
         "раздвоенный каркас с узлом на оси остаётся связным");
@@ -625,8 +640,8 @@ unittest
 unittest
 {
     // Раздвоение поверх turtle: twin-половина поворачивается вместе
-    // с заголовком. Заголовок π/4 разворачивает дельту (1,0,0) в (c,c),
-    // twin — в (-c,c) вокруг оси сегмента (X узла старта).
+    // с заголовком. Заголовок π/4 раскладывает дельту вперёд на направления
+    // рамы: right·s + forward·c; twin одерживает right-составляющую.
     Terminal!Tok[] t;
     // Seed: начало координат — ось сегмента X == 0.
     t ~= dirCoords(origin, 1.0f);
@@ -650,10 +665,17 @@ unittest
     assert(f.get.nodes.length == 3);
     const n1 = f.get.nodes[1].pos;
     const n2 = f.get.nodes[2].pos;
-    assert(n1.x > 0.7071f && n1.x < 0.7072f && n1.y > 0.7071f && n1.y < 0.7072f,
-        "заголовок π/4 поворачивает дельту (1,0,0) в (c,c)");
-    assert(n2.x < -0.7071f && n2.x > -0.7072f && abs(n2.y - n1.y) < 1e-4f,
-        "twin отражает узел (c,c) в (-c,c) вокруг оси сегмента");
+    const float c = cos(0.78539815f);
+    const float s = sin(0.78539815f);
+    // Дельта вперёд при заголовке π/4: right·s + forward·c.
+    assert(abs(dot(n1, right) - s) < 1e-4f
+        && abs(dot(n1, forward) - c) < 1e-4f,
+        "дельта вперёд при заголовке π/4 ложится на right·s + forward·c");
+    assert(abs(dot(n1, up)) < 1e-4f, "поворот плоский, из рамы не уводит");
+    // Twin зеркалит right-составляющую вокруг оси сегмента.
+    assert(abs(dot(n2, right) + s) < 1e-4f
+        && abs(dot(n2, forward) - c) < 1e-4f,
+        "twin одерживает right-составляющую, forward не трогается");
 }
 
 unittest
