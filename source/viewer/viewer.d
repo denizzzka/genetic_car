@@ -198,11 +198,6 @@ class BuggyScene: Scene
     {
         super.update(t);
 
-        // Окно поверхности за машиной (или в origin, пока машин нет).
-        // afterLoad может не завершиться к первому кадру — terrainVis ещё null.
-        if (terrainVis !is null)
-            terrainVis.update(livePhysics);
-
         // Камера-орбита плавно ведёт центр массы живой машины; угол обзора
         // остаётся за мышью (повороты/зум не сбрасываются). Точка орбиты в
         // FreeviewComponent инвертирована (см. targetEntity: target = -pos),
@@ -268,6 +263,9 @@ class BuggyScene: Scene
             stepLiveCar(t.delta);
 
         updateLiveN();
+
+        if (terrainVis !is null)
+            terrainVis.update(livePhysics);
     }
 
     /// G: запустить отбор поколений либо остановить после текущего поколения.
