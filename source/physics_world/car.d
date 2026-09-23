@@ -350,6 +350,10 @@ final class BuggyPhysics
     private Vector3f[] beamLocal;
     private Quaternionf[] beamLocalQuat;
 
+    /// Положение кабины относительно мастера в координатах каркаса —
+    /// для live-рендера (кабина жёстко приделана к мастеру).
+    private vec3 cockpitLocal_ = origin;
+
     /// Кинестатические тела балок каркаса: по одному на каждую `Frame.beams`.
     private NewtonCarBody[] beamBodies;
 
@@ -614,6 +618,18 @@ final class BuggyPhysics
         return res;
     }
 
+    /// Положение кабины в мире: точка крепления кабины (низ на узле 0)
+    /// жёстко приделана к мастеру, поэтому поворот и перенос — от мастера.
+    BodyState cockpitState() @property
+    {
+        BodyState s;
+        if (master is null)
+            return s;
+        s.position = toCarPos(master.position.xyz) + toCarRot(master.rotation).rotate(cockpitLocal_);
+        s.orientation = toCarRot(master.rotation);
+        return s;
+    }
+
     // Debug-only хелперы обёрнуты в block-scoped `debug { }`: метка `debug:`
     // в release выключала всю остальную часть класса до его конца.
     debug {
@@ -821,6 +837,10 @@ final class BuggyPhysics
 
         master.setTransformation(translationMatrix(toNewtonPos(comTotal)));
         master.update(0.0);
+
+        // Положение кабины относительно мастера (в координатах каркаса):
+        // для live-рендера кабина жёстко приделана к мастеру.
+        cockpitLocal_ = comCabin - comTotal;
 
         // Локальные преобразования балок в мастере.
         foreach (i, b; frame.beams)

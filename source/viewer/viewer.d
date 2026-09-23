@@ -10,6 +10,8 @@ import std.array : array;
 import std.random;
 import std.stdio : writefln;
 import frame.frame;
+import frame.cockpit : loadCockpit, cockpitGeometry;
+import frame.objmesh : ObjModel;
 import genetics;
 import physics_world;
 import viewer.terrainvisualizer;
@@ -39,10 +41,16 @@ class BuggyScene: Scene
     /// меши и материалы (dlib-память вне GC, иначе — утечка и крах).
     Mesh meshBeam = null;
     Mesh meshWheel = null;
+    Mesh meshCockpit = null;
     Texture texBeam;
     Material matBeam;
     Material matWheel;
     Material matDriveWheel;
+    Material matCockpit;
+
+    /// Держит меш кабины живым (dlib-память вне GC): из него берётся
+    /// `meshCockpit`, а asset владеет вершинами.
+    private ObjModel cockpitModel_;
 
     Grammar grammar;
     Random rnd;
@@ -164,6 +172,16 @@ class BuggyScene: Scene
         matDriveWheel.baseColorTexture = buildTireTexture(Color4f(0.55f, 0.08f, 0.08f, 1.0f));
         matDriveWheel.roughnessFactor = 0.9f;
         matDriveWheel.metallicFactor = 0.0f;
+
+        // Кабина-корпус: яркий не-металл, чтобы её ориентация читалась визуально
+        // на фоне серых балок. Меш один на все сущности (галерея + live).
+        cockpitModel_ = loadCockpit();
+        meshCockpit = cockpitModel_.mesh;
+        meshCockpit.prepareVAO();
+        matCockpit = addMaterial();
+        matCockpit.baseColorFactor = Color4f(0.95f, 0.6f, 0.1f, 1.0f);
+        matCockpit.roughnessFactor = 0.3f;
+        matCockpit.metallicFactor = 0.1f;
 
         // Плоская «земля» больше не нужна: её рисует процедурная поверхность
         // TerrainVisualizer (общий shared-кэш с фитнесом).
@@ -493,6 +511,13 @@ class BuggyScene: Scene
                 e.scaling = Vector3f(s, s, s);
                 liveCar ~= e;
             }
+
+            // Кабина: живёт в конце liveCar после всех балок и колёс; позицию
+            // и ориентацию на каждом шаге даёт мастер-тело (cockpitState).
+            auto eCab = addEntity(carRoot);
+            eCab.drawable = meshCockpit;
+            eCab.material = matCockpit;
+            liveCar ~= eCab;
             return true;
         }
 
@@ -570,6 +595,15 @@ class BuggyScene: Scene
                 liveCar[idx].position = s.position;
                 liveCar[idx].rotation = s.orientation;
             }
+        }
+
+        // Кабина — последняя сущность liveCar; состояние от мастер-тела.
+        const size_t cabIdx = beams.length + wheels.length;
+        if (cabIdx < liveCar.length)
+        {
+            const BodyState c = livePhysics.cockpitState;
+            liveCar[cabIdx].position = c.position;
+            liveCar[cabIdx].rotation = c.orientation;
         }
 
         carRoot.updateTransformationTopDown();
@@ -673,6 +707,18 @@ class BuggyScene: Scene
                     break;
             }
         }
+
+        // Кабина: низ (seed) стоит на узле 0, меш в координатах каркаса.
+        // В живом заезде ориентацию даёт мастер (`toCarRot(master.rotation)`),
+        // а у покоящегося мастера она равна `toCarRot(Quaternionf.identity)` —
+        // компенсация кажущейся −90° вокруг X кабиной сущности, ведь корень
+        // витрины повёрнут на −90°. Центр меша (0,0,0 OBJ) — ЦМ кабины,
+        // поэтому сдвиг на −seed, как и в физике (comCabin = node0−seed).
+        auto eCab = addEntity(galleryRoot);
+        eCab.drawable = meshCockpit;
+        eCab.material = matCockpit;
+        eCab.position = buggy.frame.nodes[0].pos - cockpitGeometry().seed + off;
+        eCab.rotation = toCarRot(Quaternionf.identity);
     }
 
     private void addWheel(const vec3 pos, const vec3 axle, Material mat,
