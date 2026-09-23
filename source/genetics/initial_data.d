@@ -6,6 +6,7 @@ module genetics.initial_data;
 import std.math : abs;
 
 import frame.frame;
+import frame.cockpit : cockpitGeometry;
 import physics_world.wheel : defaultWheelRadius;
 import genetics.sge;
 import genetics.buggygrammar;
@@ -43,10 +44,10 @@ Genotype startGenome(const Grammar gr)
     set("frame", [0u]);
     set("startPos", [0u]);
 
-    // Seed — смещение точки старта от начала координат как
-    // «единичный вектор направления × множитель длины»: тут вверх на 0.3 м.
-    enum float startLen = 0.3f;
-    const vSeed = up * startLen;
+    // Seed — точка старта каркаса: узел 0 совпадает с низом (точкой опоры)
+    // кабины. Кабина ставится ЦМ на начало координат frame — у каркаса
+    // стартовая нода оказывается под кабиной на высоте её центра масс.
+    const vSeed = cockpitGeometry().seed;
     set("startForward", [u(vSeed.x, -2.0f, 2.0f)]);
     set("startRight", [u(vSeed.y, -2.0f, 2.0f)]);
     set("startUp", [u(vSeed.z, -2.0f, 2.0f)]);
