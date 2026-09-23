@@ -54,6 +54,24 @@ ObjModel loadCockpit()
     return loadObjText(cockpitObjText);
 }
 
+// Геометрия кабины — константа дизайна: меш вшит в бинарник, поэтому она
+// вычисляется из меша один раз при старте программы (shared static this)
+// и дальше живёт как immutable — мьютекс не нужен даже на пуле воркеров.
+private static immutable CockpitGeometry cockpitGeom_;
+
+shared static this()
+{
+    auto model = loadCockpit();
+    scope (exit) Delete(model.asset);
+    cockpitGeom_ = cockpitGeometry(model);
+}
+
+/// Геометрия кабины (кэш: вычислена из меша на старте программы).
+CockpitGeometry cockpitGeometry()
+{
+    return cockpitGeom_;
+}
+
 /// Геометрия кабины из меша: точка опоры и высота центра масс.
 /// Центр масс считается в (0,0,0) координат OBJ — луч идёт оттуда вниз.
 CockpitGeometry cockpitGeometry(const ObjModel model)

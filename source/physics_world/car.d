@@ -26,6 +26,7 @@ import physics_world.physics;
 import physics_world.terrain;
 import physics_world.terrainworld;
 import physics_world.wheel;
+import frame.cockpit : CockpitGeometry, cockpitGeometry, cockpitInertia, cockpitMass;
 
 /// Машина: каркас багги вместе с якорями (колёсами). Только данные —
 /// физика физикой занимается отдельно (BuggyPhysics), когда нужен заезд.
@@ -47,6 +48,9 @@ unittest
     import std.math : isFinite;
 
     // Нормальный багги: рама-коробка на четырёх колёсах, задние — ведущие.
+    // Центральный узел — посадка кабины (низ кабины на узле 0): держим его
+    // на уровне осей, как это делает геном (seed = точка опоры кабины),
+    // иначе кабина сидит на крыше и на полном газу корпус тянет вилли.
     Frame frame;
     size_t node(vec3 pos)
     {
@@ -54,7 +58,7 @@ unittest
         return frame.nodes.length - 1;
     }
 
-    const c = node(vec3(0.0f, 0.0f, 0.8f));
+    const c = node(vec3(0.0f, 0.0f, 0.3f));
     const fl = node(vec3(0.6f, 0.7f, 0.3f));
     const fr = node(vec3(-0.6f, 0.7f, 0.3f));
     const rl = node(vec3(0.6f, -0.7f, 0.3f));
@@ -738,6 +742,9 @@ final class BuggyPhysics
         }
 
         // Мастер: масса и центр масс по балкам, инерция от AABB каркаса.
+        // Кабина вливается в то же тело: её масса, ЦМ и момент инерции
+        // (заданы дизайном, оси OBJ = оси каркаса) сдвигаются параллельной
+        // осевой теоремой к общему центру масс.
         float totalMass = 0.0f;
         vec3 sumM = origin;
         foreach (b; frame.beams)
@@ -754,6 +761,12 @@ final class BuggyPhysics
         if (totalMass <= 0.0f)
             totalMass = 1.0f;
         const vec3 com = sumM / totalMass;
+
+        // ЦМ кабины: её низ (seed в координатах кабины) совмещён с узлом 0.
+        const CockpitGeometry cg = cockpitGeometry();
+        const vec3 comCabin = frame.nodes[0].pos - cg.seed;
+        float totalMassC = totalMass + cockpitMass;
+        const vec3 comTotal = (sumM + comCabin * cockpitMass) / totalMassC;
 
         master = New!NewtonCarBody(NewtonRigidBodyType.Dynamic,
             New!NewtonBoxShape(Vector3f(0.05f, 0.05f, 0.05f), world),
@@ -782,12 +795,31 @@ final class BuggyPhysics
         dims.x = max(dims.x, 0.05f);
         dims.y = max(dims.y, 0.05f);
         dims.z = max(dims.z, 0.05f);
-        const float Ixx = (dims.y * dims.y + dims.z * dims.z) / 3.0f * totalMass;
-        const float Iyy = (dims.x * dims.x + dims.z * dims.z) / 3.0f * totalMass;
-        const float Izz = (dims.x * dims.x + dims.y * dims.y) / 3.0f * totalMass;
-        master.setMassMatrix(totalMass, Ixx, Iyy, Izz);
 
-        master.setTransformation(translationMatrix(toNewtonPos(com)));
+        // Инерция рамы как монолита о её ЦМ (AABB-аппроксимация), сдвинутая
+        // параллельной осевой теоремой к общему ЦМ: I = I_own + m*D².
+        const vec3 dFrame = com - comTotal;
+        const vec3 dCabin = comCabin - comTotal;
+        const float IxxFrame = (dims.y * dims.y + dims.z * dims.z) / 3.0f
+            * totalMass + totalMass * (dFrame.y * dFrame.y + dFrame.z * dFrame.z);
+        const float IyyFrame = (dims.x * dims.x + dims.z * dims.z) / 3.0f
+            * totalMass + totalMass * (dFrame.x * dFrame.x + dFrame.z * dFrame.z);
+        const float IzzFrame = (dims.x * dims.x + dims.y * dims.y) / 3.0f
+            * totalMass + totalMass * (dFrame.x * dFrame.x + dFrame.y * dFrame.y);
+
+        // Кабина: собственный тензор (16.7, 16.7, 8.5) + перенос её ЦМ.
+        const float Mc = cockpitMass;
+        const float IxxCabin = cockpitInertia.x
+            + Mc * (dCabin.y * dCabin.y + dCabin.z * dCabin.z);
+        const float IyyCabin = cockpitInertia.y
+            + Mc * (dCabin.x * dCabin.x + dCabin.z * dCabin.z);
+        const float IzzCabin = cockpitInertia.z
+            + Mc * (dCabin.x * dCabin.x + dCabin.y * dCabin.y);
+
+        master.setMassMatrix(totalMassC,
+            IxxFrame + IxxCabin, IyyFrame + IyyCabin, IzzFrame + IzzCabin);
+
+        master.setTransformation(translationMatrix(toNewtonPos(comTotal)));
         master.update(0.0);
 
         // Локальные преобразования балок в мастере.
