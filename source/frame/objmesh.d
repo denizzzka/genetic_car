@@ -200,10 +200,10 @@ unittest
     assert(model.mesh.indices.length == 20, "20 треугольников корпуса");
     assert(model.mesh.vertices.length == 60, "по 3 вершины на треугольник");
 
-    // Масштаб мм → м: первая вершина (-350, -400, 200) мм.
+    // Масштаб мм → м: первая вершина (-350, -449, -695) мм.
     assert(abs(model.mesh.vertices[0].x - (-0.35f)) < 1e-5f);
-    assert(abs(model.mesh.vertices[0].y - (-0.40f)) < 1e-5f);
-    assert(abs(model.mesh.vertices[0].z - 0.20f) < 1e-5f);
+    assert(abs(model.mesh.vertices[0].y - (-0.449f)) < 1e-5f);
+    assert(abs(model.mesh.vertices[0].z - (-0.695f)) < 1e-5f);
 
     foreach (ref idx; model.mesh.indices)
         foreach (i; idx)
