@@ -6,6 +6,7 @@ import std.math;
 import dlib.math.vector;
 
 import frame.frame;
+import frame.cockpit : cockpitGeometry;
 import genetics.buggyast;
 import physics_world;
 
@@ -31,6 +32,12 @@ enum float epsFlat = 1e-4f;
 /// в Newton 3.14, поэтому разнесение нижних ободов меньше этого порога
 /// отбраковывается геометрически.
 enum float wheelWheelMinGap = 1e-3f;
+
+/// Кабина — неприкосновенна: никто (земля, балки, колёса) не должен касаться
+/// её корпуса. Запретная зона — строгая внутренность параллелепипеда `dims`
+/// вокруг узла 0 (низ кабины совмещён с узлом 0). Пол кабины — граница зоны:
+/// балка в самой плоскости пола зону не задевает, эволюция сама расставит
+/// балки ниже.
 
 /// Разумный потолок сложности каркаса.
 enum size_t maxBeamCount = 64;
@@ -113,6 +120,12 @@ float buggyFitness(const Frame f, const Ast ast)
         if (n.pos.z < groundZ - epsFlat)
             return 0.0f;
 
+    // Кабина неприкосновенна: корпуса не касается ни одна балка и ни одно
+    // колесо. Землю она тоже не касается: её низ (узел 0) — узел каркаса,
+    // узлы же ниже опорной плоскости отброшены гейтом выше.
+    if (frameCabinContact(f).length)
+        return 0.0f;
+
     // ---- Слоты морфологии ----
     const float nodeSym = symmetryRatio(f);
     const float wheelSym = wheelSymmetry(f);
@@ -166,6 +179,77 @@ float wheelAnchorSpacing(const Frame f)
     return best;
 }
 
+/// Пересекает ли отрезок строгую внутренность зоны кабины: параллелепипед
+/// `dims` вокруг узла 0 от пола до крыши. Балка в самой плоскости пола зону
+/// не задевает — ловится только реальный проход сквозь корпус.
+private bool beamPiercesCabin(const vec3 a, const vec3 b,
+    const vec3 base, const vec3 half)
+{
+    const float xlo = base.x - half.x;
+    const float xhi = base.x + half.x;
+    const float ylo = base.y - half.y;
+    const float yhi = base.y + half.y;
+    const float zlo = base.z;
+    const float zhi = base.z + half.z;
+    const vec3 d = b - a;
+    float tmin = 0.0f, tmax = 1.0f;
+    if (!slab(tmin, tmax, a.x, d.x, xlo, xhi)) return false;
+    if (!slab(tmin, tmax, a.y, d.y, ylo, yhi)) return false;
+    if (!slab(tmin, tmax, a.z, d.z, zlo, zhi)) return false;
+    return true;
+}
+
+/// Слэб-тест одной оси: сужает [tmin, tmax] на пересечение луча с полосой.
+private bool slab(ref float tmin, ref float tmax,
+    float p, float d, float lo, float hi)
+{
+    if (abs(d) < 1e-12f)
+        return p > lo && p < hi;
+    float t0 = (lo - p) / d;
+    float t1 = (hi - p) / d;
+    if (t0 > t1)
+    {
+        const float t = t0; t0 = t1; t1 = t;
+    }
+    if (t0 > tmin) tmin = t0;
+    if (t1 < tmax) tmax = t1;
+    return tmin < tmax;
+}
+
+/// Касается ли колесо кабины: центр диска внутри корпуса, расширенного на
+/// радиус колеса. Колесо, упирающееся в кабину снизу или сбоку, — касание;
+/// только чисто свободный корпус проходит.
+private bool wheelHitsCabin(const vec3 p, float r,
+    const vec3 lo, const vec3 hi)
+{
+    return p.x >= lo.x - r && p.x <= hi.x + r
+        && p.y >= lo.y - r && p.y <= hi.y + r
+        && p.z >= lo.z - r && p.z <= hi.z + r;
+}
+
+/// Первое касание корпуса кабины в каркасе: пусто — никто её не трогает.
+/// Параллелепипед строится от узла 0 (низ кабины) по габаритам меша.
+private string frameCabinContact(const Frame f)
+{
+    if (f.nodes.length == 0)
+        return "";
+    const cg = cockpitGeometry();
+    const vec3 base = f.nodes[0].pos;
+    const vec3 half = vec3(cg.dims.x * 0.5f, cg.dims.y * 0.5f, cg.dims.z);
+
+    foreach (b; f.beams)
+        if (beamPiercesCabin(f.nodes[b.a].pos, f.nodes[b.b].pos, base, half))
+            return "балка каркаса проходит сквозь кабину";
+
+    const vec3 lo = base - vec3(half.x, half.y, 0.0f);
+    const vec3 hi = base + vec3(half.x, half.y, half.z);
+    foreach (a; f.anchors)
+        if (wheelHitsCabin(f.nodes[a.node].pos, a.radius, lo, hi))
+            return "колесо заходит в кабину";
+
+    return "";
+}
+
 enum double physicsDt = 1.0 / 60.0;
 enum double physicsSimSeconds = 3.0;
 enum double physicsSettleSeconds = 1.0;
@@ -217,6 +301,16 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
         return r;
     }
 
+    // Кабина неприкосновенна и в заезде: рама — монолит, взаимоположение
+    // кабины и каркаса не меняется, поэтому геометрия корпуса проверяется
+    // один раз; живым остаётся только касание земли (см. cabinGroundContact).
+    const cabinWhy = frameCabinContact(buggy.frame);
+    if (cabinWhy.length)
+    {
+        r.why = cabinWhy;
+        return r;
+    }
+
     const size_t steps = cast(size_t)(seconds / physicsDt);
 
     auto wheels = physics.wheelStates();
@@ -237,6 +331,13 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
         if (stepFailure.length)
         {
             r.why = stepFailure;
+            break;
+        }
+
+        const cabinGround = cabinGroundContact(physics);
+        if (cabinGround.length)
+        {
+            r.why = cabinGround;
             break;
         }
 
@@ -261,6 +362,21 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
     r.survived = true;
     r.score = finishScore(farthest, seconds, reachTime);
     return r;
+}
+
+/// Касается ли кабина земли в текущем состоянии: низ корпуса (точка опоры на
+/// узле 0) ушёл под опорную плоскость — сход. Проверяется по живым состояниям
+/// симуляции, поэтому в отличие от корпуса (монолит) землю может задеть только
+/// качание/крен в заезде. Касание — уже провал, допуска нет.
+private string cabinGroundContact(BuggyPhysics physics)
+{
+    const cg = cockpitGeometry();
+    auto s = physics.cockpitState;
+    const vec3 bottomZ = s.orientation.rotate(vec3(0.0f, 0.0f, -cg.cogHeight));
+    const vec3 bottom = s.position.xyz + bottomZ;
+    if (physics.groundHeightAt(bottom) - bottom.z > 0.0f)
+        return "кабина касается земли";
+    return "";
 }
 
 /// Счёт заезда: доля полной дистанции × средняя скорость доезда (в долях номинала).
@@ -632,6 +748,40 @@ unittest
         "каркас без колёс не выезжает из нуля");
 }
 
+unittest
+{
+    // Кабина неприкосновенна: балка или колесо внутри корпуса отбраковывают
+    // каркас, а крепёж по полу (из узла 0) — нет.
+
+    // Контроль: канонический багги кабину не трогает.
+    assert(buggyFitness(symmetricBuggyFrame()) > 0.0f);
+
+    // Балка, ушедшая из узла 0 вертикально в корпус кабины, — отбраковка.
+    Frame pierce = symmetricBuggyFrame();
+    pierce.nodes ~= Node(vec3(0.0f, 0.0f, 0.8f));
+    pierce.beams ~= Beam(0, pierce.nodes.length - 1, 0.04f);
+    assert(frameCabinContact(pierce).length,
+        "балка сквозь корпус кабины не должна проходить");
+    assert(buggyFitness(pierce) == 0.0f);
+
+    // Балка в плоскости пола кабины (граница зоны) — не касание.
+    Frame mount = symmetricBuggyFrame();
+    mount.nodes ~= Node(vec3(0.3f, 0.0f, 0.4f));
+    mount.beams ~= Beam(0, mount.nodes.length - 1, 0.04f);
+    assert(frameCabinContact(mount).length == 0,
+        "балка в плоскости пола не считается касанием");
+    assert(buggyFitness(mount) > 0.0f);
+
+    // Колесо, заходящее в корпус кабины, — отбраковка.
+    Frame wheelInside = symmetricBuggyFrame();
+    const wi = wheelInside.nodes.length; // добавить якорь в кабине
+    wheelInside.nodes ~= Node(vec3(0.1f, 0.2f, 0.5f));
+    wheelInside.anchors ~= Anchor(wi, AnchorKind.wheel);
+    assert(frameCabinContact(wheelInside).length,
+        "колесо внутри кабины не должно проходить");
+    assert(buggyFitness(wheelInside) == 0.0f);
+}
+
 private Frame symmetricBuggyFrame()
 {
     Frame f;
@@ -644,8 +794,8 @@ private Frame symmetricBuggyFrame()
     const c = node(vec3(0.0f, 0.0f, 0.4f));
     const fl = node(vec3(0.7f, 0.6f, 0.3f));
     const fr = node(vec3(-0.7f, 0.6f, 0.3f));
-    const rl = node(vec3(0.6f, -0.6f, 0.25f));
-    const rr = node(vec3(-0.6f, -0.6f, 0.25f));
+    const rl = node(vec3(1.2f, -0.6f, 0.25f));
+    const rr = node(vec3(-1.2f, -0.6f, 0.25f));
 
     f.beams ~= Beam(c, fl, 0.045f);
     f.beams ~= Beam(c, fr, 0.045f);
@@ -674,7 +824,7 @@ private Frame asymmetricBuggyFrame()
     const c = node(vec3(0.0f, 0.0f, 0.4f));
     const fl = node(vec3(0.7f, 0.6f, 0.3f));
     const fr = node(vec3(-0.7f, 0.6f, 0.3f));
-    const rl = node(vec3(0.6f, -0.6f, 0.25f));
+    const rl = node(vec3(1.2f, -0.6f, 0.25f));
 
     f.beams ~= Beam(c, fl, 0.045f);
     f.beams ~= Beam(c, fr, 0.045f);
