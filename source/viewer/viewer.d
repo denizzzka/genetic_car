@@ -10,6 +10,7 @@ import std.array : array;
 import std.random;
 import std.stdio : writefln;
 import frame.frame;
+import frame.frame : frameForward = forward, frameUp = up;
 import frame.cockpit : loadCockpit, cockpitGeometry;
 import frame.objmesh : ObjModel;
 import genetics;
@@ -695,8 +696,9 @@ class BuggyScene: Scene
 
         foreach (anchor; buggy.frame.anchors)
         {
-            const pos = buggy.frame.nodes[anchor.node].pos + off;
-            const vec3 axle = wheelAxle(buggy.frame.beamDirectionAt(anchor.node));
+            const nodeCar = buggy.frame.nodes[anchor.node].pos;
+            const pos = nodeCar + off;
+            const vec3 axle = wheelAxle(frameForward, frameUp, nodeCar);
             final switch (anchor.kind)
             {
                 case AnchorKind.wheel:

@@ -1,11 +1,11 @@
 /**
- * Колесо каркаса: ось вдоль «своей» балки узла (диск всегда перпендикулярен
- * балке, независимо от её ориентации), и револьте-шарнир, которым колесо
- * приварено к мастер-каркасу одним концом.
+ * Wheel of the frame: the axle always lies across the course — the disc plane
+ * faces forward, so the wheel rolls straight from the first step instead of
+ * scrubbing sideways. A revolute joint welds the wheel to the master frame.
  *
- * Модуль намеренно листовой (не импортирует car.d): шарнир работает через
- * базовый `NewtonRigidBody`, а направление оси выводится чисто из геометрии
- * кадра, поэтому колёсная физика не зависит от сборки заезда.
+ * The module is intentionally leaf (does not import car.d): the joint works
+ * through the plain `NewtonRigidBody`, and the axle direction derives from the
+ * frame basis alone, so wheel physics does not depend on how the run is built.
  */
 module physics_world.wheel;
 
@@ -17,51 +17,54 @@ import dlib.math.quaternion;
 
 import dagon.ext.newton;
 
-/// Радиус колеса по умолчанию, м. Значение, которое получит якорь `Anchor`,
-/// если ген `wheelRadius` не задан (ручные потоки без него). Генетический
-/// радиус каждого колеса масштабируется относительно этого базового:
-/// внутренний радиус и ширина покрышки растут/сжимаются пропорционально.
+/// Default wheel radius, m. Value the `Anchor` gets when the `wheelRadius`
+/// gene is absent (hand-built frames without it). Each wheel's genetic radius
+/// scales relative to this base: tire inner radius and width grow/shrink
+/// proportionally.
 enum float defaultWheelRadius = 0.3f;
 
-/// Ось вращения колеса по одной балке: направление балки, приведённое к
-/// единичному. Диск колеса встаёт перпендикулярно балке. Ничего не знает о
-/// каркасе и мире; фолбэков нет.
-vec3 wheelAxle(const vec3 beamDir)
+/// Wheel axle that keeps the wheel facing forward: across the course
+/// (`cross(up, forward)` — the right ray of the frame basis), so the disc plane
+/// lines up with forward and the wheel rolls straight no matter how the node
+/// beam is directed. Mirrored by the wheel's side (`nodePos.x`), so the two
+/// track rows roll forward together. `forward`/`up` form the orthonormal frame
+/// basis; `nodePos` is the anchor node in car coordinates.
+vec3 wheelAxle(const vec3 forward, const vec3 up, const vec3 nodePos)
 {
-    return beamDir / beamDir.length;
+    const vec3 across = cross(up, forward);
+    return nodePos.x < 0.0f ? -across : across;
 }
 
-/// Своя ступица: колесо и балка делят узел якоря — ось легитимно проходит
-/// через колесо, контакт с ним не считается провалом.
+/// Own hub: the wheel and the beam share the anchor node — the axle legitimately
+/// passes through the wheel, so contact with it is not a failure.
 bool isOwnWheel(size_t wheelNode, size_t beamA, size_t beamB)
 {
     return wheelNode == beamA || wheelNode == beamB;
 }
 
 /**
- * Ось колеса, закреплённая одним концом: револьте-шарнир на пользовательском
- * шарнире Newton. В отличие от BallConstraint (шаровой шарнир — точка пивота
- * зафиксирована, но все три поворота свободны, колесо болтается) здесь
- * свободен только спин вокруг оси колеса, а два перпендикулярных оси поворота
- * жёстко заблокированы — колесо катится по неподвижной оси.
+ * One-ended wheel axle: a revolute joint on Newton's custom joint. Unlike
+ * BallConstraint (a ball joint — pivot fixed, but all three rotations free,
+ * wheel wobbles), here only the spin around the wheel axle is free and the two
+ * cross-axis rotations are locked — the wheel rolls on a fixed axle.
  *
- * Ось шарнира — локальный Y колеса (ось цилиндра), куда бы она ни смотрела:
- * направление задаётся разворотом колеса при сборке (`wheelAxle`), шарнир
- * этого направления не знает.
+ * The hinge axis is the wheel's local Y (cylinder axis), wherever it points:
+ * the direction is set by the wheel's build-time rotation (`wheelAxle`), the
+ * joint never sees it.
  *
- * Построение повторяет опорный hinge Newton (`dCustomHinge::SubmitConstraints`):
- * три линейных ряда держат точку пивота, а два угловых ряда вокруг поперечных
- * осей РОДИТЕЛЯ гасят наклон оси колеса. Угол берётся `calculateAngle`
- * (проекция оси колеса на плоскость и atan2), как в движке, — через
- * относительный кватернион считать нельзя (знак/фрейм уезжают).
+ * The build mirrors the reference Newton hinge (`dCustomHinge::SubmitConstraints`):
+ * three linear rows hold the pivot, two angular rows around the PARENT's cross
+ * axes kill the wheel-axle tilt. The angle comes from `calculateAngle`
+ * (wheel axis projected onto a plane, atan2), as in the engine — the relative
+ * quaternion cannot be used (sign/frame drift).
  */
 final class WheelAxleJoint : NewtonUserConstraint
 {
     private NewtonRigidBody wheel_;
     private NewtonRigidBody master_;
-    /// Пивот шарнира в локальных координатах мастер-каркаса (Newton-мир).
+    /// Pivot of the joint in the master frame's local coordinates (Newton world).
     private vec3 pivotMasterLocal_;
-    /// Ось шарнира и две поперечины в локальных координатах мастера.
+    /// Joint axle and its two cross directions in the master's local coords.
     private vec3 masterPinLocal_;
     private vec3 masterUpLocal_;
     private vec3 masterRightLocal_;
@@ -73,9 +76,9 @@ final class WheelAxleJoint : NewtonUserConstraint
         master_ = master;
         pivotMasterLocal_ = pivotMasterLocal;
 
-        // Фрейм шарнира мастера: ось = текущая мировая ось колеса, выраженная
-        // в локальных координатах мастера. На сборке мастер без поворота, но
-        // считаем честно — на случай размещённого каркаса.
+        // Master joint frame: axle = the wheel's live world axle expressed in
+        // master local coords. The master is unrotated at build time, but we
+        // compute it honestly — in case the frame was placed already.
         Matrix4x4f wm, mm;
         NewtonBodyGetMatrix(wheel.newtonBody, wm.arrayof.ptr);
         NewtonBodyGetMatrix(master.newtonBody, mm.arrayof.ptr);
@@ -89,15 +92,15 @@ final class WheelAxleJoint : NewtonUserConstraint
         masterRightLocal_ = unit(cross(masterPinLocal_, masterUpLocal_));
     }
 
-    /// Единичный вектор или нуль — ось всегда задана, но бережёмся деления на 0.
+    /// Unit vector or zero — the axle is always defined, but guard the /0.
     private static vec3 unit(vec3 v)
     {
         const float l = v.length;
         return l < 1e-5f ? Vector3f(0.0f, 0.0f, 0.0f) : v / l;
     }
 
-    /// Знаковый угол между `dir` и `cosDir` в плоскости с нормалью `sinDir`
-    /// (порт `dCustomJoint::CalculateAngle`).
+    /// Signed angle between `dir` and `cosDir` in the plane with normal `sinDir`
+    /// (port of `dCustomJoint::CalculateAngle`).
     private static float calculateAngle(vec3 dir, vec3 cosDir, vec3 sinDir)
     {
         const vec3 projectDir = dir - sinDir * dot(dir, sinDir);
@@ -108,22 +111,22 @@ final class WheelAxleJoint : NewtonUserConstraint
 
     override void submit(float timestep, int threadIndex)
     {
-        // Актуальные матрицы тел на шаге решения (не кэш обёртки — он отстаёт).
+        // Live body matrices at solve time (not the wrapper cache — it lags).
         Matrix4x4f m0, m1;
         NewtonBodyGetMatrix(wheel_.newtonBody, m0.arrayof.ptr);
         NewtonBodyGetMatrix(master_.newtonBody, m1.arrayof.ptr);
 
-        // Пивоты тел в мировых координатах Newton. У колеса это его начало:
-        // колесо построено центром в узле якоря.
+        // Body pivots in Newton world coords. For the wheel it is its origin:
+        // the wheel is built centered on the anchor node.
         const vec3 pivot0 = Vector3f(0.0f, 0.0f, 0.0f) * m0;
         const vec3 pivot1 = pivotMasterLocal_ * m1;
 
-        // Фрейм шарнира мастера в мировых координатах Newton.
+        // Master joint frame in Newton world coords.
         const vec3 front = m1.rotate(masterPinLocal_);
         const vec3 up = m1.rotate(masterUpLocal_);
         const vec3 right = m1.rotate(masterRightLocal_);
 
-        // Три линейных ряда держат точку пивота (оси — фрейм родителя).
+        // Three linear rows hold the pivot (axes = parent frame).
         addLinearRow(pivot0, pivot1, front);
         setRowStiffness(1.0f);
         addLinearRow(pivot0, pivot1, up);
@@ -131,11 +134,11 @@ final class WheelAxleJoint : NewtonUserConstraint
         addLinearRow(pivot0, pivot1, right);
         setRowStiffness(1.0f);
 
-        // Ось колеса в мире — локальный Y цилиндра.
+        // Wheel axle in world terms — the cylinder's local Y.
         const vec3 wheelPin = m0.rotate(Vector3f(0.0f, 1.0f, 0.0f));
 
-        // Два угловых ряда гасят наклон оси колеса относительно осей мастера,
-        // оставляя свободным спин вдоль самой оси (front).
+        // Two angular rows kill the wheel-axle tilt against the master axes,
+        // leaving the spin along the axle itself (front) free.
         addAngularRow(calculateAngle(wheelPin, front, up), up);
         setRowStiffness(1.0f);
         addAngularRow(calculateAngle(wheelPin, front, right), right);

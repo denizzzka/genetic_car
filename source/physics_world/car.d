@@ -1046,9 +1046,9 @@ final class BuggyPhysics
             const float axial = 0.5f * (r2 + ri2) * mass;
             wheel.setMassMatrix(mass, perp, axial, perp);
 
-            // Ось колеса — направление «своей» балки узла: диск встаёт
-            // перпендикулярно балке, а балка проходит сквозь ступицу.
-            const vec3 axleDir = wheelAxle(frame.beamDirectionAt(a.node));
+            // Axle across the course: the disc plane faces forward, so the
+            // wheel rolls straight instead of scrubbing sideways on launch.
+            const vec3 axleDir = wheelAxle(frameForward, frameUp, nodePos);
             const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), axleDir);
             wheel.setTransformation(newtonBodyMatrix(nodePos, q));
             wheel.update(0.0);
