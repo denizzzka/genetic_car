@@ -625,8 +625,11 @@ final class BuggyPhysics
         BodyState s;
         if (master is null)
             return s;
-        s.position = toCarPos(master.position.xyz) + toCarRot(master.rotation).rotate(cockpitLocal_);
-        s.orientation = toCarRot(master.rotation);
+        // Кабина жёстко едет за мастером: поворот и перенос — истинное
+        // вращение мастера (как у балок в updateBeamPuppets).
+        Quaternionf mTrue = master.rotation.conj;
+        s.position = toCarPos(master.position.xyz) + mTrue.rotate(cockpitLocal_);
+        s.orientation = mTrue;
         return s;
     }
 

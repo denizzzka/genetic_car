@@ -14,7 +14,8 @@ import dlib.math.transformation;
 import dagon.core.event;
 import dagon.ext.newton;
 
-import frame.frame : Frame, Node, Beam, Anchor, AnchorKind, origin;
+import frame.frame : Frame, Node, Beam, Anchor, AnchorKind, origin,
+    right, up, forward;
 
 /// Радиус колеса по умолчанию, м. Совпадает с внешним радиусом визуального
 /// тора и коллизионного цилиндра. Генетический радиус каждого колеса
@@ -203,10 +204,22 @@ int soilGroupIdOf(const NewtonPhysicsWorld world)
 /// «вверх» — Z. Мир Newton — это геометрия каркаса, повёрнутая вокруг X на
 /// −90°: (x, y, z)каркас → (x, z, −y)newton. Все положения и ориентации тел,
 /// уходящие в Newton и возвращающиеся из него, проходят через переводы ниже.
-/// Значение из rotationQuaternion(Vector3f(1,0,0), −π/2) записано литералом:
-/// сама функция не умеет CTFE.
+/// Значение выведено из образов осей базиса (`carToNewtonBasis`): литерал —
+/// потому что LDC сворачивает `fromMatrix` в NaN на этапе компиляции.
 immutable Quaternionf carToNewtonQuat =
     Quaternionf(-0.70710678f, 0.0f, 0.0f, 0.70710678f);
+
+/// Собирает поворот каркас→Newton из матрицы образов осей базиса. Образы осей
+/// проверяет юнит-тест: right→правый X, up→верхний Y, forward→курс Z.
+private Quaternionf carToNewtonBasis()
+{
+    Matrix4x4f fromBasis = Matrix4x4f([
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, -1.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f]);
+    return Quaternionf.fromMatrix(fromBasis);
+}
 
 /// Точка из координат каркаса в координаты мира Newton.
 vec3 toNewtonPos(const vec3 carPos)
@@ -399,6 +412,23 @@ unittest
         minZ = min(minZ, g.nodes[a.node].pos.z);
     assert(abs(offOld.z - (wheelRadius + dropHeight - minZ)) < 1e-5f,
         "радиус по умолчанию сохраняет прежнюю раскладку");
+}
+
+unittest
+{
+    // Поворот каркас→Newton задаёт образы осей базиса: right остаётся правым,
+    // up становится up Newton, forward — курсом Newton. Литерал хранится
+    // отдельно (см. `carToNewtonQuat`) — сверяем его через базис.
+    Quaternionf q = carToNewtonBasis();
+    const vec3 rx = q.rotate(right);
+    const vec3 ry = q.rotate(up);
+    const vec3 rz = q.rotate(forward);
+    assert(abs(rx.x - 1.0f) < 1e-5f && abs(rx.y) < 1e-5f && abs(rx.z) < 1e-5f,
+        "right каркаса остаётся правым в Newton");
+    assert(abs(ry.x) < 1e-5f && abs(ry.y - 1.0f) < 1e-5f && abs(ry.z) < 1e-5f,
+        "up каркаса становится up Newton");
+    assert(abs(rz.x) < 1e-5f && abs(rz.y) < 1e-5f && abs(rz.z - 1.0f) < 1e-5f,
+        "forward каркаса становится курсом Newton");
 }
 
 unittest
