@@ -571,6 +571,8 @@ class BuggyScene: Scene
                 liveCar[idx].rotation = s.orientation;
             }
         }
+
+        carRoot.updateTransformationTopDown();
     }
 
     private void stopLiveCar()
@@ -632,6 +634,8 @@ class BuggyScene: Scene
             auto buggy = new Buggy(placedFrame(f.get.frame));
             drawBuggy(buggy, vec3(laneX, 0.0f, 0.0f) + backward * galleryBack);
         }
+
+        galleryRoot.updateTransformationTopDown();
     }
 
     /// Рисует машину из Buggy: статичные балки и колёса. `off` — сдвиг витрины
