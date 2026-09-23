@@ -63,23 +63,23 @@ Genotype startGenome(const Grammar gr)
     set("segment", [0u]);
     set("segMode", [0u]);
 
-    // Две балки подряд: `beamList = [0, 1]` — сначала «продолжить»
-    // (продукция [beam, beamList]), затем «закончить» ([beam]). Обе растут
-    // из последнего созданного узла: первая — из seed, вторая — из средней
-    // ноды, поэтому `startRef` — refLast на оба кодирующих кодона.
+    // Две балки из центра в разные стороны (гироскутер): `beamList=[0,1]`;
+    // первая растёт из seed влево (refLast), вторая — из того же центра вправо
+    // (refBase), поэтому `startRef` — [refLast, refBase].
     set("beamList", [0u, 1u]);
     set("beam", [0u]);
-    set("startRef", [0u, 0u]);
+    set("startRef", [0u, 1u]);
     set("endRef", [0u, 0u]);
 
     // Дельта конца каждой балки — «единичный вектор направления × множитель
-    // длины»: по половине поперечного пролёта (0.6 + 0.6 = 1.2 м суммарно,
-    // на манер гироскутера), по ходу/вверх — ноль. По кодону на балку.
-    enum float beamLen = 1.2f;
-    const vBeam = left * (beamLen / 2.0f);
-    set("forward", [u(vBeam.x, -1.5f, 1.5f), u(vBeam.x, -1.5f, 1.5f)]);
-    set("right", [u(vBeam.y, -1.5f, 1.5f), u(vBeam.y, -1.5f, 1.5f)]);
-    set("up", [u(vBeam.z, -1.5f, 1.5f), u(vBeam.z, -1.5f, 1.5f)]);
+    // длины»: первая влево на полпролёта, вторая вправо на полпролёта
+    // (1.2 + 1.2 = 2.4 м колея), по ходу/вверх — ноль. По кодону на балку.
+    enum float beamLen = 2.4f;
+    const vBeamLeft = left * (beamLen / 2.0f);
+    const vBeamRight = right * (beamLen / 2.0f);
+    set("forward", [u(vBeamLeft.x, -1.5f, 1.5f), u(vBeamRight.x, -1.5f, 1.5f)]);
+    set("right", [u(vBeamLeft.y, -1.5f, 1.5f), u(vBeamRight.y, -1.5f, 1.5f)]);
+    set("up", [u(vBeamLeft.z, -1.5f, 1.5f), u(vBeamRight.z, -1.5f, 1.5f)]);
     set("radius", [u(0.05f, 0.02f, 0.06f), u(0.05f, 0.02f, 0.06f)]);
     // Активатор-ингибитор Nodal/Lefty на нуле: стартовая пара (когда
     // раздвоится) зеркально-точная; эволюция сама добавит асимметрию,
@@ -93,8 +93,8 @@ Genotype startGenome(const Grammar gr)
     set("anchorList", [0u, 1u]);
     set("anchor", [0u, 0u]);
     set("anchorKind", [1u, 1u]);
-    // Якоря на внешних концах цепочки: seed — узел 0, конец второй балки — 2.
-    set("idx", [0u, 2u]);
+    // Якоря на внешних концах балок: левый конец — узел 1, правый — узел 2.
+    set("idx", [1u, 2u]);
     // Радиус колёс: оба якоря стартуют с `defaultWheelRadius`.
     set("wheelRadius", [u(defaultWheelRadius, 0.05f, 0.375f),
         u(defaultWheelRadius, 0.05f, 0.375f)]);
@@ -114,13 +114,14 @@ unittest
     auto may = develop(gr, genome);
     assert(!may.isNull, "стартовая хромосома должна развиваться");
     const f = may.get.frame;
-    // Две балки подряд: 0—1 и 1—2, средняя нода 1 общая.
+    // Гироскутер: две балки из центра в разные стороны — 0—1 и 0—2,
+    // центральная нода 0 общая.
     assert(f.nodes.length == 3);
     assert(f.beams.length == 2);
     assert(f.beams[0].a == 0 && f.beams[0].b == 1);
-    assert(f.beams[1].a == 1 && f.beams[1].b == 2);
+    assert(f.beams[1].a == 0 && f.beams[1].b == 2);
     assert(f.anchors.length == 2);
-    assert(f.anchors[0].kind == AnchorKind.motorWheel && f.anchors[0].node == 0);
+    assert(f.anchors[0].kind == AnchorKind.motorWheel && f.anchors[0].node == 1);
     assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 2);
     assert(abs(f.anchors[0].radius - defaultWheelRadius) < 1e-6f
         && abs(f.anchors[1].radius - defaultWheelRadius) < 1e-6f,
