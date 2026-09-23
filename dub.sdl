@@ -7,6 +7,10 @@ dependency "dagon" version="~>1.6.0"
 dependency "dagon:newton" version="~>1.6.0"
 dependency "fast_noise" version="~>1.0.5"
 
+// Кабина вшивается в бинарник строковым import("driver_seat_boundary.obj")
+// в frame.cockpit; кортеж разрешается из assets на этапе компиляции.
+stringImportPaths "assets"
+
 // Копии libnewton.so + libdg*.so (copyFiles из dagon:newton) складываются в
 // корень проекта; dlopen по имени ищет их только через LD_LIBRARY_PATH,
 // поэтому dub run обязан выставлять его перед запуском целевой программы.

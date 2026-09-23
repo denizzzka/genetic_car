@@ -31,12 +31,13 @@ import std.file : exists, read;
 import dlib.core.memory;
 import dlib.core.stream;
 import dlib.math.quaternion;
+import dlib.math.vector;
 
 import dagon.resource.obj;
 import dagon.graphics.mesh;
 import dagon.ext.newton;
 
-import frame.frame : origin;
+import frame.frame : origin, up, right, forward;
 import physics_world.physics : ensureNewtonLoaded, newtonBodyMatrix, PhysicsWorld;
 
 /// Параметры интерпретации OBJ-файла.
@@ -44,6 +45,11 @@ struct ObjLoadOptions
 {
     /// Масштаб координат файла в метры. Проект хранит границы в миллиметрах.
     float scale = 0.001f;
+
+    /// Направления каркаса для осей OBJ (x, y, z); по умолчанию идентичность.
+    vec3 axisX = vec3(1.0f, 0.0f, 0.0f);
+    vec3 axisY = vec3(0.0f, 1.0f, 0.0f);
+    vec3 axisZ = vec3(0.0f, 0.0f, 1.0f);
 }
 
 /// Результат загрузки: меш dagon, готовый и к рендеру, и к физике.
@@ -72,7 +78,8 @@ ObjModel loadObjText(string text, const ObjLoadOptions options = ObjLoadOptions.
     return buildObjModel(cast(ubyte[]) text, "<текст>", options);
 }
 
-/// Общая сборка: парсинг встроенным читателем, перевод координат в метры.
+/// Общая сборка: парсинг встроенным читателем, перенос осей OBJ на базис
+/// каркаса и перевод координат в метры.
 private ObjModel buildObjModel(ubyte[] data, string filename,
     const ObjLoadOptions options)
 {
@@ -83,13 +90,23 @@ private ObjModel buildObjModel(ubyte[] data, string filename,
     enforce(asset.loadThreadSafePart(filename, stream, null, null),
         "не удалось разобрать «" ~ filename ~ "»");
 
-    const float scale = options.scale;
-    if (scale != 1.0f)
+    const vec3 ax = options.axisX;
+    const vec3 ay = options.axisY;
+    const vec3 az = options.axisZ;
+    foreach (ref v; asset.mesh.vertices)
     {
-        foreach (ref v; asset.mesh.vertices)
-            v *= scale;
-        asset.mesh.calcBoundingBox();
+        const vec3 src = v;
+        v = src.x * ax + src.y * ay + src.z * az;
+        v *= options.scale;
     }
+    // Базис каркаса ортонормирован — нормали поворачиваются как вершины.
+    foreach (ref n; asset.mesh.normals)
+    {
+        const vec3 src = n;
+        n = src.x * ax + src.y * ay + src.z * az;
+        n.normalize();
+    }
+    asset.mesh.calcBoundingBox();
 
     ObjModel model;
     model.asset = asset;
@@ -194,16 +211,22 @@ unittest
     if (!exists("assets/driver_seat_boundary.obj"))
         return;
 
-    auto model = loadObjMesh("assets/driver_seat_boundary.obj");
+    // Отображение осей OBJ на каркас, как в loadCockpit.
+    ObjLoadOptions opt;
+    opt.axisX = right;
+    opt.axisY = up;
+    opt.axisZ = forward;
+    auto model = loadObjMesh("assets/driver_seat_boundary.obj", opt);
     scope (exit) Delete(model.asset);
 
     assert(model.mesh.indices.length == 20, "20 треугольников корпуса");
     assert(model.mesh.vertices.length == 60, "по 3 вершины на треугольник");
 
-    // Масштаб мм → м: первая вершина (-350, -449, -695) мм.
+    // Масштаб мм → м и Axes: первая вершина (-350, -449, -695) мм
+    // даёт каркасные (-0.35, +0.695, -0.449).
     assert(abs(model.mesh.vertices[0].x - (-0.35f)) < 1e-5f);
-    assert(abs(model.mesh.vertices[0].y - (-0.449f)) < 1e-5f);
-    assert(abs(model.mesh.vertices[0].z - (-0.695f)) < 1e-5f);
+    assert(abs(model.mesh.vertices[0].y - 0.695f) < 1e-5f);
+    assert(abs(model.mesh.vertices[0].z - (-0.449f)) < 1e-5f);
 
     foreach (ref idx; model.mesh.indices)
         foreach (i; idx)
