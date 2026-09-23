@@ -625,11 +625,17 @@ final class BuggyPhysics
         BodyState s;
         if (master is null)
             return s;
-        // Кабина жёстко едет за мастером: поворот и перенос — истинное
-        // вращение мастера (как у балок в updateBeamPuppets).
+        // Кабина жёстко едет за мастером: поворот и перенос — истинное вращение
+        // мастера (как у балок в updateBeamPuppets). Оффсет задан в координатах
+        // каркаса: в пространство мастера его приводит тот же перевод, что и
+        // всю геометрию (toNewtonPos). Ориентация наружу уходит в координатах
+        // каркаса, как у балок (иначе при развороте машины кабина «плывёт»
+        // относительно рамы): истинный поворот мастера, спряжённый carToNewton.
         Quaternionf mTrue = master.rotation.conj;
-        s.position = toCarPos(master.position.xyz) + mTrue.rotate(cockpitLocal_);
-        s.orientation = mTrue;
+        Quaternionf qcn = carToNewtonQuat;
+        s.position = toCarPos(master.position.xyz
+            + mTrue.rotate(toNewtonPos(cockpitLocal_)));
+        s.orientation = qcn.conj * mTrue * qcn;
         return s;
     }
 
