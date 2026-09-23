@@ -708,17 +708,15 @@ class BuggyScene: Scene
             }
         }
 
-        // Кабина: низ (seed) стоит на узле 0, меш в координатах каркаса.
-        // В живом заезде ориентацию даёт мастер (`toCarRot(master.rotation)`),
-        // а у покоящегося мастера она равна `toCarRot(Quaternionf.identity)` —
-        // компенсация кажущейся −90° вокруг X кабиной сущности, ведь корень
-        // витрины повёрнут на −90°. Центр меша (0,0,0 OBJ) — ЦМ кабины,
-        // поэтому сдвиг на −seed, как и в физике (comCabin = node0−seed).
+        // Кабина: меш уже в координатах каркаса и стоит низом (seed) на узле 0,
+        // поэтому поворот тождественный — прежняя компенсация toCarRot больше
+        // не нужна. Центр меша (0,0,0 OBJ) — ЦМ кабины: сдвиг на −seed,
+        // как в физике (comCabin = node0−seed).
         auto eCab = addEntity(galleryRoot);
         eCab.drawable = meshCockpit;
         eCab.material = matCockpit;
         eCab.position = buggy.frame.nodes[0].pos - cockpitGeometry().seed + off;
-        eCab.rotation = toCarRot(Quaternionf.identity);
+        eCab.rotation = Quaternionf.identity;
     }
 
     private void addWheel(const vec3 pos, const vec3 axle, Material mat,

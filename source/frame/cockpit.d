@@ -21,7 +21,8 @@ import std.math : abs;
 import dlib.core.memory;
 import dlib.math.vector;
 
-import frame.objmesh : ObjModel, loadObjText;
+import frame.frame : right, up, forward;
+import frame.objmesh : ObjModel, loadObjText, ObjLoadOptions;
 
 /// Текст меша кабины, вшитый в бинарник компилятором (нужен
 /// `stringImportPaths "assets"` в dub.sdl).
@@ -30,9 +31,10 @@ enum cockpitObjText = import("driver_seat_boundary.obj");
 /// Масса кабины, кг.
 enum float cockpitMass = 100.0f;
 
-/// Диагональ момента инерции кабины в осях OBJ-файла (Ixx, Iyy, Izz), кг·м².
-/// Задана дизайном; соответствует setMassSpaceInertiaTensor(16.7, 16.7, 8.5).
-enum vec3 cockpitInertia = vec3(16.7f, 16.7f, 8.5f);
+/// Диагональ момента инерции кабины в осях каркаса (Ixx, Iyy, Izz), кг·м².
+/// Задана дизайном в осях OBJ (16.7, 16.7, 8.5); 8.5 — вокруг длинной оси
+/// (перед-зад), в каркасе это ось y.
+enum vec3 cockpitInertia = vec3(16.7f, 8.5f, 16.7f);
 
 /// Геометрия кабины, вычисленная из меша.
 struct CockpitGeometry
@@ -51,7 +53,12 @@ struct CockpitGeometry
 /// Загрузить меш кабины из вшитого текста (парсинг в рантайме).
 ObjModel loadCockpit()
 {
-    return loadObjText(cockpitObjText);
+    // Оси OBJ в каркасе: x — right, y — up, z — forward (длина, перед-зад).
+    ObjLoadOptions opt;
+    opt.axisX = right;
+    opt.axisY = up;
+    opt.axisZ = forward;
+    return loadObjText(cockpitObjText, opt);
 }
 
 // Геометрия кабины — константа дизайна: меш вшит в бинарник, поэтому она
@@ -165,6 +172,6 @@ unittest
 
     // Константы дизайна на месте.
     assert(cockpitMass == 100.0f);
-    assert(cockpitInertia.x == 16.7f && cockpitInertia.y == 16.7f
-        && cockpitInertia.z == 8.5f);
+    assert(cockpitInertia.x == 16.7f && cockpitInertia.y == 8.5f
+        && cockpitInertia.z == 16.7f);
 }
