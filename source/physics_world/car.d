@@ -374,6 +374,11 @@ final class BuggyPhysics
     /// пересматривается по мере движения (ориентация колеса не влияет).
     private float[] wheelDriveSign;
 
+    /// Осевой момент инерции каждого колеса: порог момента I·α_max, выше
+    /// которого ни привод, ни регулятор крутки колесу крутку не добавляют
+    /// (иначе малое колесо разгоняется в разлёт).
+    private float[] wheelAxialMom;
+
     /// Первый же провал заезда (латится): сенсорные колбэки и геометрия
     /// копят сюда причину, `beamFailure()` её выдаёт.
     private BeamFailure beamFail_;
@@ -472,6 +477,7 @@ final class BuggyPhysics
         wheelBodies.length = 0;
         wheelNodes.length = 0;
         wheelDriveSign.length = 0;
+        wheelAxialMom.length = 0;
         beamFail_ = BeamFailure.none;
     }
 
@@ -487,7 +493,7 @@ final class BuggyPhysics
             return;
 
         applyDrive(throttle);
-        applyWheelSpinGovernor();
+        applyWheelSpinGovernor(dt);
         world.update(dt);
         syncBodies();
         updateBeamPuppets();
@@ -500,6 +506,9 @@ final class BuggyPhysics
     /// Сила мотора — наследуемый параметр каркаса (`Frame.motorPower`),
     /// знак силы — направление привода: положительный момент едет вперёд по
     /// курсу, отрицательный разворачивает вращение и едет назад (backward).
+    /// Момент ограничен I·α_max: у малого колеса нет ни инерции, ни сцепления
+    /// с грунтом, чтобы принять полный момент двигателя без разлёта (см.
+    /// `maxWheelAngularAccel`).
     private void applyDrive(float throttle)
     {
         if (throttle == 0.0f || master is null)
@@ -516,9 +525,13 @@ final class BuggyPhysics
                 // только вокруг неё), а знак — зафиксированный на сборке:
                 // колесо крутится по «генному» направлению оси, текущая
                 // ориентация знак не разворачивает.
+                float t = throttle * fr.motorPower;
+                const float cap = wheelAxialMom[i] * maxWheelAngularAccel;
+                if (abs(t) > cap)
+                    t = copysign(cap, t);
                 const vec3 dir = wheelDriveSign[i]
                     * w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
-                w.addTorque(dir * (throttle * fr.motorPower));
+                w.addTorque(dir * t);
             }
     }
 
@@ -531,7 +544,12 @@ final class BuggyPhysics
     /// на скорости выше него колесо не разгоняется даже ровно по грунту
     /// (иначе каркас разнесло бы за красивым лимитом). Действует на все
     /// колёса, не только на моторные: с каждой падает отряд.
-    private void applyWheelSpinGovernor()
+    ///
+    /// Агрессивность рассчитывается по колесу: gain не выше стабильной
+    /// границы P-петли (2I/dt, запас `wheelSpinGainMargin`), момент — как и
+    /// привод, в пределах I·α_max. Иначе у малого колеса петля расходится
+    /// и вместо лёгкого лимита байка получаем разлёт каркаса.
+    private void applyWheelSpinGovernor(double dt)
     {
         if (master is null)
             return;
@@ -550,8 +568,12 @@ final class BuggyPhysics
                 const float excess = abs(spin) - allowedSurface / r;
                 if (excess > 0.0f)
                 {
+                    const float I = wheelAxialMom[i];
+                    const float gain = min(wheelSpinGain,
+                        wheelSpinGainMargin * 2.0f * I / cast(float)dt);
+                    float t = min(excess * gain, I * maxWheelAngularAccel);
                     const float dir = (spin < 0.0f) ? -1.0f : 1.0f;
-                    w.addTorque(axle * (-dir * excess * wheelSpinGain));
+                    w.addTorque(axle * (-dir * t));
                 }
             }
     }
@@ -649,6 +671,47 @@ final class BuggyPhysics
     // Debug-only хелперы обёрнуты в block-scoped `debug { }`: метка `debug:`
     // в release выключала всю остальную часть класса до его конца.
     debug {
+    /// Максимальная линейная скорость тел (мастер + колёса): быстрый признак
+    /// взрыва шага — скорость, разлетающаяся за десятки м/с до NaN.
+    float dbgMaxLinSpeed() @property
+    {
+        float m = master !is null ? master.velocity.length : 0.0f;
+        foreach (w; wheelBodies)
+            if (w !is null)
+                m = max(m, w.velocity.length);
+        return m;
+    }
+
+    /// Максимальная угловая скорость тел — признак безудержной крутки.
+    float dbgMaxAngSpeed() @property
+    {
+        float m = master !is null ? master.angularVelocity.length : 0.0f;
+        foreach (w; wheelBodies)
+            if (w !is null)
+                m = max(m, w.angularVelocity.length);
+        return m;
+    }
+
+    /// Скорости всех тел с меткой теле/индекса — какой элемент улетает.
+    struct DbgBodySpeed
+    {
+        string kind;
+        size_t idx;
+        float lin, ang;
+    }
+    DbgBodySpeed[] dbgBodySpeeds() @property
+    {
+        DbgBodySpeed[] res;
+        if (master !is null)
+            res ~= DbgBodySpeed("мастер", 0,
+                master.velocity.length, master.angularVelocity.length);
+        foreach (i, w; wheelBodies)
+            if (w !is null)
+                res ~= DbgBodySpeed("колесо", i,
+                    w.velocity.length, w.angularVelocity.length);
+        return res;
+    }
+
     /// Сырое (кэшированное dagon'ом) состояние мастера для отладки.
     BodyState dbgMasterState() @property
     {
@@ -1017,6 +1080,7 @@ final class BuggyPhysics
         wheelBodies.length = frame.anchors.length;
         wheelNodes.length = frame.anchors.length;
         wheelDriveSign.length = frame.anchors.length;
+        wheelAxialMom.length = frame.anchors.length;
 
         foreach (i, a; frame.anchors)
         {
@@ -1052,6 +1116,7 @@ final class BuggyPhysics
             const float perp = (3.0f * (r2 + ri2) + h2) / 12.0f * mass;
             const float axial = 0.5f * (r2 + ri2) * mass;
             wheel.setMassMatrix(mass, perp, axial, perp);
+            wheelAxialMom[i] = axial;
 
             // Axle across the course: the disc plane faces forward, so the
             // wheel rolls straight instead of scrubbing sideways on launch.
