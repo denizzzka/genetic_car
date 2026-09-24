@@ -334,10 +334,10 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
             break;
         }
 
-        const cabinGround = cabinGroundContact(physics);
-        if (cabinGround.length)
+        const cabinGround = physics.cabinTouchesGround();
+        if (cabinGround)
         {
-            r.why = cabinGround;
+            r.why = "кабина касается земли";
             break;
         }
 
@@ -365,21 +365,6 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
 
     r.survived = true;
     return r;
-}
-
-/// Касается ли кабина земли в текущем состоянии: низ корпуса (точка опоры на
-/// узле 0) ушёл под опорную плоскость — сход. Проверяется по живым состояниям
-/// симуляции, поэтому в отличие от корпуса (монолит) землю может задеть только
-/// качание/крен в заезде. Касание — уже провал, допуска нет.
-private string cabinGroundContact(BuggyPhysics physics)
-{
-    const cg = cockpitGeometry();
-    auto s = physics.cockpitState;
-    const vec3 bottomZ = s.orientation.rotate(vec3(0.0f, 0.0f, -cg.cogHeight));
-    const vec3 bottom = s.position.xyz + bottomZ;
-    if (physics.groundHeightAt(bottom) - bottom.z > 0.0f)
-        return "кабина касается земли";
-    return "";
 }
 
 /// Счёт заезда: доля полной дистанции × средняя скорость доезда (в долях номинала).

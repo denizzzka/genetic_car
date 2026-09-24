@@ -554,6 +554,12 @@ class BuggyScene: Scene
             liveFailTime = 0.0;
             writefln("live: заезд оборван (%s) — машина заморожена, ждём N", stepFailure);
         }
+        else if (livePhysics.cabinTouchesGround())
+        {
+            liveFailed_ = true;
+            liveFailTime = 0.0;
+            writefln("live: кабина коснулась земли — машина заморожена, ждём N");
+        }
 
         updateLiveCar();
     }

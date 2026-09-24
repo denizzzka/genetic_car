@@ -48,6 +48,12 @@ struct CockpitGeometry
 
     /// Габарит кабины по осям (max −min), м.
     vec3 dims;
+
+    /// Углы нижней грани корпуса относительно точки опоры (координаты
+    /// каркаса): касание земли любой точкой этой грани — сход. Одной точки
+    /// опоры при крене не хватает: край корпуса упирается в грунт раньше
+    /// вертикали под центром масс.
+    vec3[4] floorCorners;
 }
 
 /// Загрузить меш кабины из вшитого текста (парсинг в рантайме).
@@ -120,6 +126,18 @@ CockpitGeometry cockpitGeometry(const ObjModel model)
     g.seed = best;
     g.cogHeight = -best.z;
     assert(g.cogHeight > 0.0f, "кабина: центр масс не выше точки опоры");
+
+    // Углы нижней грани — от минимума по вертикали (плоское дно) и раскрыва
+    // по габаритам; от центра масс отнимается точка опоры, чтобы углы были
+    // в координатах места крепления (низ на узле 0).
+    foreach (ix; 0 .. 2)
+        foreach (iy; 0 .. 2)
+        {
+            const float px = ix ? maxP.x : minP.x;
+            const float py = iy ? maxP.y : minP.y;
+            g.floorCorners[ix * 2 + iy] =
+                vec3(px - best.x, py - best.y, minP.z - best.z);
+        }
     return g;
 }
 
@@ -169,6 +187,22 @@ unittest
     assert(g.dims.x > 0.0f && g.dims.x < 3.0f);
     assert(g.dims.y > 0.0f && g.dims.y < 3.0f);
     assert(g.dims.z > 0.0f && g.dims.z < 3.0f);
+
+    // Нижняя грань — плоское дно (может лежать ниже точки опоры: луч из ЦМ
+    // бьёт в приподнятый центр днища), раскрыв по габаритам.
+    foreach (c; g.floorCorners)
+        assert(c.z <= 0.0f, "угол пола не выше точки опоры");
+    const float floorZ = g.floorCorners[0].z;
+    foreach (c; g.floorCorners)
+        assert(abs(c.z - floorZ) < 1e-4f, "углы пола в одной плоскости");
+    float xlo = float.max, xhi = -float.max, ylo = float.max, yhi = -float.max;
+    foreach (c; g.floorCorners)
+    {
+        xlo = xlo < c.x ? xlo : c.x; xhi = xhi > c.x ? xhi : c.x;
+        ylo = ylo < c.y ? ylo : c.y; yhi = yhi > c.y ? yhi : c.y;
+    }
+    assert(abs(xhi - xlo - g.dims.x) < 1e-4f, "углы раскрывают габарит по ширине");
+    assert(abs(yhi - ylo - g.dims.y) < 1e-4f, "углы раскрывают габарит по длине");
 
     // Константы дизайна на месте.
     assert(cockpitMass == 100.0f);

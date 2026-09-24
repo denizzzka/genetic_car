@@ -668,6 +668,26 @@ final class BuggyPhysics
         return s;
     }
 
+    /// Касается ли кабина земли: любой угол нижней грани корпуса ушёл под
+    /// опорную плоскость (строго, без допуска). Проверяется по живым
+    /// состояниям симуляции, поэтому землю может задеть только крен/наклон
+    /// в заезде. Идём по углам, а не по точке под ЦМ: при крене корпус
+    /// упирается краем задолго до того, как его вертикаль погрузится.
+    bool cabinTouchesGround()
+    {
+        if (master is null)
+            return false;
+        const cg = cockpitGeometry();
+        auto s = cockpitState;
+        foreach (offset; cg.floorCorners)
+        {
+            const vec3 p = s.position.xyz + s.orientation.rotate(offset);
+            if (groundHeightAt(p) - p.z > 0.0f)
+                return true;
+        }
+        return false;
+    }
+
     // Debug-only хелперы обёрнуты в block-scoped `debug { }`: метка `debug:`
     // в release выключала всю остальную часть класса до его конца.
     debug {
