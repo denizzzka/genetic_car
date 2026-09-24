@@ -1,12 +1,12 @@
 module genetics.fitness;
 
-import std.algorithm : min, max, clamp;
+import std.algorithm : min, max, clamp, sort;
 import std.math;
 
 import dlib.math.vector;
 
 import frame.frame;
-import frame.cockpit : cockpitGeometry;
+import frame.cockpit : cockpitGeometry, CockpitGeometry;
 import genetics.buggyast;
 import physics_world;
 
@@ -179,18 +179,68 @@ float wheelAnchorSpacing(const Frame f)
     return best;
 }
 
+/// Пол запретной зоны на курсе y (локальный, от ЦМ кабины): контур днища,
+/// интерполяция хребта. За пределами станций — крайние значения контура.
+private float cabinFloor(const CockpitGeometry cg, float yLocal)
+{
+    const spine = cg.spine;
+    if (yLocal <= spine[0].y)
+        return spine[0].z;
+    if (yLocal >= spine[$ - 1].y)
+        return spine[$ - 1].z;
+    foreach (i; 1 .. spine.length)
+        if (yLocal <= spine[i].y)
+        {
+            const t = (yLocal - spine[i - 1].y)
+                / (spine[i].y - spine[i - 1].y);
+            return spine[i - 1].z + (spine[i].z - spine[i - 1].z) * t;
+        }
+    assert(false);
+}
+
 /// Пересекает ли отрезок строгую внутренность зоны кабины: параллелепипед
-/// `lo..hi` в координатах каркаса. Балка в самой плоскости пола зону
-/// не задевает — ловится только реальный проход сквозь корпус.
+/// `lo..hi` с полом по контуру днища (повторяет наклон). Балка в самой
+/// плоскости пола зону не задевает — ловится только реальный проход сквозь
+/// корпус.
 private bool beamPiercesCabin(const vec3 a, const vec3 b,
-    const vec3 lo, const vec3 hi)
+    const vec3 lo, const vec3 hi, const CockpitGeometry cg,
+    const vec3 node0)
 {
     const vec3 d = b - a;
     float tmin = 0.0f, tmax = 1.0f;
     if (!slab(tmin, tmax, a.x, d.x, lo.x, hi.x)) return false;
     if (!slab(tmin, tmax, a.y, d.y, lo.y, hi.y)) return false;
-    if (!slab(tmin, tmax, a.z, d.z, lo.z, hi.z)) return false;
-    return true;
+    if (!slab(tmin, tmax, a.z, d.z, -float.max, hi.z)) return false;
+    if (!(tmin < tmax))
+        return false;
+
+    // Изломы пола (станции хребта) и границы окна — кандидаты на максимум
+    // g(t) = z(t) − пол(y(t)); внутри каждого вдоль-линейного куска максимум
+    // достигается на его концах.
+    float[3 + 8] tPts;
+    tPts[0] = tmin;
+    size_t n = 1;
+    if (abs(d.y) > 1e-12f)
+        foreach (s; cg.spine)
+        {
+            const float t = (node0.y + s.y - a.y) / d.y;
+            if (t > tmin + 1e-9f && t < tmax - 1e-9f)
+            {
+                assert(n + 1 < tPts.length, "станций больше, чем ждём");
+                tPts[n++] = t;
+            }
+        }
+    tPts[n++] = tmax;
+    sort(tPts[0 .. n]);
+
+    foreach (i; 0 .. n)
+    {
+        const vec3 p = a + d * tPts[i];
+        const float g = p.z - (node0.z + cabinFloor(cg, p.y - node0.y));
+        if (g > 1e-6f)
+            return true;
+    }
+    return false;
 }
 
 /// Слэб-тест одной оси: сужает [tmin, tmax] на пересечение луча с полосой.
@@ -211,20 +261,22 @@ private bool slab(ref float tmin, ref float tmax,
 }
 
 /// Касается ли колесо кабины: центр диска внутри корпуса, расширенного на
-/// радиус колеса. Колесо, упирающееся в кабину снизу или сбоку, — касание;
-/// только чисто свободный корпус проходит.
+/// радиус колеса; низ корпуса — по контуру днища на курсе колеса.
 private bool wheelHitsCabin(const vec3 p, float r,
-    const vec3 lo, const vec3 hi)
+    const vec3 lo, const vec3 hi, const CockpitGeometry cg,
+    const vec3 node0)
 {
-    return p.x >= lo.x - r && p.x <= hi.x + r
-        && p.y >= lo.y - r && p.y <= hi.y + r
-        && p.z >= lo.z - r && p.z <= hi.z + r;
+    if (!(p.x >= lo.x - r && p.x <= hi.x + r
+        && p.y >= lo.y - r && p.y <= hi.y + r))
+        return false;
+    const float floorZ = node0.z + cabinFloor(cg, p.y - node0.y);
+    return p.z + r > floorZ && p.z - r < hi.z;
 }
 
 /// Первое касание корпуса кабины в каркасе: пусто — никто её не трогает.
 /// Запретная зона — параллелепипед от узла 0 (ЦМ кабины, совмещён с началом
-/// координат меша) по AABB меша. Эфемерные балки крепления корпуса зону не
-/// проверяют: они не входят в каркас.
+/// координат меша) по AABB меша, пол по контуру днища (хребет). Эфемерные
+/// балки крепления корпуса зону не проверяют: они не входят в каркас.
 private string frameCabinContact(const Frame f)
 {
     if (f.nodes.length == 0)
@@ -237,12 +289,14 @@ private string frameCabinContact(const Frame f)
     {
         if (cast(Beam) b is null)
             continue;
-        if (beamPiercesCabin(f.nodes[b.a].pos, f.nodes[b.b].pos, lo, hi))
+        if (beamPiercesCabin(f.nodes[b.a].pos, f.nodes[b.b].pos,
+            lo, hi, cg, f.nodes[0].pos))
             return "балка каркаса проходит сквозь кабину";
     }
 
     foreach (a; f.anchors)
-        if (wheelHitsCabin(f.nodes[a.node].pos, a.radius, lo, hi))
+        if (wheelHitsCabin(f.nodes[a.node].pos, a.radius, lo, hi, cg,
+            f.nodes[0].pos))
             return "колесо заходит в кабину";
 
     return "";

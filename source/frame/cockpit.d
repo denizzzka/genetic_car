@@ -6,9 +6,9 @@
  * через `frame.objmesh` — свой парсер не пишем.
  *
  * Крепление к каркасу — через центр масс: узел 0 каркаса совмещён с ЦМ
- * кабины (0,0,0 координат OBJ). На плоскости днища (z = minP.z) лежит
- * «хребет» — станции (x = 0) с боковыми парами в станциях, где рёбра
- * днища параллельны оси ширины; они служат точками крепления балок.
+ * кабины (0,0,0 координат OBJ). На контуре днища (пересечения рёбер меша
+ * с x = 0) лежит «хребет» — станции (x = 0) с боковыми парами в станциях,
+ * где рёбра днища параллельны оси ширины; они служат точками крепления.
  *
  * Оси координат OBJ-файла — базис каркаса (right = +X, forward = −Y,
  * up = +Z); единицы — миллиметры, перевод в метры делает
@@ -51,7 +51,8 @@ struct CockpitGeometry
     /// каркаса не проходит (запретная зона в fitness).
     vec3 minP, maxP;
 
-    /// «Хребет»: станции крепления, общая плоскость пола (keelZ = minP.z).
+    /// «Хребет»: станции крепления на контуре днища. Ширина x = 0; высота —
+    /// из пересечения рёбер меша с плоскостью x = 0 (повторяет наклон дна).
     vec3[] spine;
 
     /// Индексы станций хребта с боковыми точками (spineSideAt[i] → spine).
@@ -131,7 +132,7 @@ private void buildKeel(ref CockpitGeometry g, const ObjModel model)
 {
     enum float triEps = 1e-5f;
 
-    struct Station { float y; bool side; float half; }
+    struct Station { float y; float z; bool side; float half; }
 
     vec3[2][] seen;
     Station[] stations;
@@ -157,7 +158,7 @@ private void buildKeel(ref CockpitGeometry g, const ObjModel model)
                 const float t = a.x / (a.x - b.x);
                 const vec3 ip = a + (b - a) * t;
                 const bool xPar = abs(a.y - b.y) < triEps && abs(a.z - b.z) < triEps;
-                stations ~= Station(ip.y, xPar, xPar ? abs(a.x) : 0.0f);
+                stations ~= Station(ip.y, ip.z, xPar, xPar ? abs(a.x) : 0.0f);
             }
         }
     }
@@ -166,16 +167,15 @@ private void buildKeel(ref CockpitGeometry g, const ObjModel model)
     if (stations.length == 0)
         return;
 
-    const keelZ = g.minP.z;
     foreach (s; stations)
-        g.spine ~= vec3(0.0f, s.y, keelZ);
+        g.spine ~= vec3(0.0f, s.y, s.z);
     foreach (i; 0 .. stations.length)
         if (stations[i].side)
         {
             g.spineSideAt ~= i;
             const float h = stations[i].half;
-            g.spineSides ~= [vec3(h, stations[i].y, keelZ),
-                vec3(-h, stations[i].y, keelZ)];
+            g.spineSides ~= [vec3(h, stations[i].y, stations[i].z),
+                vec3(-h, stations[i].y, stations[i].z)];
         }
 }
 
@@ -232,19 +232,23 @@ unittest
     assert(xlo == g.minP.x && xhi == g.maxP.x, "углы пола на границе габарита x");
     assert(ylo == g.minP.y && yhi == g.maxP.y, "углы пола на границе габарита y");
 
-    // Хребет: станции по центру, общая плоскость дна корпуса.
+    // Хребет: станции по центру, повторяют контур днища (наклон от кормы
+    // к носу), все ниже центра масс.
     assert(g.spine.length == 5, "пять станций под днищем");
     foreach (s; g.spine)
     {
         assert(abs(s.x) < 1e-4f, "станции по оси ширины виляют");
-        assert(abs(s.z - g.minP.z) < 1e-4f, "станции на плоскости дна");
+        assert(s.z <= 0.0f && s.z >= g.minP.z, "станции на контуре днища");
     }
-    // Станции упорядочены от носа к корме, без повторов y.
-    float prevY = -float.max;
+    // Станции упорядочены от носа к корме, без повторов y; контур дна при
+    // этом монотонно понижается к корме.
+    float prevY = -float.max, prevZ = float.max;
     foreach (s; g.spine)
     {
         assert(s.y > prevY, "станции идут от носа к корме");
         prevY = s.y;
+        assert(s.z <= prevZ + 1e-4f, "контур днища без подъёмов к носу");
+        prevZ = s.z;
     }
 
     // Боковые пары: в станциях, где рёбра днища параллельны ширине.
