@@ -48,6 +48,7 @@ class BuggyScene: Scene
     Material matWheel;
     Material matDriveWheel;
     Material matCockpit;
+    Material matEphemeral;
 
     /// Держит меш кабины живым (dlib-память вне GC): из него берётся
     /// `meshCockpit`, а asset владеет вершинами.
@@ -77,6 +78,23 @@ class BuggyScene: Scene
     private Entity[] liveCar;
     private double liveSimTime;
     private double liveRunSeconds;
+
+    /// D: дебажное отображение — эфемерные балки красными цилиндрами,
+    /// кабина скрыта. Повторное нажатие возвращает обычный вид.
+    private bool debugSkeleton_;
+
+    /// Красные цилиндры эфемерных балок живого заезда (двигаются с мастером).
+    private Entity[] liveEphemeral;
+
+    /// Концы эфемерных балок в координатах каркаса: мировые позиции
+    /// каждый шаг даёт мастер (framePointWorld).
+    private vec3[2][] liveEph; // концы
+
+    /// Индекс кабины в liveCar — для показа/скрытия при переключении D.
+    private size_t liveCabIdx_ = size_t.max;
+
+    /// Тонкий радиус дебажных цилиндров эфемерных балок, м.
+    enum float ephVisRadius = 0.01f;
 
     /// Камера-орбита; в живом заезде плавно ведёт центр масс машины.
     private FreeviewComponent freeview;
@@ -173,6 +191,13 @@ class BuggyScene: Scene
         matDriveWheel.baseColorTexture = buildTireTexture(Color4f(0.55f, 0.08f, 0.08f, 1.0f));
         matDriveWheel.roughnessFactor = 0.9f;
         matDriveWheel.metallicFactor = 0.0f;
+
+        // Эфемерные балки в дебаге: тонкий красный металл, чтобы скелет
+        // читался на фоне серых масс. Текстура-градиент не нужна.
+        matEphemeral = addMaterial();
+        matEphemeral.baseColorFactor = Color4f(1.0f, 0.12f, 0.12f, 1.0f);
+        matEphemeral.roughnessFactor = 0.7f;
+        matEphemeral.metallicFactor = 0.1f;
 
         // Кабина-корпус: яркий не-металл, чтобы её ориентация читалась визуально
         // на фоне серых балок. Меш один на все сущности (галерея + live).
@@ -299,6 +324,8 @@ class BuggyScene: Scene
             toggleEvolution();
         if (eventManager.keyDown[KEY_V])
             toggleVisualization();
+        if (eventManager.keyDown[KEY_D])
+            toggleDebugSkeleton();
 
         if (jobThread !is null)
         {
@@ -393,6 +420,31 @@ class BuggyScene: Scene
             stopLiveCar();
             buildGallery();
         }
+    }
+
+    /// D: дебажный слой эфемерных балок вместо кабины и обратно.
+    private void toggleDebugSkeleton()
+    {
+        debugSkeleton_ = !debugSkeleton_;
+        rebuildLiveDebug();
+        buildGallery();
+    }
+
+    /// Перестройка дебажного слоя живого заезда: эфемерные балки заново,
+    /// кабина — в зависимости от режима.
+    private void rebuildLiveDebug()
+    {
+        removeLiveEphemeral();
+        if (debugSkeleton_ && livePhysics !is null)
+            buildLiveEphemeral();
+        setLiveCabinVisible(!debugSkeleton_);
+    }
+
+    /// Показ/скрытие кабины живого заезда — кабина последняя в liveCar.
+    private void setLiveCabinVisible(const bool on)
+    {
+        if (liveCabIdx_ < liveCar.length)
+            liveCar[liveCabIdx_].visible = on;
     }
 
     /// Переключение симулируемой особи — только вручную, по N.
@@ -521,7 +573,13 @@ class BuggyScene: Scene
             auto eCab = addEntity(carRoot);
             eCab.drawable = meshCockpit;
             eCab.material = matCockpit;
+            liveCabIdx_ = liveCar.length;
             liveCar ~= eCab;
+            if (debugSkeleton_)
+            {
+                eCab.visible = false;
+                buildLiveEphemeral();
+            }
             return true;
         }
 
@@ -575,12 +633,14 @@ class BuggyScene: Scene
 
     private void removeLiveEntities()
     {
+        removeLiveEphemeral();
         foreach (e; liveCar)
         {
             removeEntity(e);
             carRoot.removeChild(e);
         }
         liveCar.length = 0;
+        liveCabIdx_ = size_t.max;
     }
 
     private void updateLiveCar()
@@ -616,7 +676,64 @@ class BuggyScene: Scene
             liveCar[cabIdx].rotation = c.orientation;
         }
 
+        updateLiveEphemeral();
+
         carRoot.updateTransformationTopDown();
+    }
+
+    /// Эфемерные балки каркаса красным слоем: концы едут на мастере, поэтому
+    /// запоминаем только координаты каркаса и считаем мировые на каждом шаге.
+    private void buildLiveEphemeral()
+    {
+        if (livePhysics is null)
+            return;
+        const Frame fr = livePhysics.frame;
+        foreach (b; fr.beams)
+        {
+            if (cast(const Beam) b !is null)
+                continue;
+            const a = fr.nodes[b.a].pos;
+            const c = fr.nodes[b.b].pos;
+            if ((c - a).length < 1e-5f)
+                continue;
+            auto e = addEntity(carRoot);
+            e.drawable = meshBeam;
+            e.material = matEphemeral;
+            liveEphemeral ~= e;
+            liveEph ~= [a, c];
+        }
+    }
+
+    /// Мировые позиции эфемерных балок от мастера — как в updateLiveCar.
+    private void updateLiveEphemeral()
+    {
+        if (livePhysics is null)
+            return;
+        foreach (i, ends; liveEph)
+        {
+            if (i >= liveEphemeral.length)
+                break;
+            const a = livePhysics.framePointWorld(ends[0]);
+            const c = livePhysics.framePointWorld(ends[1]);
+            const dir = c - a;
+            const float length = dir.length;
+            if (length < 1e-5f)
+                continue;
+            liveEphemeral[i].position = (a + c) * 0.5f;
+            liveEphemeral[i].rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
+            liveEphemeral[i].scaling = Vector3f(ephVisRadius, length, ephVisRadius);
+        }
+    }
+
+    private void removeLiveEphemeral()
+    {
+        foreach (e; liveEphemeral)
+        {
+            removeEntity(e);
+            carRoot.removeChild(e);
+        }
+        liveEphemeral.length = 0;
+        liveEph.length = 0;
     }
 
     private void stopLiveCar()
@@ -689,8 +806,12 @@ class BuggyScene: Scene
         foreach (b; buggy.frame.beams)
         {
             const beam = cast(Beam) b;
-            if (beam is null) // эфемерные балки не рисуются
+            if (beam is null)
+            {
+                if (debugSkeleton_)
+                    drawEphemeralBeam(buggy.frame, b.a, b.b, off);
                 continue;
+            }
             const a = buggy.frame.nodes[b.a].pos + off;
             const b2 = buggy.frame.nodes[b.b].pos + off;
             const dir = b2 - a;
@@ -730,6 +851,27 @@ class BuggyScene: Scene
         eCab.material = matCockpit;
         eCab.position = buggy.frame.nodes[0].pos + off;
         eCab.rotation = Quaternionf.identity;
+        if (debugSkeleton_)
+            eCab.visible = false;
+    }
+
+    /// Тонкий красный цилиндр эфемерной балки витрины (зеркало live-слоя).
+    private void drawEphemeralBeam(const Frame fr, const size_t na, const size_t nb,
+        const vec3 off)
+    {
+        const a = fr.nodes[na].pos + off;
+        const c = fr.nodes[nb].pos + off;
+        const dir = c - a;
+        const float length = dir.length;
+        if (length < 1e-5f)
+            return;
+
+        auto e = addEntity(galleryRoot);
+        e.drawable = meshBeam;
+        e.material = matEphemeral;
+        e.position = (a + c) * 0.5f;
+        e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
+        e.scaling = Vector3f(ephVisRadius, length, ephVisRadius);
     }
 
     private void addWheel(const vec3 pos, const vec3 axle, Material mat,
