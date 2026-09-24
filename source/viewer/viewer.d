@@ -11,7 +11,7 @@ import std.random;
 import std.stdio : writefln;
 import frame.frame;
 import frame.frame : frameForward = forward, frameUp = up;
-import frame.cockpit : loadCockpit, cockpitGeometry;
+import frame.cockpit : loadCockpit;
 import frame.objmesh : ObjModel;
 import genetics;
 import physics_world;
@@ -489,16 +489,19 @@ class BuggyScene: Scene
             if (freeview !is null)
                 freeview.setTarget(-Vector3f(livePhysics.worldFocus));
 
-            // По одному цилиндру на каждую балку каркаса: порядок совпадает
-            // с BeamState[] из beamStates() (по Frame.beams).
+            // По одному цилиндру на каждую физическую балку каркаса: порядок
+            // совпадает с BeamState[] из beamStates() (по Frame.beams).
             foreach (b; frame.beams)
             {
+                const beam = cast(Beam) b;
+                if (beam is null)
+                    continue;
                 const float len =
                     (frame.nodes[b.b].pos - frame.nodes[b.a].pos).length;
                 auto e = addEntity(carRoot);
                 e.drawable = meshBeam;
                 e.material = matBeam;
-                e.scaling = Vector3f(asBeam(b).radius, len, asBeam(b).radius);
+                e.scaling = Vector3f(beam.radius, len, beam.radius);
                 liveCar ~= e;
             }
 
@@ -685,6 +688,9 @@ class BuggyScene: Scene
     {
         foreach (b; buggy.frame.beams)
         {
+            const beam = cast(Beam) b;
+            if (beam is null) // эфемерные балки не рисуются
+                continue;
             const a = buggy.frame.nodes[b.a].pos + off;
             const b2 = buggy.frame.nodes[b.b].pos + off;
             const dir = b2 - a;
@@ -697,7 +703,7 @@ class BuggyScene: Scene
             e.material = matBeam;
             e.position = (a + b2) * 0.5f;
             e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
-            e.scaling = Vector3f(asBeam(b).radius, length, asBeam(b).radius);
+            e.scaling = Vector3f(beam.radius, length, beam.radius);
         }
 
         foreach (anchor; buggy.frame.anchors)
@@ -716,14 +722,13 @@ class BuggyScene: Scene
             }
         }
 
-        // Кабина: меш уже в координатах каркаса и стоит низом (seed) на узле 0,
-        // поэтому поворот тождественный — прежняя компенсация toCarRot больше
-        // не нужна. Центр меша (0,0,0 OBJ) — ЦМ кабины: сдвиг на −seed,
-        // как в физике (comCabin = node0−seed).
+        // Кабина: меш уже в координатах каркаса, центр меша (0,0,0 OBJ) — ЦМ,
+// совмещён с узлом 0. Поворот тождественный — прежняя компенсация toCarRot
+// больше не нужна; сдвига на −seed, как в старой схеме, нет.
         auto eCab = addEntity(galleryRoot);
         eCab.drawable = meshCockpit;
         eCab.material = matCockpit;
-        eCab.position = buggy.frame.nodes[0].pos - cockpitGeometry().seed + off;
+        eCab.position = buggy.frame.nodes[0].pos + off;
         eCab.rotation = Quaternionf.identity;
     }
 

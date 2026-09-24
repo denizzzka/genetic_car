@@ -1,22 +1,20 @@
 module genetics.initial_data;
 
-// Стартовый геном эволюции: две балки подряд с общей средней нодой и два
-// моторных якоря, собранные в кодовоны напрямую.
+// Стартовый геном эволюции: «гироскутер» — две балки от боковых точек
+// скелета наружу, на внешних концах — два моторных якоря.
 
 import std.math : abs;
 
 import frame.frame;
-import frame.cockpit : cockpitGeometry;
 import physics_world.wheel : defaultWheelRadius;
 import genetics.sge;
 import genetics.buggygrammar;
 
-/// Стартовый геном: две поперечные балки подряд («гироскутер» с нодой
-/// посередине) и два якоря (колесо + моторное колесо) на внешних концах.
-/// Цепочка из двух балок важна кодированием: у гена `beamList` больше одного
-/// кодона, поэтому точечные мутации могут как укорачивать, так и наращивать
-/// число балок, а средняя нода даёт точку ветвления. Дальше эволюция сама
-/// добавит структуру, если это выгодно.
+/// Стартовый геном: две поперечные балки от боковых fix-точек средней
+/// станции скелета наружу (колёса на внешних концах). Цепочка из двух балок
+/// важна кодированием: у гена `beamList` больше одного кодона, поэтому
+/// точечные мутации могут как укорачивать, так и наращивать число балок.
+/// Дальше эволюция сама добавит структуру, если это выгодно.
 Genotype startGenome(const Grammar gr)
 {
     auto gt = new Genotype(gr.symbols.length);
@@ -43,47 +41,39 @@ Genotype startGenome(const Grammar gr)
 
     set("frame", [0u]);
     set("startPos", [0u]);
-
-    // Seed — точка старта каркаса: узел 0 совпадает с низом (точкой опоры)
-    // кабины. Кабина ставится ЦМ на начало координат frame — у каркаса
-    // стартовая нода оказывается под кабиной на высоте её центра масс.
-    const vSeed = cockpitGeometry().seed;
-    set("startForward", [u(vSeed.x, -2.0f, 2.0f)]);
-    set("startRight", [u(vSeed.y, -2.0f, 2.0f)]);
-    set("startUp", [u(vSeed.z, -2.0f, 2.0f)]);
+    // startPos-гены (startForward/startRight/startUp) игнорируются: узел 0 —
+    // всегда ЦМ кабины в начале координат frame.
+    set("startForward", [mid]);
+    set("startRight", [mid]);
+    set("startUp", [mid]);
     set("taper", [u(1.0f, 0.4f, 1.0f)]);
     set("taperPow", [u(1.0f, 0.5f, 4.0f)]);
     set("heading", [mid]);
     set("motorPower", [u(initialMotorPower, -200.0f, 200.0f)]);
 
     // Один одиночный (медианный) сегмент без раздвоения: из него эволюция
-    // либо вырастит пару ветвей (сегмент раздвоится — «лишняя пара
-    // конечностей»), либо добавит ещё сегменты.
+    // либо вырастит пару ветвей (сегмент раздвоится), либо добавит сегменты.
     set("segmentList", [1u]);
     set("segment", [0u]);
     set("segMode", [0u]);
 
-    // Две балки из центра в разные стороны (гироскутер): `beamList=[0,1]`;
-    // первая растёт из seed влево (refLast), вторая — из того же центра вправо
-    // (refBase), поэтому `startRef` — [refLast, refBase].
+    // Две балки от боковых fix-точек средней станции (узлы 8 и 9) наружу:
+    // `beamList=[0,1]`, старты — по индексу (idx), концы — endNew.
     set("beamList", [0u, 1u]);
     set("beam", [0u]);
-    set("startRef", [0u, 1u]);
+    set("startRef", [2u, 2u]);
     set("endRef", [0u, 0u]);
 
-    // Дельта конца каждой балки — «единичный вектор направления × множитель
-    // длины»: первая влево на полпролёта, вторая вправо на полпролёта
-    // (1.2 + 1.2 = 2.4 м колея), по ходу/вверх — ноль. По кодону на балку.
-    enum float beamLen = 2.4f;
-    const vBeamLeft = left * (beamLen / 2.0f);
-    const vBeamRight = right * (beamLen / 2.0f);
-    set("forward", [u(vBeamLeft.x, -1.5f, 1.5f), u(vBeamRight.x, -1.5f, 1.5f)]);
-    set("right", [u(vBeamLeft.y, -1.5f, 1.5f), u(vBeamRight.y, -1.5f, 1.5f)]);
-    set("up", [u(vBeamLeft.z, -1.5f, 1.5f), u(vBeamRight.z, -1.5f, 1.5f)]);
+    // Дельта конца — «вправо на полпролёта» (x = ∓0.68 от боковой точки):
+    // левая балка к (1.0), правая к (−1.0) — колея 2 м.
+    enum float wheelOffset = 0.68f;
+    set("forward", [u(+wheelOffset, -1.5f, 1.5f), u(-wheelOffset, -1.5f, 1.5f)]);
+    set("right", [mid, mid]);
+    set("up", [mid, mid]);
     set("radius", [u(0.05f, 0.02f, 0.06f), u(0.05f, 0.02f, 0.06f)]);
-    // Активатор-ингибитор Nodal/Lefty на нуле: стартовая пара (когда
-    // раздвоится) зеркально-точная; эволюция сама добавит асимметрию,
-    // если это выгодно.
+    // Активатор-ингибитор Nodal/Lefty на нуле: когда сегмент раздвоится,
+    // стартовая пара будет зеркально-точной; эволюция сама добавит
+    // асимметрию, если это выгодно.
     set("nodal", [mid, mid]);
     set("lefty", [0u, 0u]);
     set("beamKind", [0u]);
@@ -93,8 +83,8 @@ Genotype startGenome(const Grammar gr)
     set("anchorList", [0u, 1u]);
     set("anchor", [0u, 0u]);
     set("anchorKind", [1u, 1u]);
-    // Якоря на внешних концах балок: левый конец — узел 1, правый — узел 2.
-    set("idx", [1u, 2u]);
+    // idx: старты балок (узлы 8, 9), затем якоря на концах балок (12, 13).
+    set("idx", [8u, 9u, 12u, 13u]);
     // Радиус колёс: оба якоря стартуют с `defaultWheelRadius`.
     set("wheelRadius", [u(defaultWheelRadius, 0.05f, 0.375f),
         u(defaultWheelRadius, 0.05f, 0.375f)]);
@@ -114,18 +104,22 @@ unittest
     auto may = develop(gr, genome);
     assert(!may.isNull, "стартовая хромосома должна развиваться");
     const f = may.get.frame;
-    // Гироскутер: две балки из центра в разные стороны — 0—1 и 0—2,
-    // центральная нода 0 общая.
-    assert(f.nodes.length == 3);
-    assert(f.beams.length == 2);
-    assert(f.beams[0].a == 0 && f.beams[0].b == 1);
-    assert(f.beams[1].a == 0 && f.beams[1].b == 2);
+    // Гироскутер: скелет + две балки от боковых fix-точек (8 → 12, 9 → 13).
+    assert(f.nodes.length == skeletonNodeCount() + 2);
+    assert(f.beams.length == skeletonBeamCount() + 2);
+    assert(f.beams[skeletonBeamCount()].a == 8
+        && f.beams[skeletonBeamCount()].b == 12);
+    assert(f.beams[skeletonBeamCount() + 1].a == 9
+        && f.beams[skeletonBeamCount() + 1].b == 13);
+    assert(cast(Beam) f.beams[skeletonBeamCount()] !is null
+        && cast(Beam) f.beams[skeletonBeamCount() + 1] !is null,
+        "обе стартовые балки обычные, не эфемерные");
     assert(f.anchors.length == 2);
-    assert(f.anchors[0].kind == AnchorKind.motorWheel && f.anchors[0].node == 1);
-    assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 2);
+    assert(f.anchors[0].kind == AnchorKind.motorWheel && f.anchors[0].node == 12);
+    assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 13);
     assert(abs(f.anchors[0].radius - defaultWheelRadius) < 1e-6f
         && abs(f.anchors[1].radius - defaultWheelRadius) < 1e-6f,
-        "оба стартовых колеса — заводского радиуса (60 см)");
+        "оба стартовых колеса — заводского радиуса (30 см)");
     assert(f.totalBeamLength > 0.0f);
     assert(f.motorPower > 99.0f && f.motorPower < 101.0f,
         "стартовая сила мотора берётся из гена motorPower");
@@ -166,8 +160,8 @@ unittest
     }
 
     assert(okCount > 100, "большинство точечных мутаций должны развиваться в валидный каркас");
-    // Число балок живёт в узком диапазоне вокруг стартового.
+    // Число балок живёт в узком диапазоне вокруг стартового (скелет + 2).
     const avg = beamTotal / okCount;
-    assert(avg >= 1 && avg <= 6,
+    assert(avg >= skeletonBeamCount() && avg <= skeletonBeamCount() + 6,
         "одна мутация не должна обрушивать или раздувать каркас");
 }

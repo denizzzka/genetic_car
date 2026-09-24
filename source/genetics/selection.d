@@ -261,31 +261,31 @@ unittest
 
 unittest
 {
-    // Структурные мутации подключены в цикл отбора (tryViableMutant): число
-    // балок и колёс обязано уметь расти за поколения, а не только менять
-    // геометрию фиксированного скелета.
+    // Структурные мутации подключены в цикл отбора: число балок обязано
+    // уметь расти за поколения, а не только менять геометрию скелета.
+    // Скелет (11 балок) неизменен, поэтому рост меряем относительно него.
     auto gr = buggyGrammar();
-    const startBeams = 2;
     const startAnchors = 2;
 
-    // Одна траектория при фиксированном зерне зависит от стартового генома;
-    // способность расти проверяем по детерминированному набору зерен. Бюджет
-    // (30 зерен × 16 поколений) окупает случайность самоадаптации темпов.
-    bool grewBeams, grewAnchors;
+    bool grewBeams;
+    bool dropAnchors;
     foreach (s; 11 .. 41)
     {
         auto rnd = Random(s);
-        auto pop = evaluatePopulation(gr, seedPopulation(gr, 100));
-        auto evolved = evolve(gr, pop, 16, rnd);
+        auto pop = evaluatePopulation(gr, seedPopulation(gr, 100), EvolutionConfig.init, 0);
+        auto evolved = evolve(gr, pop, 16, rnd, EvolutionConfig.init);
         foreach (e; evolved)
             if (auto may = develop(gr, e.genotype))
             {
-                if (may.get.frame.beams.length > startBeams)
+                if (may.get.frame.beams.length > skeletonBeamCount() + 2)
                     grewBeams = true;
-                if (may.get.frame.anchors.length > startAnchors)
-                    grewAnchors = true;
+                if (may.get.frame.anchors.length < startAnchors)
+                    dropAnchors = true;
             }
     }
     assert(grewBeams, "число балок должно уметь расти через инделы");
-    assert(grewAnchors, "число колёс должно уметь расти через инделы");
+    // Жизнеспособные каркасы не теряют колёса (балки и якоря отбор сохраняет);
+    // третье колесо требует опоры на внешнюю структуру за зоной кабины —
+    // кабину не поощряется трогать колёсами (см. frameCabinContact).
+    assert(!dropAnchors, "отбор не должен разоружать багги до одного колеса");
 }

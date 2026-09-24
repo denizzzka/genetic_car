@@ -819,9 +819,12 @@ final class BuggyPhysics
         // sensor-группе: контакты с землёй и чужими колёсами ловятся как
         // провал заезда, но никогда не толкают (колбэк их снимает).
         // Массы у балок нет — мост (master) несёт всю раму и тянет балки.
+        // Эфемерные балки — только геометрия, тела не получают.
         foreach (i, b; frame.beams)
         {
-            const auto beam = asBeam(b);
+            const auto beam = cast(Beam) b;
+            if (beam is null)
+                continue;
             const vec3 a = frame.nodes[b.a].pos;
             const vec3 c = frame.nodes[b.b].pos;
             const vec3 dir = c - a;
@@ -865,13 +868,15 @@ final class BuggyPhysics
         vec3 sumM = origin;
         foreach (b; frame.beams)
         {
+            const Beam beam = cast(Beam) b;
+            if (beam is null)
+                continue;
             const vec3 a = frame.nodes[b.a].pos;
             const vec3 b2 = frame.nodes[b.b].pos;
             const float len = (b2 - a).length;
             if (len < 1e-5f)
                 continue;
-            float m = cast(float)(beamDensity * PI
-                * asBeam(b).radius * asBeam(b).radius * len);
+            float m = cast(float)(beamDensity * PI * beam.radius * beam.radius * len);
             totalMass += m;
             sumM += (a + b2) * 0.5f * m;
         }
@@ -879,9 +884,8 @@ final class BuggyPhysics
             totalMass = 1.0f;
         const vec3 com = sumM / totalMass;
 
-        // ЦМ кабины: её низ (seed в координатах кабины) совмещён с узлом 0.
-        const CockpitGeometry cg = cockpitGeometry();
-        const vec3 comCabin = frame.nodes[0].pos - cg.seed;
+        // ЦМ кабины — узел 0 каркаса (совмещён с центром масс меша).
+        const vec3 comCabin = frame.nodes[0].pos;
         float totalMassC = totalMass + cockpitMass;
         const vec3 comTotal = (sumM + comCabin * cockpitMass) / totalMassC;
 

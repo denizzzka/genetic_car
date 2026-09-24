@@ -180,22 +180,16 @@ float wheelAnchorSpacing(const Frame f)
 }
 
 /// Пересекает ли отрезок строгую внутренность зоны кабины: параллелепипед
-/// `dims` вокруг узла 0 от пола до крыши. Балка в самой плоскости пола зону
+/// `lo..hi` в координатах каркаса. Балка в самой плоскости пола зону
 /// не задевает — ловится только реальный проход сквозь корпус.
 private bool beamPiercesCabin(const vec3 a, const vec3 b,
-    const vec3 base, const vec3 half)
+    const vec3 lo, const vec3 hi)
 {
-    const float xlo = base.x - half.x;
-    const float xhi = base.x + half.x;
-    const float ylo = base.y - half.y;
-    const float yhi = base.y + half.y;
-    const float zlo = base.z;
-    const float zhi = base.z + half.z;
     const vec3 d = b - a;
     float tmin = 0.0f, tmax = 1.0f;
-    if (!slab(tmin, tmax, a.x, d.x, xlo, xhi)) return false;
-    if (!slab(tmin, tmax, a.y, d.y, ylo, yhi)) return false;
-    if (!slab(tmin, tmax, a.z, d.z, zlo, zhi)) return false;
+    if (!slab(tmin, tmax, a.x, d.x, lo.x, hi.x)) return false;
+    if (!slab(tmin, tmax, a.y, d.y, lo.y, hi.y)) return false;
+    if (!slab(tmin, tmax, a.z, d.z, lo.z, hi.z)) return false;
     return true;
 }
 
@@ -228,21 +222,25 @@ private bool wheelHitsCabin(const vec3 p, float r,
 }
 
 /// Первое касание корпуса кабины в каркасе: пусто — никто её не трогает.
-/// Параллелепипед строится от узла 0 (низ кабины) по габаритам меша.
+/// Запретная зона — параллелепипед от узла 0 (ЦМ кабины, совмещён с началом
+/// координат меша) по AABB меша. Эфемерные балки крепления корпуса зону не
+/// проверяют: они не входят в каркас.
 private string frameCabinContact(const Frame f)
 {
     if (f.nodes.length == 0)
         return "";
     const cg = cockpitGeometry();
-    const vec3 base = f.nodes[0].pos;
-    const vec3 half = vec3(cg.dims.x * 0.5f, cg.dims.y * 0.5f, cg.dims.z);
+    const vec3 lo = f.nodes[0].pos + cg.minP;
+    const vec3 hi = f.nodes[0].pos + cg.maxP;
 
     foreach (b; f.beams)
-        if (beamPiercesCabin(f.nodes[b.a].pos, f.nodes[b.b].pos, base, half))
+    {
+        if (cast(Beam) b is null)
+            continue;
+        if (beamPiercesCabin(f.nodes[b.a].pos, f.nodes[b.b].pos, lo, hi))
             return "балка каркаса проходит сквозь кабину";
+    }
 
-    const vec3 lo = base - vec3(half.x, half.y, 0.0f);
-    const vec3 hi = base + vec3(half.x, half.y, half.z);
     foreach (a; f.anchors)
         if (wheelHitsCabin(f.nodes[a.node].pos, a.radius, lo, hi))
             return "колесо заходит в кабину";
@@ -689,18 +687,18 @@ unittest
     assert(buggyFitness(split) == 0.0f);
 
     // Балки, торчащие ниже колёс: узел опускается под плоскость земли
-    // (под нижнюю точку колёс) — физическая отбраковка.
+    // (под нижнюю точку колёс) — физическая отбраковка. Земля на нижних
+    // ободах: колёса на (−1.0..1.0, ±., −0.745), радиус 0.3 → z=−1.045.
     Frame underGround = symmetricBuggyFrame();
-    underGround.nodes ~= Node(down);
-    underGround.beams ~= new Beam(0, underGround.nodes.length - 1, 0.04f);
+    underGround.nodes ~= Node(vec3(1.0f, 0.55f, -1.1f));
+    underGround.beams ~= new Beam(2, underGround.nodes.length - 1, 0.04f);
     assert(buggyFitness(underGround) == 0.0f,
         "балка ниже уровня земли должна отбраковываться");
 
     // Тот же каркас с узлом, лишь касающимся земли (допуск), — не отбраковка.
     Frame boundary = symmetricBuggyFrame();
-    // Нижняя точка колёс: zmin колёс = 0.25 -> земля 0.25 - 0.3 = -0.05.
-    boundary.nodes ~= Node(vec3(0.0f, 0.0f, -0.05f));
-    boundary.beams ~= new Beam(0, boundary.nodes.length - 1, 0.04f);
+    boundary.nodes ~= Node(vec3(1.0f, 0.55f, -1.045f));
+    boundary.beams ~= new Beam(2, boundary.nodes.length - 1, 0.04f);
     assert(buggyFitness(boundary) > 0.0f,
         "касание плоскости земли в пределах допуска не отбраковывается");
 
@@ -716,11 +714,11 @@ unittest
     // узлом (внутри ящика против выступающего наружу), — выступающий
     // получает меньший фитнес. Отличие — phiBox.
     Frame inside = symmetricBuggyFrame();
-    inside.nodes ~= Node(vec3(0.3f, 0.0f, 0.4f));
-    inside.beams ~= new Beam(0, inside.nodes.length - 1, 0.04f);
+    inside.nodes ~= Node(vec3(0.5f, 0.3f, -0.9f));
+    inside.beams ~= new Beam(2, inside.nodes.length - 1, 0.04f);
     Frame outside = symmetricBuggyFrame();
-    outside.nodes ~= Node(vec3(1.5f, 0.0f, 0.4f));
-    outside.beams ~= new Beam(0, outside.nodes.length - 1, 0.04f);
+    outside.nodes ~= Node(vec3(1.6f, 0.3f, -0.9f));
+    outside.beams ~= new Beam(2, outside.nodes.length - 1, 0.04f);
     assert(outside.nodes[$ - 1].pos.x > boxWidthHalf + epsFlat,
         "узел теста обязан выступать за полуширину ящика (1.25)");
     assert(buggyFitness(inside) > 0.0f && buggyFitness(outside) > 0.0f);
@@ -775,23 +773,23 @@ unittest
 unittest
 {
     // Кабина неприкосновенна: балка или колесо внутри корпуса отбраковывают
-    // каркас, а крепёж по полу (из узла 0) — нет.
+    // каркас, а крепёж ниже пола — нет.
 
     // Контроль: канонический багги кабину не трогает.
     assert(buggyFitness(symmetricBuggyFrame()) > 0.0f);
 
-    // Балка, ушедшая из узла 0 вертикально в корпус кабины, — отбраковка.
+    // Балка из киля (под днищем) вертикально в корпус кабины — отбраковка.
     Frame pierce = symmetricBuggyFrame();
     pierce.nodes ~= Node(vec3(0.0f, 0.0f, 0.8f));
-    pierce.beams ~= new Beam(0, pierce.nodes.length - 1, 0.04f);
+    pierce.beams ~= new Beam(1, pierce.nodes.length - 1, 0.04f);
     assert(frameCabinContact(pierce).length,
         "балка сквозь корпус кабины не должна проходить");
     assert(buggyFitness(pierce) == 0.0f);
 
     // Балка в плоскости пола кабины (граница зоны) — не касание.
     Frame mount = symmetricBuggyFrame();
-    mount.nodes ~= Node(vec3(0.3f, 0.0f, 0.4f));
-    mount.beams ~= new Beam(0, mount.nodes.length - 1, 0.04f);
+    mount.nodes ~= Node(vec3(0.7f, 0.3f, -0.695f));
+    mount.beams ~= new Beam(1, mount.nodes.length - 1, 0.04f);
     assert(frameCabinContact(mount).length == 0,
         "балка в плоскости пола не считается касанием");
     assert(buggyFitness(mount) > 0.0f);
@@ -815,16 +813,18 @@ private Frame symmetricBuggyFrame()
         return f.nodes.length - 1;
     }
 
-    const c = node(vec3(0.0f, 0.0f, 0.4f));
-    const fl = node(vec3(0.7f, 0.6f, 0.3f));
-    const fr = node(vec3(-0.7f, 0.6f, 0.3f));
-    const rl = node(vec3(1.2f, -0.6f, 0.25f));
-    const rr = node(vec3(-1.2f, -0.6f, 0.25f));
+    const c = node(origin); // 0 — ЦМ кабины
+    const k = node(vec3(0.0f, -0.205f, -0.745f)); // 1 — киль под днищем
+    const fl = node(vec3(1.0f, 0.55f, -0.745f)); // 2
+    const fr = node(vec3(-1.0f, 0.55f, -0.745f)); // 3
+    const rl = node(vec3(1.0f, -0.35f, -0.745f)); // 4
+    const rr = node(vec3(-1.0f, -0.35f, -0.745f)); // 5
 
-    f.beams ~= new Beam(c, fl, 0.045f);
-    f.beams ~= new Beam(c, fr, 0.045f);
-    f.beams ~= new Beam(c, rl, 0.05f);
-    f.beams ~= new Beam(c, rr, 0.05f);
+    f.beams ~= new EphemeralBeam(c, k); // крепёж кабины не входит в каркас
+    f.beams ~= new Beam(k, fl, 0.045f);
+    f.beams ~= new Beam(k, fr, 0.045f);
+    f.beams ~= new Beam(k, rl, 0.05f);
+    f.beams ~= new Beam(k, rr, 0.05f);
     f.beams ~= new Beam(fl, fr, 0.045f); // передняя ось: петля
     f.beams ~= new Beam(rl, rr, 0.05f);  // задняя ось: петля
 
@@ -845,14 +845,16 @@ private Frame asymmetricBuggyFrame()
         return f.nodes.length - 1;
     }
 
-    const c = node(vec3(0.0f, 0.0f, 0.4f));
-    const fl = node(vec3(0.7f, 0.6f, 0.3f));
-    const fr = node(vec3(-0.7f, 0.6f, 0.3f));
-    const rl = node(vec3(1.2f, -0.6f, 0.25f));
+    const c = node(origin); // 0
+    const k = node(vec3(0.0f, -0.205f, -0.745f)); // 1
+    const fl = node(vec3(1.0f, 0.55f, -0.745f)); // 2
+    const fr = node(vec3(-1.0f, 0.55f, -0.745f)); // 3
+    const rl = node(vec3(1.0f, -0.35f, -0.745f)); // 4
 
-    f.beams ~= new Beam(c, fl, 0.045f);
-    f.beams ~= new Beam(c, fr, 0.045f);
-    f.beams ~= new Beam(c, rl, 0.05f);
+    f.beams ~= new EphemeralBeam(c, k);
+    f.beams ~= new Beam(k, fl, 0.045f);
+    f.beams ~= new Beam(k, fr, 0.045f);
+    f.beams ~= new Beam(k, rl, 0.05f);
     f.beams ~= new Beam(fl, fr, 0.045f);
 
     f.anchors ~= Anchor(fl, AnchorKind.wheel);

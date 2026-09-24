@@ -19,3 +19,7 @@ libSDL2_image-2.0.so
 *.o
 *.obj
 *.lst
+libdgCore.so
+libdgNewtonAvx.so
+libdgPhysics.so
+libnewton.so
