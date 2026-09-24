@@ -251,7 +251,7 @@ private string frameCabinContact(const Frame f)
 }
 
 enum double physicsDt = 1.0 / 60.0;
-enum double physicsSimSeconds = 3.0;
+enum double physicsSimSeconds = 120.0; ///< окно заезда, 2 минуты
 enum double physicsSettleSeconds = 1.0;
 enum float physicsNominalSpeed = 4.0f;    ///< м/с фитнеса — дистанция-норма
 enum float physicsSpeedCap = 2.0f;        ///< потолок бонуса за скорость доезда
@@ -356,11 +356,14 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
 
     r.distance = farthest;
     r.reachTime = reachTime;
+    // Зачёт — дожившим и остановившимся (переворот, застревание, кабина
+    // коснулась земли) по пройденной дистанции; развалившийся каркас — 0.
+    if (!structuralFailure(r.why))
+        r.score = finishScore(farthest, seconds, reachTime);
     if (r.why.length != 0)
         return r;
 
     r.survived = true;
-    r.score = finishScore(farthest, seconds, reachTime);
     return r;
 }
 
@@ -385,6 +388,31 @@ private float finishScore(double farthest, double seconds, double reachTime)
     const double distanceFrac = farthest / (physicsNominalSpeed * seconds);
     const double speedRatio = farthest / (physicsNominalSpeed * reachTime);
     return clamp(cast(float)(distanceFrac * speedRatio), 0.0f, physicsSpeedCap);
+}
+
+/// Разрушение каркаса: балки/колёса оборвались, ударились или ушли в землю.
+/// Такие заезды засчёту не подлежат — машина развалилась, а не остановилась.
+private bool structuralFailure(string why)
+{
+    return why == "не осталось колёс"
+        || why == "каркас разлетелся"
+        || why == "балка разлетелась"
+        || why == "колесо провалилось под землю"
+        || why == "балка каркаса касается земли"
+        || why == "балка каркаса касается колеса"
+        || why == "колёса каркаса соприкасаются";
+}
+
+unittest
+{
+    // Интактные остановки засчитываются, развал каркаса — нет.
+    assert(structuralFailure("машина перевернулась") == false);
+    assert(structuralFailure("нет продвижения вперёд") == false);
+    assert(structuralFailure("кабина касается земли") == false);
+    assert(structuralFailure("") == false);
+    assert(structuralFailure("колёса каркаса соприкасаются"));
+    assert(structuralFailure("не осталось колёс"));
+    assert(structuralFailure("балка каркаса касается земли"));
 }
 
 unittest

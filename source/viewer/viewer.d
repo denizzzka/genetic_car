@@ -128,8 +128,8 @@ class BuggyScene: Scene
         eventManager.trackUpDownState = true;
         grammar = buggyGrammar();
         rnd = Random(42);
-        // Гибридная оценка: статический гейт + 3 секунды физического заезда.
-        evolutionConfig.simulateSeconds = 3.0;
+        // Гибридная оценка: статический гейт + 2 минуты физического заезда.
+        evolutionConfig.simulateSeconds = 120.0;
         liveRunSeconds = evolutionConfig.simulateSeconds;
         // Виден ли ход заездов в stdout (по особам и поколениям).
         evolutionConfig.logPhysics = true;
