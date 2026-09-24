@@ -93,8 +93,9 @@ Genotype startGenome(const Grammar gr)
     set("anchorList", [0u, 1u]);
     set("anchor", [0u, 0u]);
     set("anchorKind", [1u, 1u]);
-    // Якоря на внешних концах балок: левый конец — узел 1, правый — узел 2.
-    set("idx", [1u, 2u]);
+    // Якоря на внешних концах балок: левый конец — узел 2, правый — узел 3
+    // (узел 1 — всегда рулевая нода, балки растут с узла 2).
+    set("idx", [2u, 3u]);
     // Радиус колёс: оба якоря стартуют с `defaultWheelRadius`.
     set("wheelRadius", [u(defaultWheelRadius, 0.05f, 0.375f),
         u(defaultWheelRadius, 0.05f, 0.375f)]);
@@ -114,15 +115,16 @@ unittest
     auto may = develop(gr, genome);
     assert(!may.isNull, "стартовая хромосома должна развиваться");
     const f = may.get.frame;
-    // Гироскутер: две балки из центра в разные стороны — 0—1 и 0—2,
-    // центральная нода 0 общая.
-    assert(f.nodes.length == 3);
-    assert(f.beams.length == 2);
+    // Гироскутер: seed-центр 0 + рулевая нода 1 + две балки из центра
+    // в разные стороны — 0—2 и 0—3.
+    assert(f.nodes.length == 4);
+    assert(f.beams.length == 3);
     assert(f.beams[0].a == 0 && f.beams[0].b == 1);
     assert(f.beams[1].a == 0 && f.beams[1].b == 2);
+    assert(f.beams[2].a == 0 && f.beams[2].b == 3);
     assert(f.anchors.length == 2);
-    assert(f.anchors[0].kind == AnchorKind.motorWheel && f.anchors[0].node == 1);
-    assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 2);
+    assert(f.anchors[0].kind == AnchorKind.motorWheel && f.anchors[0].node == 2);
+    assert(f.anchors[1].kind == AnchorKind.motorWheel && f.anchors[1].node == 3);
     assert(abs(f.anchors[0].radius - defaultWheelRadius) < 1e-6f
         && abs(f.anchors[1].radius - defaultWheelRadius) < 1e-6f,
         "оба стартовых колеса — заводского радиуса (60 см)");

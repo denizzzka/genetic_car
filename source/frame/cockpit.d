@@ -49,11 +49,14 @@ struct CockpitGeometry
     /// Габарит кабины по осям (max −min), м.
     vec3 dims;
 
-    /// Углы нижней грани корпуса относительно точки опоры (координаты
+/// Углы нижней грани корпуса относительно точки опоры (координаты
     /// каркаса): касание земли любой точкой этой грани — сход. Одной точки
     /// опоры при крене не хватает: край корпуса упирается в грунт раньше
     /// вертикали под центром масс.
     vec3[4] floorCorners;
+
+    /// Низ середины передней кромки кабины (старт рулевой колонки), м.
+    vec3 frontPoint;
 }
 
 /// Загрузить меш кабины из вшитого текста (парсинг в рантайме).
@@ -127,7 +130,7 @@ CockpitGeometry cockpitGeometry(const ObjModel model)
     g.cogHeight = -best.z;
     assert(g.cogHeight > 0.0f, "кабина: центр масс не выше точки опоры");
 
-    // Углы нижней грани — от минимума по вертикали (плоское дно) и раскрыва
+// Углы нижней грани — от минимума по вертикали (плоское дно) и раскрыва
     // по габаритам; от центра масс отнимается точка опоры, чтобы углы были
     // в координатах места крепления (низ на узле 0).
     foreach (ix; 0 .. 2)
@@ -138,6 +141,19 @@ CockpitGeometry cockpitGeometry(const ObjModel model)
             g.floorCorners[ix * 2 + iy] =
                 vec3(px - best.x, py - best.y, minP.z - best.z);
         }
+
+    // Передняя кромка — самая дальняя по курсу (мин y); на ней низ середины.
+    float minY = float.max;
+    foreach (v; model.mesh.vertices)
+        minY = minY < v.y ? minY : v.y;
+    float xLo = float.max, xHi = -float.max, zLo = float.max;
+    foreach (v; model.mesh.vertices)
+        if (abs(v.y - minY) < 1e-4f)
+        {
+            xLo = xLo < v.x ? xLo : v.x; xHi = xHi > v.x ? xHi : v.x;
+            zLo = zLo < v.z ? zLo : v.z;
+        }
+    g.frontPoint = vec3(0.5f * (xLo + xHi), minY, zLo);
     return g;
 }
 
@@ -188,7 +204,7 @@ unittest
     assert(g.dims.y > 0.0f && g.dims.y < 3.0f);
     assert(g.dims.z > 0.0f && g.dims.z < 3.0f);
 
-    // Нижняя грань — плоское дно (может лежать ниже точки опоры: луч из ЦМ
+// Нижняя грань — плоское дно (может лежать ниже точки опоры: луч из ЦМ
     // бьёт в приподнятый центр днища), раскрыв по габаритам.
     foreach (c; g.floorCorners)
         assert(c.z <= 0.0f, "угол пола не выше точки опоры");
@@ -203,6 +219,12 @@ unittest
     }
     assert(abs(xhi - xlo - g.dims.x) < 1e-4f, "углы раскрывают габарит по ширине");
     assert(abs(yhi - ylo - g.dims.y) < 1e-4f, "углы раскрывают габарит по длине");
+
+    // Передняя кромка — нос по курсу, низ середины между опорой и ЦМ.
+    assert(g.frontPoint.y < 0.0f, "нос кабины впереди центра масс");
+    assert(abs(g.frontPoint.x) < 0.5f, "середина передней кромки по центру");
+    assert(g.frontPoint.z > g.seed.z && g.frontPoint.z <= 0.0f,
+        "низ носа не выше центра масс");
 
     // Константы дизайна на месте.
     assert(cockpitMass == 100.0f);

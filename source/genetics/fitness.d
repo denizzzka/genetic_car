@@ -179,9 +179,11 @@ float wheelAnchorSpacing(const Frame f)
     return best;
 }
 
-/// Пересекает ли отрезок строгую внутренность зоны кабины: параллелепипед
-/// `dims` вокруг узла 0 от пола до крыши. Балка в самой плоскости пола зону
-/// не задевает — ловится только реальный проход сквозь корпус.
+/// Пересекает ли отрезок зону кабины: параллелепипед `dims` вокруг узла 0
+/// от пола до крыши. Балка, растущая из зоны — как из seed-ноды (низ
+/// кабины) — имеет право выйти наружу; отбраковывается только проход
+/// сквозь корпус, не закреплённый в зоне ни одним концом. Балка в самой
+/// плоскости пола зону не задевает.
 private bool beamPiercesCabin(const vec3 a, const vec3 b,
     const vec3 base, const vec3 half)
 {
@@ -191,6 +193,15 @@ private bool beamPiercesCabin(const vec3 a, const vec3 b,
     const float yhi = base.y + half.y;
     const float zlo = base.z;
     const float zhi = base.z + half.z;
+    bool inZone(const vec3 p)
+    {
+        return p.x >= xlo && p.x <= xhi
+            && p.y >= ylo && p.y <= yhi
+            && p.z >= zlo && p.z <= zhi;
+    }
+    // Конец закреплён в зоне (включая пол — границу) — «рост из кабины».
+    if (inZone(a) || inZone(b))
+        return false;
     const vec3 d = b - a;
     float tmin = 0.0f, tmax = 1.0f;
     if (!slab(tmin, tmax, a.x, d.x, xlo, xhi)) return false;
@@ -769,13 +780,24 @@ unittest
     // Контроль: канонический багги кабину не трогает.
     assert(buggyFitness(symmetricBuggyFrame()) > 0.0f);
 
-    // Балка, ушедшая из узла 0 вертикально в корпус кабины, — отбраковка.
+    // Сквозной проход сквозь корпус, не закреплённый в зоне ни одним
+    // концом, — отбраковка.
     Frame pierce = symmetricBuggyFrame();
-    pierce.nodes ~= Node(vec3(0.0f, 0.0f, 0.8f));
-    pierce.beams ~= Beam(0, pierce.nodes.length - 1, 0.04f);
+    const pl = pierce.nodes.length;
+    pierce.nodes ~= Node(vec3(0.0f, -1.3f, 0.5f));
+    pierce.nodes ~= Node(vec3(0.0f, 1.3f, 0.5f));
+    pierce.beams ~= Beam(pl, pl + 1, 0.04f);
     assert(frameCabinContact(pierce).length,
         "балка сквозь корпус кабины не должна проходить");
     assert(buggyFitness(pierce) == 0.0f);
+
+    // Балка из зоны кабины (как из seed-ноды) имеет право расти — даже
+    // вверх из узла 0 в корпус; жёсткая граница — колёса (ниже).
+    Frame mountUp = symmetricBuggyFrame();
+    mountUp.nodes ~= Node(vec3(0.0f, 0.0f, 0.8f));
+    mountUp.beams ~= Beam(0, mountUp.nodes.length - 1, 0.04f);
+    assert(frameCabinContact(mountUp).length == 0,
+        "рост из зоны, как из seed-ноды, не считается проходом");
 
     // Балка в плоскости пола кабины (граница зоны) — не касание.
     Frame mount = symmetricBuggyFrame();
@@ -793,6 +815,50 @@ unittest
     assert(frameCabinContact(wheelInside).length,
         "колесо внутри кабины не должно проходить");
     assert(buggyFitness(wheelInside) == 0.0f);
+}
+
+unittest
+{
+    // Рулевая нода (узел 1 впереди корпуса) растёт как seed: балка от неё
+    // вперёд — рост из зоны кабины наружу, гейт её пропускает. Назад сквозь
+    // корпус к телу, не закрепившись в зоне ни одним концом, — проход,
+    // который отбраковывается: такая балка приварила бы поворотную часть
+    // к корпусу.
+    import genetics.sge;
+    import genetics.buggygrammar;
+    import genetics.initial_data;
+
+    auto grammar = buggyGrammar();
+    const base = develop(grammar, startGenome(grammar)).get.frame;
+    assert(base.nodes.length >= 2, "стартовый каркас несёт рулевую ноду");
+
+    Frame cloneOf(const Frame src)
+    {
+        Frame c;
+        c.nodes = src.nodes.dup;
+        c.beams = src.beams.dup;
+        c.anchors = src.anchors.dup;
+        c.motorPower = src.motorPower;
+        return c;
+    }
+
+    // Вперёд по курсу от рулевой ноды — так эволюция повесит передние
+    // балки и колёса: корпус не пронзается.
+    Frame fwd = cloneOf(base);
+    const stub = fwd.nodes.length;
+    fwd.nodes ~= Node(fwd.nodes[1].pos + forward * 0.7f);
+    fwd.beams ~= Beam(1, stub, 0.04f);
+    assert(frameCabinContact(fwd).length == 0,
+        "балка от рулевой ноды вперёд — рост из зоны кабины, не проход");
+    assert(buggyFitness(fwd) > 0.0f,
+        "передний рост от рулевой ноды не режет фитнес");
+
+    // Назад к заднему узлу сквозь корпус — сквозной проход.
+    Frame back = cloneOf(base);
+    back.beams ~= Beam(1, 2, 0.04f);
+    assert(frameCabinContact(back).length,
+        "балка от рулевой ноды назад сквозь корпус — проход, отбраковка");
+    assert(buggyFitness(back) == 0.0f);
 }
 
 private Frame symmetricBuggyFrame()

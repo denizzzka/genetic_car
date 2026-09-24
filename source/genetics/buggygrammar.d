@@ -4,6 +4,7 @@ import std.math;
 import std.typecons: Nullable;
 import dlib.math.vector;
 import frame.frame;
+import frame.cockpit : cockpitGeometry;
 import physics_world.wheel : defaultWheelRadius;
 import genetics.sge;
 import genetics.buggyast;
@@ -102,7 +103,8 @@ Grammar buggyGrammar()
     ]);
 
     auto startPos = nt("startPos", [
-        new Production([startForward, startRight, startUp, taper, taperPow, heading, motorPower]),
+        new Production([startForward, startRight, startUp, taper, taperPow,
+            heading, motorPower]),
     ]);
 
     auto endRef = nt("endRef", [
@@ -175,6 +177,7 @@ Grammar buggyGrammar()
 Nullable!Frame frameFromAst(const Ast ast)
 {
     enum float mergeRadius = 0.15f;
+    enum float columnRadius = 0.05f;
 
     Frame result;
 
@@ -202,6 +205,13 @@ Nullable!Frame frameFromAst(const Ast ast)
     };
 
     size_t last = addNode(ast.seed, false, 0.0f);
+
+    // Рулевая нода существует всегда: узел 1 под низом середины передней
+    // кромки кабины (жёстко, генами не двигается); колонка — балка к seed.
+    const cg = cockpitGeometry();
+    const vec3 steerPos = ast.seed + (cg.frontPoint - cg.seed);
+    const size_t steerIdx = addNode(steerPos, false, 0.0f);
+    result.beams ~= Beam(0, steerIdx, columnRadius);
 
     float heading = ast.heading;
     auto turtleDelta = (float dx, float dy, float dz) {
@@ -462,6 +472,7 @@ unittest
 {
     // endNear: растущий конец сливается с ближайшим существующим узлом
     // в пределах допуска — возникает замкнутая петля без нового узла.
+    // (Узел 1 всегда рулевая нода, балки растут с узла 2.)
     Terminal!Tok[] t;
     // Seed: начало координат, смещение нулевое.
     t ~= dirCoords(origin, 1.0f);
@@ -490,10 +501,10 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == 2,
-        "endNear должен слиться с узлом 0, а не создавать новый");
-    assert(f.get.beams.length == 2);
-    assert(f.get.beams[1].a == 1 && f.get.beams[1].b == 0,
+    assert(f.get.nodes.length == 3,
+        "рулевая нода + endNear должен слиться с узлом 0, а не создавать новый");
+    assert(f.get.beams.length == 3);
+    assert(f.get.beams[2].a == 2 && f.get.beams[2].b == 0,
         "вторая балка замыкает петлю на существующий узел");
     assert(!isValidFrame(f.get).isNull, "замкнутая петля остаётся связной");
 }
@@ -520,8 +531,8 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == 2);
-    assert(f.get.beams.length == 1);
+    assert(f.get.nodes.length == 3);
+    assert(f.get.beams.length == 2);
 }
 
 unittest
@@ -556,9 +567,9 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == 3);
-    const n1 = f.get.nodes[1].pos;
-    const n2 = f.get.nodes[2].pos;
+    assert(f.get.nodes.length == 4);
+    const n1 = f.get.nodes[2].pos;
+    const n2 = f.get.nodes[3].pos;
     // Заголовок π/2 поворачивает дельту вперёд вдоль right-направления рамы.
     assert(dot(n1, right) > 0.999f,
         "заголовок π/2 должен развернуть дельту вперёд вдоль right");
@@ -605,15 +616,15 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
     t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.wheel);
-    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 1);
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 2);
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == 4,
-        "ствол + пара зеркальных ветвей");
-    const n1 = f.get.nodes[1].pos;
-    const n2 = f.get.nodes[2].pos;
-    const n3 = f.get.nodes[3].pos;
+    assert(f.get.nodes.length == 5,
+        "рулевая нода + ствол + пара зеркальных ветвей");
+    const n1 = f.get.nodes[2].pos;
+    const n2 = f.get.nodes[3].pos;
+    const n3 = f.get.nodes[4].pos;
     assert(abs(n1.x) < 1e-4f && abs(n1.y + 1.0f) < 1e-4f,
         "ствол уходит вперёд: (0,-1)");
     assert(abs(n2.x - 1.0f) < 1e-4f && abs(n2.y + 1.0f) < 1e-4f,
@@ -621,21 +632,21 @@ unittest
     assert(abs(n3.x + 1.0f) < 1e-4f && abs(n3.y + 1.0f) < 1e-4f,
         "твин-ветвь зеркальна вокруг оси ствола: (-1,-1)");
 
-    assert(f.get.beams.length == 3);
-    assert(f.get.beams[0].a == 0 && f.get.beams[0].b == 1);
-    assert(f.get.beams[1].a == 1 && f.get.beams[1].b == 2,
+    assert(f.get.beams.length == 4);
+    assert(f.get.beams[1].a == 0 && f.get.beams[1].b == 2);
+    assert(f.get.beams[2].a == 2 && f.get.beams[2].b == 3,
         "вторая балка — ветвь из конца ствола");
-    assert(f.get.beams[2].a == 1 && f.get.beams[2].b == 3,
+    assert(f.get.beams[3].a == 2 && f.get.beams[3].b == 4,
         "третья — твин ветви через ось сегмента");
 
     // Nodal=0.1 без ингибитора даёт сдвиг 0.1; радиус твин-балки:
     // 0.04 · (1 + 0.1) = 0.044.
-    assert(abs(f.get.beams[1].radius - 0.04f) < 1e-4f);
-    assert(abs(f.get.beams[2].radius - 0.044f) < 1e-4f);
+    assert(abs(f.get.beams[2].radius - 0.04f) < 1e-4f);
+    assert(abs(f.get.beams[3].radius - 0.044f) < 1e-4f);
 
     assert(f.get.anchors.length == 1,
         "якорь вешается на конец ствола");
-    assert(f.get.anchors[0].node == 1);
+    assert(f.get.anchors[0].node == 2);
 
     assert(!isValidFrame(f.get).isNull,
         "раздвоенный каркас с узлом на оси остаётся связным");
@@ -666,9 +677,9 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == 3);
-    const n1 = f.get.nodes[1].pos;
-    const n2 = f.get.nodes[2].pos;
+    assert(f.get.nodes.length == 4);
+    const n1 = f.get.nodes[2].pos;
+    const n2 = f.get.nodes[3].pos;
     const float c = cos(0.78539815f);
     const float s = sin(0.78539815f);
     // Дельта вперёд при заголовке π/4: right·s + forward·c.
@@ -715,17 +726,17 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == 4,
-        "внеосевой старт: ствол + ветвь + twin вокруг локальной оси 0.3");
+    assert(f.get.nodes.length == 5,
+        "рулевая нода + внеосевой старт: ствол + ветвь + twin вокруг локальной оси 0.3");
     assert(abs(f.get.nodes[0].pos.x - 0.3f) < 1e-4f
         && abs(f.get.nodes[0].pos.y - 0.2f) < 1e-4f,
         "старт не прижимается к нулю, остаётся в (0.3, 0.2)");
-    assert(abs(f.get.nodes[1].pos.x - 0.3f) < 1e-4f
-        && abs(f.get.nodes[1].pos.y + 0.8f) < 1e-4f,
+    assert(abs(f.get.nodes[2].pos.x - 0.3f) < 1e-4f
+        && abs(f.get.nodes[2].pos.y + 0.8f) < 1e-4f,
         "ствол идёт вперёд от реального старта: (0.3, -0.8)");
-    assert(abs(f.get.nodes[2].pos.x - 1.3f) < 1e-4f,
+    assert(abs(f.get.nodes[3].pos.x - 1.3f) < 1e-4f,
         "ветвь растёт вправо от конца ствола: (1.3, -0.8)");
-    assert(abs(f.get.nodes[3].pos.x + 0.7f) < 1e-4f,
+    assert(abs(f.get.nodes[4].pos.x + 0.7f) < 1e-4f,
         "twin отражается вокруг локальной оси 0.3, а не мировой X == 0");
     assert(!isValidFrame(f.get).isNull,
         "обе ветви связаны на узле старта — каркас связен");
@@ -752,12 +763,12 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
     t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.motorWheel);
-    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 1);
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 2);
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == 2);
-    assert(f.get.beams.length == 1);
+    assert(f.get.nodes.length == 3);
+    assert(f.get.beams.length == 2);
     assert(f.get.anchors.length == 1,
         "без раздвоения якорь не дублируется");
     assert(abs(f.get.anchors[0].radius - defaultWheelRadius) < 1e-6f,
@@ -794,13 +805,13 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
     t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.wheel);
-    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 2);
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 3);
     t ~= new Terminal!Tok(Tok.wheelRadius, 0.37f);
 
     auto f = toFrame(t);
     assert(!f.isNull);
     assert(f.get.anchors.length == 2, "twin-якорь дублируется вместе с узлом");
-    assert(f.get.anchors[0].node == 2 && f.get.anchors[1].node == 3,
+    assert(f.get.anchors[0].node == 3 && f.get.anchors[1].node == 4,
         "колёса висят на концах пары");
     assert(abs(f.get.anchors[0].radius - 0.37f) < 1e-6f
         && abs(f.get.anchors[1].radius - 0.37f) < 1e-6f,
@@ -849,28 +860,28 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    // База + ствол + две пальцевые пары (пальцы и их twin из базы).
-    assert(f.get.nodes.length == 6);
-    assert(f.get.beams.length == 5, "ствол + по паре на каждый палец");
+    // Рулевая нода + база + ствол + две пальцевые пары (пальцы и их twin).
+    assert(f.get.nodes.length == 7);
+    assert(f.get.beams.length == 6, "колонка + ствол + по паре на каждый палец");
 
     // Ствол: рука от базы к (0,-1,0).
-    assert(f.get.beams[0].a == 0 && f.get.beams[0].b == 1,
+    assert(f.get.beams[1].a == 0 && f.get.beams[1].b == 2,
         "рука — ствол форка");
 
     // Пальцы стартуют с того же «запястья» (узел 0) — refBase, а не с конца
-    // предыдущей балки (node 1). Каждый палец — своя зеркальная пара.
-    assert(f.get.beams[1].a == 0 && f.get.beams[1].b == 2
-        && f.get.beams[2].a == 0 && f.get.beams[2].b == 3,
+    // предыдущей балки (node 2). Каждый палец — своя зеркальная пара.
+    assert(f.get.beams[2].a == 0 && f.get.beams[2].b == 3
+        && f.get.beams[3].a == 0 && f.get.beams[3].b == 4,
         "первый палец и его twin растут из базы сегмента");
-    assert(f.get.beams[3].a == 0 && f.get.beams[3].b == 4
-        && f.get.beams[4].a == 0 && f.get.beams[4].b == 5,
+    assert(f.get.beams[4].a == 0 && f.get.beams[4].b == 5
+        && f.get.beams[5].a == 0 && f.get.beams[5].b == 6,
         "второй палец и его twin — тоже из базы сегмента");
 
-    assert(abs(f.get.nodes[2].pos.x - 0.5f) < 1e-4f
-        && abs(f.get.nodes[3].pos.x + 0.5f) < 1e-4f,
+    assert(abs(f.get.nodes[3].pos.x - 0.5f) < 1e-4f
+        && abs(f.get.nodes[4].pos.x + 0.5f) < 1e-4f,
         "пальцы зеркальны вокруг оси сегмента");
-    assert(abs(f.get.nodes[4].pos.x - 1.5f) < 1e-4f
-        && abs(f.get.nodes[5].pos.x + 1.5f) < 1e-4f,
+    assert(abs(f.get.nodes[5].pos.x - 1.5f) < 1e-4f
+        && abs(f.get.nodes[6].pos.x + 1.5f) < 1e-4f,
         "второй палец отражается так же, и обе пары симметричны");
 
     assert(!isValidFrame(f.get).isNull, "каркас с пальцами остаётся связным");
@@ -898,30 +909,27 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
     t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.wheel);
-    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 1);
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 2);
 
     auto f = toFrame(t);
     assert(!f.isNull);
     // twin рождается и здесь — вокруг локальной оси сегмента (0.7), как и
     // у любой балки. «Глаза» не бывает: ось зеркала — местная, не мировая.
-    assert(f.get.nodes.length == 3,
-        "балка на оси при внеосевом старте всё равно отражена вокруг 0.7");
-    assert(f.get.beams.length == 2,
-        "балка на оси с twin-радиусом по Nodal");
-    assert(abs(f.get.nodes[1].pos.x - 1.7f) < 1e-4f
-        && abs(f.get.nodes[2].pos.x + 0.3f) < 1e-4f,
+    assert(f.get.nodes.length == 4,
+        "рулевая нода + балка на оси при внеосевом старте всё равно отражена");
+    assert(f.get.beams.length == 3,
+        "колонка + балка на оси с twin-радиусом по Nodal");
+    assert(abs(f.get.nodes[2].pos.x - 1.7f) < 1e-4f
+        && abs(f.get.nodes[3].pos.x + 0.3f) < 1e-4f,
         "twin зеркалится вокруг локальной оси 0.7, а не мировой X == 0");
-    assert(abs(f.get.beams[1].radius - 0.048f) < 1e-4f,
+    assert(abs(f.get.beams[2].radius - 0.048f) < 1e-4f,
         "twin-радиус у «глаза» тоже масштабируется активатором Nodal");
-    // Якорь-колесо (refIdx 1) зеркалится вместе с twin-узлом: у нас снова две
-    // пары «глаз на оси + его якорь», только обе на локальной оси 0.7.
+    // Якорь-колесо (refIdx 2) зеркалится вместе с twin-узлом: обе пары
+    // «глаз на оси + его якорь» на локальной оси 0.7.
     assert(f.get.anchors.length == 2,
         "twin «глаза» уносит и свой медианный якорь");
-    assert(abs(f.get.nodes[1].pos.x - 1.7f) < 1e-4f
-        && abs(f.get.nodes[2].pos.x + 0.3f) < 1e-4f,
-        "ствол-«глаз» (1.7) и отражённый twin (-0.3) вокруг локальной оси 0.7");
-    assert(f.get.anchors.length == 2,
-        "у «глаза» twin тоже дублирует якорь вдоль локальной оси");
+    assert(f.get.anchors[0].node == 2 && f.get.anchors[1].node == 3,
+        "ствол-«глаз» и отражённый twin держат по якорю");
 }
 
 unittest
@@ -957,11 +965,40 @@ unittest
 
     auto f = frameFromAst(ast.get);
     assert(!f.isNull);
-    assert(f.get.beams.length == 2);
-    assert(abs(f.get.beams[0].radius - 0.06f) < 1e-5f,
+    assert(f.get.beams.length == 3);
+    assert(abs(f.get.beams[1].radius - 0.06f) < 1e-5f,
         "первая балка не меняется");
-    assert(abs(f.get.beams[1].radius - 0.03f) < 1e-5f,
+    assert(abs(f.get.beams[2].radius - 0.03f) < 1e-5f,
         "последняя балка сужается в taper раз");
+}
+
+unittest
+{
+    // Рулевая нода существует всегда: узел 1 под низом середины передней
+    // кромки кабины; колонка — первая балка к seed. Позиция берётся из
+    // геометрии меша, а не зашивается константами.
+    Terminal!Tok[] t;
+    t ~= dirCoords(origin, 1.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.anchors);
+
+    auto ast = buildAst(t);
+    assert(!ast.isNull);
+    const cg = cockpitGeometry();
+
+    auto f = frameFromAst(ast.get);
+    assert(!f.isNull);
+    assert(f.get.nodes.length == 2, "seed + рулевая нода");
+    assert(f.get.beams.length == 1, "одна балка — рулевая колонка");
+    assert(f.get.beams[0].a == 0 && f.get.beams[0].b == 1,
+        "колонка связывает seed с рулевой нодой");
+    const vec3 base = cg.frontPoint - cg.seed;
+    const n1 = f.get.nodes[1].pos;
+    assert(distance(n1, base) < 1e-4f,
+        "рулевая нода — низ передней кромки относительно точки опоры");
+    assert(n1.y < f.get.nodes[0].pos.y, "нода руля впереди точки опоры");
+    assert(!isValidFrame(f.get).isNull, "каркас с колонкой остаётся связным");
 }
 
 unittest
