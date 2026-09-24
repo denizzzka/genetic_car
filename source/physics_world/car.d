@@ -522,13 +522,15 @@ final class BuggyPhysics
             }
     }
 
-    /// Мягкий ограничитель крутки: поверхность колеса не должна двигаться
-    /// быстрее `wheelMaxSurfaceSpeed`. Превышение лимита угловой скорости
-    /// (для генетического радиуса колеса — `wheelMaxSurfaceSpeed / r`)
-    /// гасится встречным моментом, пропорциональным превышению
-    /// (`wheelSpinGain`) — предел мягкий, буксование и свободный разнос
-    /// ниже лимита ничем не стесняются. Действует на все колёса, не только
-    /// на моторные: с каждой падает отряд, раскрутка любой — по лимиту.
+    /// Антипробуксовка (TCS): поверхности колеса разрешено быть быстрее
+    /// грунта под ним только на `wheelSlipRatio` и не меньше стартового окна
+    /// `wheelLaunchSurfaceSpeed` (иначе не тронуться с места). Превышение
+    /// этого лимита гасится встречным моментом, пропорциональным превышению
+    /// (`wheelSpinGain`) — предел мягкий, буксование ниже допуска ничем не
+    /// стесняются. Абсолютный предел `wheelMaxSurfaceSpeed` остаётся сверху:
+    /// на скорости выше него колесо не разгоняется даже ровно по грунту
+    /// (иначе каркас разнесло бы за красивым лимитом). Действует на все
+    /// колёса, не только на моторные: с каждой падает отряд.
     private void applyWheelSpinGovernor()
     {
         if (master is null)
@@ -540,7 +542,12 @@ final class BuggyPhysics
                 const vec3 axle = w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
                 const float spin = dot(axle, w.angularVelocity);
                 const float r = i < fr.anchors.length ? fr.anchors[i].radius : wheelRadius;
-                const float excess = abs(spin) - wheelMaxSurfaceSpeed / r;
+                const float groundSpeed = abs(w.velocity.z);
+                const float allowedSurface = min(
+                    max(groundSpeed * (1.0f + wheelSlipRatio),
+                        wheelLaunchSurfaceSpeed),
+                    wheelMaxSurfaceSpeed);
+                const float excess = abs(spin) - allowedSurface / r;
                 if (excess > 0.0f)
                 {
                     const float dir = (spin < 0.0f) ? -1.0f : 1.0f;
