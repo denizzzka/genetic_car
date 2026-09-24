@@ -44,34 +44,68 @@ struct Anchor
     float radius = defaultWheelRadius;
 }
 
-/// Тип балки каркаса.
+/// Тип обычной балки каркаса.
 enum BeamKind { normal }
 
-/// Балка: пара индексов узлов в `Frame.nodes` и радиус трубы.
-struct Beam
+/// Эфемерная балка: связывает два узла (`Frame.nodes`), не несёт массы,
+/// рендера и физического тела — только топология. Наследники добавляют
+/// собственные свойства (радиус, `kind`).
+class EphemeralBeam
 {
     size_t a, b;
+
+    this(size_t a, size_t b)
+    {
+        this.a = a;
+        this.b = b;
+    }
+}
+
+/// Обычная балка: эфемерная плюс радиус трубы и тип. Даёт каркасу массу,
+/// рендер и физическое тело.
+class Beam : EphemeralBeam
+{
     float radius = 0.04f;
     BeamKind kind = BeamKind.normal;
+
+    this(size_t a, size_t b, float radius = 0.04f, BeamKind kind = BeamKind.normal)
+    {
+        super(a, b);
+        this.radius = radius;
+        this.kind = kind;
+    }
+}
+
+/// Каст к обычной балке: масса, рендер и физическое тело есть только у `Beam`.
+Beam asBeam(const EphemeralBeam b)
+{
+    auto beam = cast(Beam) b;
+    assert(beam !is null, "только обычная балка несёт радиус/массу/рендер");
+    return beam;
 }
 
 /// Каркас багги целиком: узлы, балки, якоря (колёса).
 struct Frame
 {
     Node[] nodes;
-    Beam[] beams;
+    EphemeralBeam[] beams;
     Anchor[] anchors;
 
     /// Наследуемая сила мотор-колёс, Н·м (ген `motorPower`). Знак задаёт
     /// направление привода: отрицательный момент едет в обратную сторону.
     float motorPower;
 
-    /// Суммарная длина всех балок каркаса (приближение массы).
+    /// Суммарная длина всех обычных балок каркаса (приближение массы).
+    /// Эфемерные балки массы не несут и в массу не входят.
     @property float totalBeamLength() const
     {
         float len = 0.0f;
         foreach (b; beams)
+        {
+            if (cast(Beam) b is null)
+                continue;
             len += distance(nodes[b.a].pos, nodes[b.b].pos);
+        }
         return len;
     }
 
@@ -141,7 +175,7 @@ unittest
         Node(vec3(0.6f, 0.7f, 0.3f)),
         Node(vec3(0.6f, -0.7f, 0.3f)),
     ];
-    f.beams = [Beam(0, 1, 0.05f)];
+    f.beams = [new Beam(0, 1, 0.05f)];
     f.anchors = [
         Anchor(0, AnchorKind.wheel),
         Anchor(1, AnchorKind.motorWheel),
@@ -165,4 +199,12 @@ unittest
     Frame h;
     h.nodes = [Node(vec3(0.0f, 0.0f, 0.5f))];
     assert(isConnected(h));
+
+    // Эфемерная балка связывает узлы в топологии, но массы не несёт.
+    Frame j;
+    j.nodes = [Node(origin), Node(vec3(0.0f, 1.0f, 0.0f))];
+    j.beams = [new EphemeralBeam(0, 1)];
+    assert(isConnected(j));
+    assert(j.totalBeamLength == 0.0f);
+    assert(j.beamDirectionAt(0) == vec3(0.0f, 1.0f, 0.0f));
 }

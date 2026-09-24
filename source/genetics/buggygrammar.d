@@ -314,9 +314,9 @@ Nullable!Frame frameFromAst(const Ast ast)
 
             // Пары: балка и её twin, twin-балку растаскивает активатор
             // Nodal, ингибитор Lefty гасит его (self-limiting асимметрия).
-            result.beams ~= Beam(start, end, radius, b.kind);
+            result.beams ~= new Beam(start, end, radius, b.kind);
             if (seg.fork && !(forkOf[start] == start && forkOf[end] == end))
-                result.beams ~= Beam(forkOf[start], forkOf[end],
+                result.beams ~= new Beam(forkOf[start], forkOf[end],
                     radius * (1.0f + forkAsymmetry(b.nodal, b.lefty)), b.kind);
 
             heading += b.turn;
@@ -630,8 +630,8 @@ unittest
 
     // Nodal=0.1 без ингибитора даёт сдвиг 0.1; радиус твин-балки:
     // 0.04 · (1 + 0.1) = 0.044.
-    assert(abs(f.get.beams[1].radius - 0.04f) < 1e-4f);
-    assert(abs(f.get.beams[2].radius - 0.044f) < 1e-4f);
+    assert(abs(asBeam(f.get.beams[1]).radius - 0.04f) < 1e-4f);
+    assert(abs(asBeam(f.get.beams[2]).radius - 0.044f) < 1e-4f);
 
     assert(f.get.anchors.length == 1,
         "якорь вешается на конец ствола");
@@ -911,7 +911,7 @@ unittest
     assert(abs(f.get.nodes[1].pos.x - 1.7f) < 1e-4f
         && abs(f.get.nodes[2].pos.x + 0.3f) < 1e-4f,
         "twin зеркалится вокруг локальной оси 0.7, а не мировой X == 0");
-    assert(abs(f.get.beams[1].radius - 0.048f) < 1e-4f,
+    assert(abs(asBeam(f.get.beams[1]).radius - 0.048f) < 1e-4f,
         "twin-радиус у «глаза» тоже масштабируется активатором Nodal");
     // Якорь-колесо (refIdx 1) зеркалится вместе с twin-узлом: у нас снова две
     // пары «глаз на оси + его якорь», только обе на локальной оси 0.7.
@@ -958,9 +958,9 @@ unittest
     auto f = frameFromAst(ast.get);
     assert(!f.isNull);
     assert(f.get.beams.length == 2);
-    assert(abs(f.get.beams[0].radius - 0.06f) < 1e-5f,
+    assert(abs(asBeam(f.get.beams[0]).radius - 0.06f) < 1e-5f,
         "первая балка не меняется");
-    assert(abs(f.get.beams[1].radius - 0.03f) < 1e-5f,
+    assert(abs(asBeam(f.get.beams[1]).radius - 0.03f) < 1e-5f,
         "последняя балка сужается в taper раз");
 }
 
@@ -972,7 +972,7 @@ unittest
         Node(origin),
         Node(right),
     ];
-    f.beams = [Beam(0, 0, 0.04f)];
+    f.beams = [new Beam(0, 0, 0.04f)];
     f.anchors = [Anchor(0, AnchorKind.wheel)];
     assert(isValidFrame(f).isNull);
 
@@ -982,7 +982,7 @@ unittest
         Node(vec3(0.6f, 0.7f, 0.3f)),
         Node(vec3(0.6f, -0.7f, 0.3f)),
     ];
-    g.beams = [Beam(0, 1, 0.05f)];
+    g.beams = [new Beam(0, 1, 0.05f)];
     g.anchors = [
         Anchor(0, AnchorKind.wheel),
         Anchor(1, AnchorKind.motorWheel),
@@ -995,7 +995,7 @@ unittest
     // Длины балок ограничены: минимум 5 см, максимум 3 метра.
     Frame tooShort;
     tooShort.nodes = [Node(origin), Node(vec3(0.04f, 0.0f, 0.0f))];
-    tooShort.beams = [Beam(0, 1, 0.04f)];
+    tooShort.beams = [new Beam(0, 1, 0.04f)];
     tooShort.anchors = [Anchor(0, AnchorKind.wheel)];
     assert(4.0f < 100.0f * minBeamLength, "балка короче 5 см");
     assert(isValidFrame(tooShort).isNull, "балка короче 5 см — невалидный каркас");
@@ -1003,19 +1003,19 @@ unittest
     // Ровно 5 см — на границе допустимого.
     Frame exactMin;
     exactMin.nodes = [Node(origin), Node(vec3(minBeamLength, 0.0f, 0.0f))];
-    exactMin.beams = [Beam(0, 1, 0.04f)];
+    exactMin.beams = [new Beam(0, 1, 0.04f)];
     exactMin.anchors = [Anchor(0, AnchorKind.wheel), Anchor(1, AnchorKind.wheel)];
     assert(!isValidFrame(exactMin).isNull, "балка ровно 5 см — на границе, валидна");
 
     Frame tooLong;
     tooLong.nodes = [Node(origin), Node(vec3(3.5f, 0.0f, 0.0f))];
-    tooLong.beams = [Beam(0, 1, 0.04f)];
+    tooLong.beams = [new Beam(0, 1, 0.04f)];
     tooLong.anchors = [Anchor(0, AnchorKind.wheel)];
     assert(isValidFrame(tooLong).isNull, "балка длиннее 3 м — невалидный каркас");
 
     Frame exactMax;
     exactMax.nodes = [Node(origin), Node(vec3(maxBeamLength, 0.0f, 0.0f))];
-    exactMax.beams = [Beam(0, 1, 0.04f)];
+    exactMax.beams = [new Beam(0, 1, 0.04f)];
     exactMax.anchors = [Anchor(0, AnchorKind.wheel), Anchor(1, AnchorKind.wheel)];
     assert(!isValidFrame(exactMax).isNull, "балка ровно 3 м — на границе, валидна");
 }

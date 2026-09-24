@@ -21,7 +21,7 @@ import dagon.ext.newton;
 import frame.frame : origin, frameUp = up, frameForward = forward,
     frameRight = right, frameBackward = backward,
     Frame, Node, Beam, Anchor, AnchorKind, BeamKind,
-    isConnected, initialMotorPower;
+    asBeam, isConnected, initialMotorPower;
 import physics_world.physics;
 import physics_world.terrain;
 import physics_world.terrainworld;
@@ -65,12 +65,12 @@ unittest
     const rr = node(vec3(-0.6f, -0.7f, 0.3f));
     // Поперечные балки первыми: у каждого колеса ось — своя поперечина
     // (как у листового узла), а не наклонная диагональ к центру.
-    frame.beams ~= Beam(fl, fr, 0.045f);
-    frame.beams ~= Beam(rl, rr, 0.05f);
-    frame.beams ~= Beam(c, fl, 0.045f);
-    frame.beams ~= Beam(c, fr, 0.045f);
-    frame.beams ~= Beam(c, rl, 0.05f);
-    frame.beams ~= Beam(c, rr, 0.05f);
+    frame.beams ~= new Beam(fl, fr, 0.045f);
+    frame.beams ~= new Beam(rl, rr, 0.05f);
+    frame.beams ~= new Beam(c, fl, 0.045f);
+    frame.beams ~= new Beam(c, fr, 0.045f);
+    frame.beams ~= new Beam(c, rl, 0.05f);
+    frame.beams ~= new Beam(c, rr, 0.05f);
     frame.anchors ~= Anchor(fl, AnchorKind.wheel);
     frame.anchors ~= Anchor(fr, AnchorKind.wheel);
     frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
@@ -137,12 +137,12 @@ unittest
     const rl = node(vec3(0.6f, -0.7f, 0.3f));
     const rr = node(vec3(-0.6f, -0.7f, 0.3f));
     // Поперечные балки первыми — ось каждого колеса своя, поперечная.
-    frame.beams ~= Beam(fl, fr, 0.045f);
-    frame.beams ~= Beam(rl, rr, 0.05f);
-    frame.beams ~= Beam(c, fl, 0.045f);
-    frame.beams ~= Beam(c, fr, 0.045f);
-    frame.beams ~= Beam(c, rl, 0.05f);
-    frame.beams ~= Beam(c, rr, 0.05f);
+    frame.beams ~= new Beam(fl, fr, 0.045f);
+    frame.beams ~= new Beam(rl, rr, 0.05f);
+    frame.beams ~= new Beam(c, fl, 0.045f);
+    frame.beams ~= new Beam(c, fr, 0.045f);
+    frame.beams ~= new Beam(c, rl, 0.05f);
+    frame.beams ~= new Beam(c, rr, 0.05f);
     frame.anchors ~= Anchor(fl, AnchorKind.wheel);
     frame.anchors ~= Anchor(fr, AnchorKind.wheel);
     frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
@@ -201,12 +201,12 @@ unittest
     const fr = node(vec3(-0.6f, 0.7f, 0.3f));
     const rl = node(vec3(0.6f, -0.7f, 0.3f));
     const rr = node(vec3(-0.6f, -0.7f, 0.3f));
-    frame.beams ~= Beam(c, fl, 0.045f);
-    frame.beams ~= Beam(c, fr, 0.045f);
-    frame.beams ~= Beam(c, rl, 0.05f);
-    frame.beams ~= Beam(c, rr, 0.05f);
-    frame.beams ~= Beam(fl, fr, 0.045f);
-    frame.beams ~= Beam(rl, rr, 0.05f);
+    frame.beams ~= new Beam(c, fl, 0.045f);
+    frame.beams ~= new Beam(c, fr, 0.045f);
+    frame.beams ~= new Beam(c, rl, 0.05f);
+    frame.beams ~= new Beam(c, rr, 0.05f);
+    frame.beams ~= new Beam(fl, fr, 0.045f);
+    frame.beams ~= new Beam(rl, rr, 0.05f);
     frame.anchors ~= Anchor(fl, AnchorKind.wheel);
     frame.anchors ~= Anchor(fr, AnchorKind.wheel);
     frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
@@ -821,6 +821,7 @@ final class BuggyPhysics
         // Массы у балок нет — мост (master) несёт всю раму и тянет балки.
         foreach (i, b; frame.beams)
         {
+            const auto beam = asBeam(b);
             const vec3 a = frame.nodes[b.a].pos;
             const vec3 c = frame.nodes[b.b].pos;
             const vec3 dir = c - a;
@@ -829,7 +830,7 @@ final class BuggyPhysics
                 continue;
 
             auto body = New!NewtonCarBody(NewtonRigidBodyType.Kinematic,
-                makeAxisYCylinder(b.radius, b.radius, len, world),
+                makeAxisYCylinder(beam.radius, beam.radius, len, world),
                 0.0f, world, world);
             // Ось цилиндра (локальный Y) — вдоль балки.
             body.dynamic = true;
@@ -869,7 +870,8 @@ final class BuggyPhysics
             const float len = (b2 - a).length;
             if (len < 1e-5f)
                 continue;
-            float m = cast(float)(beamDensity * PI * b.radius * b.radius * len);
+            float m = cast(float)(beamDensity * PI
+                * asBeam(b).radius * asBeam(b).radius * len);
             totalMass += m;
             sumM += (a + b2) * 0.5f * m;
         }
@@ -1036,7 +1038,7 @@ final class BuggyPhysics
             const vec3 lowWorld = b.position.xyz - dir * (beamLen[i] * 0.5f);
             const vec3 lowCar = toCarPos(lowWorld);
             const float ground = groundHeightAt(lowCar);
-            if (lowCar.z - fr.beams[i].radius < ground - beamGroundEps)
+            if (lowCar.z - asBeam(fr.beams[i]).radius < ground - beamGroundEps)
                 return true;
         }
         return false;
@@ -1229,7 +1231,7 @@ unittest
     // canDrive: решает, стоит ли запускать физический заезд.
     Frame f;
     f.nodes = [Node(origin), Node(frameRight)];
-    f.beams = [Beam(0, 1, 0.05f)];
+    f.beams = [new Beam(0, 1, 0.05f)];
 
     f.anchors = [Anchor(0, AnchorKind.wheel)];
     assert(!canDrive(f), "нет мотор-колеса — привода нет");
@@ -1262,10 +1264,10 @@ unittest
         fr.nodes ~= Node(vec3(-0.602f, -0.505f, 0.101f));
         fr.nodes ~= Node(vec3(1.204f, -1.915f, -0.098f));
         fr.nodes ~= Node(vec3(-1.204f, -1.915f, -0.098f));
-        fr.beams ~= Beam(0, 1, 0.050f);
-        fr.beams ~= Beam(0, 2, 0.050f);
-        fr.beams ~= Beam(1, 3, 0.044f);
-        fr.beams ~= Beam(2, 4, 0.044f);
+        fr.beams ~= new Beam(0, 1, 0.050f);
+        fr.beams ~= new Beam(0, 2, 0.050f);
+        fr.beams ~= new Beam(1, 3, 0.044f);
+        fr.beams ~= new Beam(2, 4, 0.044f);
         fr.motorPower = 109.6f;
         return fr;
     }
@@ -1309,7 +1311,7 @@ unittest
     // `stallSeconds` симуляционных секунд runFailure объявляет сход.
     Frame f;
     f.nodes = [Node(origin), Node(frameRight), Node(frameRight * 2.0f)];
-    f.beams = [Beam(0, 1, 0.04f), Beam(1, 2, 0.04f)];
+    f.beams = [new Beam(0, 1, 0.04f), new Beam(1, 2, 0.04f)];
     f.anchors = [Anchor(0, AnchorKind.wheel), Anchor(2, AnchorKind.wheel)];
     const double dt = 1.0 / 60.0;
 

@@ -498,10 +498,14 @@ float beamMassSymmetry(const Frame f)
     const float diag = aabbDiagonal(f);
     const float eps = max(0.02f * diag, 1e-3f);
 
+    // Масса есть только у обычной балки: эфемерная не участвует.
     float mass(size_t i) {
+        auto beam = cast(Beam) f.beams[i];
+        if (beam is null)
+            return 0.0f;
         const vec3 a = f.nodes[f.beams[i].a].pos;
         const vec3 c = f.nodes[f.beams[i].b].pos;
-        return f.beams[i].radius * f.beams[i].radius * (c - a).length;
+        return beam.radius * beam.radius * (c - a).length;
     }
 
     bool[] used = new bool[f.beams.length];
@@ -516,6 +520,10 @@ float beamMassSymmetry(const Frame f)
             matched += m;
             continue;
         }
+        // Эфемерная балка массы не имеет и пару обычной не занимает.
+        const auto bi = cast(Beam) f.beams[i];
+        if (bi is null)
+            continue;
 
         const vec3 a = f.nodes[f.beams[i].a].pos;
         const vec3 c = f.nodes[f.beams[i].b].pos;
@@ -536,7 +544,10 @@ float beamMassSymmetry(const Frame f)
         {
             if (j == i || used[j])
                 continue;
-            if (abs(f.beams[j].radius - f.beams[i].radius) > 0.02f * f.beams[i].radius + 1e-4f)
+            const auto bj = cast(Beam) f.beams[j];
+            if (bj is null)
+                continue;
+            if (abs(bj.radius - bi.radius) > 0.02f * bi.radius + 1e-4f)
                 continue;
             const vec3 da = f.nodes[f.beams[j].a].pos;
             const vec3 dc = f.nodes[f.beams[j].b].pos;
@@ -660,7 +671,7 @@ unittest
     Frame noWheels;
     noWheels.nodes ~= Node(origin);
     noWheels.nodes ~= Node(right);
-    noWheels.beams ~= Beam(0, 1, 0.05f);
+    noWheels.beams ~= new Beam(0, 1, 0.05f);
     assert(buggyFitness(noWheels) == 0.0f);
 
     // Колеса есть, но нет ведущего — 0.
@@ -673,7 +684,7 @@ unittest
     Frame split = noMotor;
     split.nodes ~= Node(vec3(5.0f, 5.0f, 0.3f));
     split.nodes ~= Node(vec3(5.0f, 6.0f, 0.3f));
-    split.beams ~= Beam(2, 3, 0.04f);
+    split.beams ~= new Beam(2, 3, 0.04f);
     assert(!isConnected(split));
     assert(buggyFitness(split) == 0.0f);
 
@@ -681,7 +692,7 @@ unittest
     // (под нижнюю точку колёс) — физическая отбраковка.
     Frame underGround = symmetricBuggyFrame();
     underGround.nodes ~= Node(down);
-    underGround.beams ~= Beam(0, underGround.nodes.length - 1, 0.04f);
+    underGround.beams ~= new Beam(0, underGround.nodes.length - 1, 0.04f);
     assert(buggyFitness(underGround) == 0.0f,
         "балка ниже уровня земли должна отбраковываться");
 
@@ -689,7 +700,7 @@ unittest
     Frame boundary = symmetricBuggyFrame();
     // Нижняя точка колёс: zmin колёс = 0.25 -> земля 0.25 - 0.3 = -0.05.
     boundary.nodes ~= Node(vec3(0.0f, 0.0f, -0.05f));
-    boundary.beams ~= Beam(0, boundary.nodes.length - 1, 0.04f);
+    boundary.beams ~= new Beam(0, boundary.nodes.length - 1, 0.04f);
     assert(buggyFitness(boundary) > 0.0f,
         "касание плоскости земли в пределах допуска не отбраковывается");
 
@@ -706,10 +717,10 @@ unittest
     // получает меньший фитнес. Отличие — phiBox.
     Frame inside = symmetricBuggyFrame();
     inside.nodes ~= Node(vec3(0.3f, 0.0f, 0.4f));
-    inside.beams ~= Beam(0, inside.nodes.length - 1, 0.04f);
+    inside.beams ~= new Beam(0, inside.nodes.length - 1, 0.04f);
     Frame outside = symmetricBuggyFrame();
     outside.nodes ~= Node(vec3(1.5f, 0.0f, 0.4f));
-    outside.beams ~= Beam(0, outside.nodes.length - 1, 0.04f);
+    outside.beams ~= new Beam(0, outside.nodes.length - 1, 0.04f);
     assert(outside.nodes[$ - 1].pos.x > boxWidthHalf + epsFlat,
         "узел теста обязан выступать за полуширину ящика (1.25)");
     assert(buggyFitness(inside) > 0.0f && buggyFitness(outside) > 0.0f);
@@ -772,7 +783,7 @@ unittest
     // Балка, ушедшая из узла 0 вертикально в корпус кабины, — отбраковка.
     Frame pierce = symmetricBuggyFrame();
     pierce.nodes ~= Node(vec3(0.0f, 0.0f, 0.8f));
-    pierce.beams ~= Beam(0, pierce.nodes.length - 1, 0.04f);
+    pierce.beams ~= new Beam(0, pierce.nodes.length - 1, 0.04f);
     assert(frameCabinContact(pierce).length,
         "балка сквозь корпус кабины не должна проходить");
     assert(buggyFitness(pierce) == 0.0f);
@@ -780,7 +791,7 @@ unittest
     // Балка в плоскости пола кабины (граница зоны) — не касание.
     Frame mount = symmetricBuggyFrame();
     mount.nodes ~= Node(vec3(0.3f, 0.0f, 0.4f));
-    mount.beams ~= Beam(0, mount.nodes.length - 1, 0.04f);
+    mount.beams ~= new Beam(0, mount.nodes.length - 1, 0.04f);
     assert(frameCabinContact(mount).length == 0,
         "балка в плоскости пола не считается касанием");
     assert(buggyFitness(mount) > 0.0f);
@@ -810,12 +821,12 @@ private Frame symmetricBuggyFrame()
     const rl = node(vec3(1.2f, -0.6f, 0.25f));
     const rr = node(vec3(-1.2f, -0.6f, 0.25f));
 
-    f.beams ~= Beam(c, fl, 0.045f);
-    f.beams ~= Beam(c, fr, 0.045f);
-    f.beams ~= Beam(c, rl, 0.05f);
-    f.beams ~= Beam(c, rr, 0.05f);
-    f.beams ~= Beam(fl, fr, 0.045f); // передняя ось: петля
-    f.beams ~= Beam(rl, rr, 0.05f);  // задняя ось: петля
+    f.beams ~= new Beam(c, fl, 0.045f);
+    f.beams ~= new Beam(c, fr, 0.045f);
+    f.beams ~= new Beam(c, rl, 0.05f);
+    f.beams ~= new Beam(c, rr, 0.05f);
+    f.beams ~= new Beam(fl, fr, 0.045f); // передняя ось: петля
+    f.beams ~= new Beam(rl, rr, 0.05f);  // задняя ось: петля
 
     f.anchors ~= Anchor(fl, AnchorKind.wheel);
     f.anchors ~= Anchor(fr, AnchorKind.wheel);
@@ -839,10 +850,10 @@ private Frame asymmetricBuggyFrame()
     const fr = node(vec3(-0.7f, 0.6f, 0.3f));
     const rl = node(vec3(1.2f, -0.6f, 0.25f));
 
-    f.beams ~= Beam(c, fl, 0.045f);
-    f.beams ~= Beam(c, fr, 0.045f);
-    f.beams ~= Beam(c, rl, 0.05f);
-    f.beams ~= Beam(fl, fr, 0.045f);
+    f.beams ~= new Beam(c, fl, 0.045f);
+    f.beams ~= new Beam(c, fr, 0.045f);
+    f.beams ~= new Beam(c, rl, 0.05f);
+    f.beams ~= new Beam(fl, fr, 0.045f);
 
     f.anchors ~= Anchor(fl, AnchorKind.wheel);
     f.anchors ~= Anchor(fr, AnchorKind.wheel);

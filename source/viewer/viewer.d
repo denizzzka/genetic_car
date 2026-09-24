@@ -498,7 +498,7 @@ class BuggyScene: Scene
                 auto e = addEntity(carRoot);
                 e.drawable = meshBeam;
                 e.material = matBeam;
-                e.scaling = Vector3f(b.radius, len, b.radius);
+                e.scaling = Vector3f(asBeam(b).radius, len, asBeam(b).radius);
                 liveCar ~= e;
             }
 
@@ -697,7 +697,7 @@ class BuggyScene: Scene
             e.material = matBeam;
             e.position = (a + b2) * 0.5f;
             e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
-            e.scaling = Vector3f(b.radius, length, b.radius);
+            e.scaling = Vector3f(asBeam(b).radius, length, asBeam(b).radius);
         }
 
         foreach (anchor; buggy.frame.anchors)

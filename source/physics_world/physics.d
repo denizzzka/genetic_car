@@ -14,7 +14,7 @@ import dlib.math.transformation;
 import dagon.core.event;
 import dagon.ext.newton;
 
-import frame.frame : Frame, Node, Beam, Anchor, AnchorKind, origin,
+import frame.frame : Frame, Node, EphemeralBeam, Beam, Anchor, AnchorKind, origin,
     right, up, forward;
 
 /// Радиус колеса по умолчанию, м. Совпадает с внешним радиусом визуального
@@ -116,7 +116,7 @@ Frame placedFrame(const Frame f)
     const vec3 off = placeOffset(f);
     Frame r;
     r.nodes = f.nodes.dup;
-    r.beams = f.beams.dup;
+    r.beams = cast(EphemeralBeam[]) f.beams;
     r.anchors = f.anchors.dup;
     r.motorPower = f.motorPower;
     foreach (ref n; r.nodes)
@@ -410,7 +410,7 @@ unittest
     // центра — большое колесо поднимает раму выше.
     Frame f;
     f.nodes = [Node(origin), Node(vec3(0.0f, 1.0f, 0.0f))];
-    f.beams = [Beam(0, 1, 0.05f)];
+    f.beams = [new Beam(0, 1, 0.05f)];
     // Большое колесо (радиус 0.75 м) у узла 0, маленькое (0.05 м) у узла 1.
     f.anchors = [
         Anchor(0, AnchorKind.wheel, 0.75f),
@@ -429,7 +429,7 @@ unittest
     // Сравнение с прежним поведением: колёса одного базового радиуса.
     Frame g;
     g.nodes = [Node(origin), Node(vec3(0.0f, 1.0f, -0.2f))];
-    g.beams = [Beam(0, 1, 0.05f)];
+    g.beams = [new Beam(0, 1, 0.05f)];
     g.anchors = [
         Anchor(0, AnchorKind.wheel),
         Anchor(1, AnchorKind.motorWheel, 0.3f),
