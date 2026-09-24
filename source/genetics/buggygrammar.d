@@ -1,6 +1,7 @@
 module genetics.buggygrammar;
 
 import std.math;
+import std.algorithm : min, max;
 import std.typecons: Nullable;
 import dlib.math.vector;
 import frame.frame;
@@ -408,10 +409,38 @@ size_t skeletonBeamCount()
 enum float minBeamLength = 0.05f;
 enum float maxBeamLength = 3.0f;
 
+/// Допуск совпадения отрезков в теле: зазор меньше, чем реальные радиусы,
+/// поэтому ловит проход через одну точку, а не близкий пролёт.
+enum float beamCrossGap = 1e-3f;
+
+/// Пересечение двух отрезков в их строгой внутренности. Общий конец (стык
+/// балок в одном узле) пересечением не считается.
+private bool beamsCross(const vec3 a1, const vec3 a2, const vec3 b1, const vec3 b2)
+{
+    const vec3 d1 = a2 - a1;
+    const vec3 d2 = b2 - b1;
+    const vec3 r = b1 - a1;
+
+    const float a = d1.lengthsqr;
+    const float e = d2.lengthsqr;
+    const float b = dot(d1, d2);
+    const float denom = a * e - b * b; // |d1 × d2|²
+    if (denom <= 1e-12f)
+        return false; // коллинеарные (твины форка) не пересекаются в точке
+    const float c = dot(d1, r);
+    const float f = dot(d2, r);
+    const float s = (e * c - b * f) / denom;
+    const float t = (b * c - a * f) / denom;
+    if (s <= 0.0f || s >= 1.0f || t <= 0.0f || t >= 1.0f)
+        return false;
+    return ((a1 + d1 * s) - (b1 + d2 * t)).lengthsqr
+        < beamCrossGap * beamCrossGap;
+}
+
 /**
  * Структурная валидность каркаса: узлы в границах, без вырожденных балок,
- * все балки в допустимом диапазоне длин, якоря — на валидных узлах,
- * каркас связен.
+ * все балки в допустимом диапазоне длин, обычные балки не пересекаются в
+ * теле, якоря — на валидных узлах, каркас связен.
  */
 Nullable!Frame isValidFrame(Frame f)
 {
@@ -426,6 +455,21 @@ Nullable!Frame isValidFrame(Frame f)
         const len = distance(f.nodes[b.a].pos, f.nodes[b.b].pos);
         if (len < minBeamLength || len > maxBeamLength)
             return Nullable!Frame.init;
+    }
+
+    // Эфемерные балки скелета в проверке не участвуют: они не несут тела.
+    foreach (i; 0 .. f.beams.length)
+    {
+        if (cast(Beam) f.beams[i] is null)
+            continue;
+        foreach (j; i + 1 .. f.beams.length)
+        {
+            if (cast(Beam) f.beams[j] is null)
+                continue;
+            if (beamsCross(f.nodes[f.beams[i].a].pos, f.nodes[f.beams[i].b].pos,
+                f.nodes[f.beams[j].a].pos, f.nodes[f.beams[j].b].pos))
+                return Nullable!Frame.init;
+        }
     }
 
     // Дубли якорей на одном узле допускаются — это вырожденный случай, который
@@ -972,7 +1016,9 @@ unittest
         && abs(f.get.nodes[skeletonNodeCount() + 5].pos.x + 1.15f) < 1e-4f,
         "второй палец отражается так же, и обе пары симметричны");
 
-    assert(!isValidFrame(f.get).isNull, "каркас с пальцами остаётся связным");
+    // Пальцы-твины пересекаются в теле на оси сегмента: по правилу
+    // «балки не пересекаются» такой каркас невалиден.
+    assert(isValidFrame(f.get).isNull, "перекрёст пальцев на оси — невалидный каркас");
 }
 
 unittest
@@ -1114,4 +1160,24 @@ unittest
     exactMax.beams = [new Beam(0, 1, 0.04f)];
     exactMax.anchors = [Anchor(0, AnchorKind.wheel), Anchor(1, AnchorKind.wheel)];
     assert(!isValidFrame(exactMax).isNull, "балка ровно 3 м — на границе, валидна");
+}
+
+unittest
+{
+    // Две балки крест-накрест в теле — невалидный каркас.
+    Frame x;
+    x.nodes = [Node(origin), Node(vec3(1.0f, 0.0f, 0.0f)),
+               Node(vec3(0.5f, 0.5f, 0.0f)), Node(vec3(0.5f, -0.5f, 0.0f))];
+    x.beams = [new Beam(0, 1, 0.04f), new Beam(2, 3, 0.04f),
+               new Beam(0, 2, 0.04f), new Beam(1, 2, 0.04f)];
+    x.anchors = [Anchor(0, AnchorKind.wheel), Anchor(3, AnchorKind.wheel)];
+    assert(isValidFrame(x).isNull, "перекрёст балок в теле — отбраковка");
+
+    // Общий узел (стык/тройник) пересечением не считается.
+    Frame tee;
+    tee.nodes = [Node(origin), Node(vec3(1.0f, 0.0f, 0.0f)),
+                 Node(vec3(0.5f, 0.5f, 0.0f))];
+    tee.beams = [new Beam(0, 1, 0.04f), new Beam(1, 2, 0.04f)];
+    tee.anchors = [Anchor(0, AnchorKind.wheel), Anchor(2, AnchorKind.wheel)];
+    assert(!isValidFrame(tee).isNull, "стык в общем узле — валиден");
 }
