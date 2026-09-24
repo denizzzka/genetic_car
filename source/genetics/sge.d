@@ -1,8 +1,15 @@
 module genetics.sge;
 
+import std.algorithm.comparison : max, min;
 import std.array: appender, insertInPlace;
+import std.math : cos, exp, log, PI, round, sqrt;
 import std.random;
 import std.sumtype;
+
+/// Стартовые темпы мутаций поколения 0; дальше особи самоадаптируются.
+enum size_t defaultPointHits = 3;
+enum size_t defaultIndelHits = 1;
+enum float defaultStructuralChance = 0.25f;
 
 abstract class Symbol {}
 
@@ -116,6 +123,11 @@ final class Genotype
 {
     uint[][] genes;
 
+    /// Самоадаптируемые темпы мутаций потомков особи.
+    size_t pointHits = defaultPointHits;
+    size_t indelHits = defaultIndelHits;
+    float structuralChance = defaultStructuralChance;
+
     this()
     {
     }
@@ -132,6 +144,10 @@ final class Genotype
 
         foreach (g, ref gene; this.genes)
             copy.genes[g] = gene.dup;
+
+        copy.pointHits = pointHits;
+        copy.indelHits = indelHits;
+        copy.structuralChance = structuralChance;
 
         return copy;
     }
@@ -163,6 +179,9 @@ Genotype crossover(const Genotype a, const Genotype b, ref Random rnd)
         else
             child.genes[g] = b.genes[g].dup;
     }
+    child.pointHits = a.pointHits;
+    child.indelHits = a.indelHits;
+    child.structuralChance = a.structuralChance;
     return child;
 }
 
@@ -245,6 +264,37 @@ void mutateIndel(Genotype genotype, size_t hits, ref Random rnd)
             genotype.genes[gi] = gene[0 .. pos] ~ gene[pos + 1 .. $];
         }
     }
+}
+
+/**
+ * Самоадаптация темпов мутаций: наследник получает параметры родителя с
+ * лог-нормальным шагом по числу правок и гауссовым шагом по доле структурных
+ * мутаций. Темп эволюции становится признаком, а не константой конфигурации.
+ */
+void mutateSelfAdaptation(Genotype genotype, ref Random rnd)
+{
+    genotype.pointHits = evolveCount(genotype.pointHits, 1, 12, rnd);
+    genotype.indelHits = evolveCount(genotype.indelHits, 1, 6, rnd);
+    genotype.structuralChance = cast(float)
+        max(0.0, min(1.0, cast(double) genotype.structuralChance
+            + 0.1 * gaussian(rnd)));
+}
+
+/// Лог-нормальный шаг числа правок с зажимом в разрешённый диапазон.
+private size_t evolveCount(size_t v, size_t lo, size_t hi, ref Random rnd)
+{
+    const double raw = round((cast(double) v) * exp(0.3 * gaussian(rnd)));
+    const ulong clamped = max(cast(ulong) lo, min(cast(ulong) hi, cast(ulong) raw));
+    return cast(size_t) clamped;
+}
+
+/// Стандартная нормаль по Боксу–Мюллеру: в Phobos нет `stdNormal`.
+private double gaussian(ref Random rnd)
+{
+    double u1 = uniform(0.0, 1.0, rnd);
+    while (u1 == 0.0)
+        u1 = uniform(0.0, 1.0, rnd);
+    return sqrt(-2.0 * log(u1)) * cos(2.0 * PI * uniform(0.0, 1.0, rnd));
 }
 
 /**
@@ -368,4 +418,42 @@ unittest
     auto g3 = g2.dup;
     mutateIndel(g3, 0, rnd2);
     assert(g3.genes == g2.genes);
+}
+
+unittest
+{
+    import std.random : Random;
+
+    // dup  и crossover переносят темпы мутаций особи.
+    auto a = new Genotype(2);
+    a.pointHits = 5;
+    a.indelHits = 2;
+    a.structuralChance = 0.7f;
+    auto d = a.dup;
+    assert(d.pointHits == 5 && d.indelHits == 2 && d.structuralChance == 0.7f,
+        "dup сохраняет самоадаптируемые темпы");
+
+    auto b = new Genotype(2);
+    auto rnd = Random(1);
+    auto child = crossover(a, b, rnd);
+    assert(child.pointHits == 5 && child.indelHits == 2 && child.structuralChance == 0.7f,
+        "crossover наследует темпы от основного родителя");
+}
+
+unittest
+{
+    import std.random : Random;
+
+    // Шаг самоадаптации не разряжается в опасные диапазоны и не застревает.
+    auto rnd = Random(2);
+    foreach (_; 0 .. 10000)
+    {
+        auto g = new Genotype(1);
+        g.genes = [[0u]];
+        mutateSelfAdaptation(g, rnd);
+        assert(g.pointHits >= 1 && g.pointHits <= 12, "pointHits вне диапазона");
+        assert(g.indelHits >= 1 && g.indelHits <= 6, "indelHits вне диапазона");
+        assert(g.structuralChance >= 0.0f && g.structuralChance <= 1.0f,
+            "structuralChance вне [0,1]");
+    }
 }

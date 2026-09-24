@@ -26,7 +26,10 @@ struct EvolutionConfig
 {
     enum size_t populationSize = 100;
     size_t tournamentSize = 2;
-    size_t mutateHits = 3;
+    /// Стартовые темпы мутаций поколения 0; дальше особи самоадаптируются.
+    size_t mutateHits = defaultPointHits;
+    size_t indelHits = defaultIndelHits;
+    float structuralChance = defaultStructuralChance;
     size_t generationsPerPress = 25;
 
     double simulateSeconds = 0.0;
@@ -42,11 +45,15 @@ struct EvolutionConfig
 /// Все особи одного генома — первая галерея стоит одинаковой шеренгой,
 /// а мутация раздробит её уже на первом поколении. Так различие между
 /// «до» и «после» отбора видно сразу.
-Genotype[] seedPopulation(Grammar gr, size_t n)
+Genotype[] seedPopulation(Grammar gr, size_t n,
+    const EvolutionConfig params = EvolutionConfig.init)
 {
     Genotype[] pop;
     pop.reserve(n);
-    const base = startGenome(gr);
+    auto base = startGenome(gr);
+    base.pointHits = params.mutateHits;
+    base.indelHits = params.indelHits;
+    base.structuralChance = params.structuralChance;
     foreach (_; 0 .. n)
         pop ~= base.dup;
     return pop;
@@ -262,13 +269,14 @@ unittest
     const startAnchors = 2;
 
     // Одна траектория при фиксированном зерне зависит от стартового генома;
-    // способность расти проверяем по детерминированному набору зерен.
+    // способность расти проверяем по детерминированному набору зерен. Бюджет
+    // (30 зерен × 16 поколений) окупает случайность самоадаптации темпов.
     bool grewBeams, grewAnchors;
-    foreach (s; 11 .. 14)
+    foreach (s; 11 .. 41)
     {
         auto rnd = Random(s);
         auto pop = evaluatePopulation(gr, seedPopulation(gr, 100));
-        auto evolved = evolve(gr, pop, 12, rnd);
+        auto evolved = evolve(gr, pop, 16, rnd);
         foreach (e; evolved)
             if (auto may = develop(gr, e.genotype))
             {

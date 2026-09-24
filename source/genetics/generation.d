@@ -21,22 +21,26 @@ private enum size_t maxMutationAttempts = 5;
 private enum size_t maxParentCycles = 3;
 
 /// Жизнеспособный мутант `base` для слотов будущей физической симуляции.
+/// Темпы мутаций наследуются с самоадаптацией; число правок — из параметров
+/// особи, а доля структурных мутаций выбирается один раз на все попытки.
 Nullable!Genotype tryCreateViableMutant(const Grammar gr, const Genotype base,
-    size_t mutateHits, ref Random rnd)
+    ref Random rnd)
 {
-    const structural = uniform(0.0f, 1.0f, rnd) < 0.25f;
+    auto candidate = base.dup;
+    mutateSelfAdaptation(candidate, rnd);
+    const structural = uniform(0.0f, 1.0f, rnd) < candidate.structuralChance;
 
     foreach (_; 0 .. maxMutationAttempts)
     {
-        auto candidate = base.dup;
+        auto trial = candidate.dup;
         if (structural)
-            mutateIndel(candidate, 1, rnd);
+            mutateIndel(trial, candidate.indelHits, rnd);
         else
-            mutate(candidate, mutateHits, rnd);
+            mutate(trial, candidate.pointHits, rnd);
 
-        auto dev = develop(gr, candidate);
+        auto dev = develop(gr, trial);
         if (!dev.isNull && buggyFitness(dev.get.frame, dev.get.ast) > 0.0f)
-            return Nullable!Genotype(candidate);
+            return Nullable!Genotype(trial);
     }
     return Nullable!Genotype.init;
 }
@@ -80,7 +84,7 @@ Genotype[] buildNextGeneration(const Grammar gr, Individual[] pop,
         // и случайного партнёра: потомок наследует куски обоих. Мутация и
         // проверка жизнеспособности этого потомка — дальше, в tryCreateViableMutant.
         if (auto candidate = tryCreateViableMutant(gr,
-            crossover(base, mate, rnd), p.mutateHits, rnd))
+            crossover(base, mate, rnd), rnd))
             next ~= candidate.get;
         parentIdx = (parentIdx + 1) % pool.length;
     }
@@ -101,7 +105,7 @@ unittest
     bool found;
     foreach (e; pop)
     {
-        auto may = tryCreateViableMutant(gr, e.genotype, 3, rnd);
+        auto may = tryCreateViableMutant(gr, e.genotype, rnd);
         if (!may.isNull)
         {
             auto dev = develop(gr, may.get);
