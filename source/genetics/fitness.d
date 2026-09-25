@@ -443,12 +443,13 @@ unittest
 {
     // finishScore: и общая дистанция, и скорость доезда влияют на счёт
     // мультипликативно; быстрее и дальше — выше.
-    assert(finishScore(12.0, 3.0, 3.0) == 1.0f);
-    assert(finishScore(6.0, 3.0, 3.0) == 0.25f);
-    assert(finishScore(6.0, 3.0, 1.5) == 0.5f);
-    assert(finishScore(12.0, 3.0, 1.5) == physicsSpeedCap);
-    assert(finishScore(24.0, 3.0, 1.5) == physicsSpeedCap);
-    assert(finishScore(0.0, 3.0, 3.0) == 0.0f);
+    const float eps = 1e-5f;
+    assert(abs(finishScore(12.0, 3.0, 3.0) - 1.0f) < eps);
+    assert(abs(finishScore(6.0, 3.0, 3.0) - 0.25f) < eps);
+    assert(abs(finishScore(6.0, 3.0, 1.5) - 0.5f) < eps);
+    assert(abs(finishScore(12.0, 3.0, 1.5) - physicsSpeedCap) < eps);
+    assert(abs(finishScore(24.0, 3.0, 1.5) - physicsSpeedCap) < eps);
+    assert(abs(finishScore(0.0, 3.0, 3.0) - 0.0f) < eps);
 }
 
 /// Доля узлов, у которых есть зеркальный партнёр через плоскость X=0.
