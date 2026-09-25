@@ -350,9 +350,10 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
                     start = last;
                     break;
                 case StartRefKind.base:
+                    // segBase — это last на входе сегмента, внешнего индекса
+                    // здесь нет: отбраковывать нечего, только ловить поломку.
                     start = segBase;
-                    if (start >= forks.length)
-                        return Nullable!Frame.init;
+                    assert(start < forks.length);
                     break;
                 case StartRefKind.idx:
                     start = b.start.idx;
