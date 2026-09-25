@@ -491,18 +491,21 @@ class BuggyScene: Scene
 
     private bool showNextLiveBuggy()
     {
-        reload:
-        if (liveBatch is null || liveBatchIdx >= liveBatch.length)
+        // Ищем пригодную машину в текущей партии; если партия кончилась —
+        // берём свежей из batch.needPhysics и начинаем заново.
+        while (true)
         {
-            auto next = batch.needPhysics;
-            if (next is liveBatch || next.length == 0)
-                return false;
-            liveBatch = next;
-            liveBatchIdx = 0;
-        }
+            if (liveBatch is null || liveBatchIdx >= liveBatch.length)
+            {
+                auto next = batch.needPhysics;
+                if (next is liveBatch || next.length == 0)
+                    return false;
+                liveBatch = next;
+                liveBatchIdx = 0;
+            }
 
-        foreach (attempt; liveBatchIdx .. liveBatch.length)
-        {
+            foreach (attempt; liveBatchIdx .. liveBatch.length)
+            {
             Frame frame = liveBatch[attempt].frame;
             if (frame.anchors.length < 2 || !canDrive(frame))
                 continue;
@@ -584,7 +587,7 @@ class BuggyScene: Scene
         }
 
         liveBatchIdx = liveBatch.length;
-        goto reload;
+        }
     }
 
     private void stepLiveCar(const double dt)
