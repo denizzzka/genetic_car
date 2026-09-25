@@ -27,6 +27,20 @@ private NonTerminal nt(string name, Production[] productions)
     return n;
 }
 
+/// Список-нетерминал: «элемент, потом ещё список» и «элемент, и конец».
+/// Саморекурсия не даёт собрать его одним выражением, поэтому символ
+/// создаётся пустым и наполняется здесь же — снаружи дозаполнить забыть
+/// негде, а страховка ниже ловит и любую другую забытую заливку.
+private NonTerminal listNt(string name, Symbol elem)
+{
+    auto list = nt(name, null);
+    list.productions = [
+        new Production([elem, list]),
+        new Production([elem]),
+    ];
+    return list;
+}
+
 /// Маркерный токен без значения
 private Terminal!Tok marker(Tok tok)
 {
@@ -72,9 +86,6 @@ enum float planeEps = 1e-4f;
  */
 Grammar buggyGrammar()
 {
-    auto segmentList_ = nt("segmentList", null);
-    auto beamList_ = nt("beamList", null);
-
     // Раздвоение сегмента: пустая продукция — медианная одиночная структура
     // («глаз по центру»), маркер `Tok.fork` — пара ветвей в сагиттальной
     // плоскости сегмента (её несёт turtle-заголовок, а не мировые оси).
@@ -95,15 +106,6 @@ Grammar buggyGrammar()
         0.0f, 2.0f);
     // Организменный LR-градиент: полярность лево/право всего тела.
     auto lrGradient = new Sampler!Tok("lrGradient", Tok.lrGradient, -0.2f, 0.2f);
-
-    auto segment = nt("segment", [
-        new Production([marker(Tok.segStart), segMode, beamList_]),
-    ]);
-
-    segmentList_.productions = [
-        new Production([segment, segmentList_]),
-        new Production([segment]),
-    ];
 
     auto idx = new Sampler!Tok("idx", Tok.refIdx, 64);
     // Направления turtle: дельта «вперёд» идёт по заголовку, «вправо» —
@@ -148,12 +150,13 @@ Grammar buggyGrammar()
             beamKind, turn]),
     ]);
 
-    beamList_.productions = [
-        new Production([beam, beamList_]),
-        new Production([beam]),
-    ];
+    auto beamList_ = listNt("beamList", beam);
 
-    auto anchorList_ = nt("anchorList", null);
+    auto segment = nt("segment", [
+        new Production([marker(Tok.segStart), segMode, beamList_]),
+    ]);
+
+    auto segmentList_ = listNt("segmentList", segment);
 
     auto anchorKind = nt("anchorKind", [
         new Production([t(Tok.anchorKind, AnchorKind.wheel)]),
@@ -167,10 +170,7 @@ Grammar buggyGrammar()
         new Production([anchorKind, idx, wheelRadius]),
     ]);
 
-    anchorList_.productions = [
-        new Production([anchor, anchorList_]),
-        new Production([anchor]),
-    ];
+    auto anchorList_ = listNt("anchorList", anchor);
 
     // Маркер конца балок и начала якорей.
     auto anchorMarker = nt("anchorMarker", [
@@ -189,6 +189,13 @@ Grammar buggyGrammar()
         idx, endRef, forward, right, up, radius, beamKind,
         anchorMarker, anchorList_, anchor, anchorKind, wheelRadius,
     ];
+    // Нетерминал без продукций не разворачивается: молчащийся ген вместо
+    // ошибки сборки. У самплеров продукций нет by design.
+    foreach (sym; symbols)
+        if (auto nt = cast(NonTerminal) sym)
+            if (cast(Sampler!Tok) nt is null)
+                assert(nt.productions.length > 0, sym.name);
+
     return new Grammar(start, symbols);
 }
 
