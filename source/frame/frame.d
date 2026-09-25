@@ -124,6 +124,14 @@ struct Frame
     }
 }
 
+struct FrameContext
+{
+    Frame frame;
+    size_t growthNode;
+    size_t[] twinOf;
+    size_t inertNode = size_t.max;
+}
+
 /// Стартовая сила мотор-колёс основателя, Н·м: около калиброванного оптимума,
 /// чтобы простейшая машина сразу ехала; дальше эволюция подстроит её.
 enum float initialMotorPower = 100.0f;

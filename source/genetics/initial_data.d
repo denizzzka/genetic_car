@@ -6,6 +6,7 @@ module genetics.initial_data;
 import std.math : abs;
 
 import frame.frame;
+import frame.cockpit : cockpitFrameNodeCount, cockpitFrameBeamCount;
 import physics_world.wheel : defaultWheelRadius;
 import genetics.sge;
 import genetics.buggygrammar;
@@ -105,14 +106,14 @@ unittest
     assert(!may.isNull, "стартовая хромосома должна развиваться");
     const f = may.get.frame;
     // Гироскутер: скелет + две балки от боковых fix-точек (8 → 12, 9 → 13).
-    assert(f.nodes.length == skeletonNodeCount() + 2);
-    assert(f.beams.length == skeletonBeamCount() + 2);
-    assert(f.beams[skeletonBeamCount()].a == 8
-        && f.beams[skeletonBeamCount()].b == 12);
-    assert(f.beams[skeletonBeamCount() + 1].a == 9
-        && f.beams[skeletonBeamCount() + 1].b == 13);
-    assert(cast(Beam) f.beams[skeletonBeamCount()] !is null
-        && cast(Beam) f.beams[skeletonBeamCount() + 1] !is null,
+    assert(f.nodes.length == cockpitFrameNodeCount() + 2);
+    assert(f.beams.length == cockpitFrameBeamCount() + 2);
+    assert(f.beams[cockpitFrameBeamCount()].a == 8
+        && f.beams[cockpitFrameBeamCount()].b == 12);
+    assert(f.beams[cockpitFrameBeamCount() + 1].a == 9
+        && f.beams[cockpitFrameBeamCount() + 1].b == 13);
+    assert(cast(Beam) f.beams[cockpitFrameBeamCount()] !is null
+        && cast(Beam) f.beams[cockpitFrameBeamCount() + 1] !is null,
         "обе стартовые балки обычные, не эфемерные");
     assert(f.anchors.length == 2);
     assert(f.anchors[0].kind == AnchorKind.motorWheel && f.anchors[0].node == 12);
@@ -162,6 +163,6 @@ unittest
     assert(okCount > 100, "большинство точечных мутаций должны развиваться в валидный каркас");
     // Число балок живёт в узком диапазоне вокруг стартового (скелет + 2).
     const avg = beamTotal / okCount;
-    assert(avg >= skeletonBeamCount() && avg <= skeletonBeamCount() + 6,
+    assert(avg >= cockpitFrameBeamCount() && avg <= cockpitFrameBeamCount() + 6,
         "одна мутация не должна обрушивать или раздувать каркас");
 }

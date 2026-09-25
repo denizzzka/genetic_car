@@ -180,20 +180,20 @@ float wheelAnchorSpacing(const Frame f)
 }
 
 /// Пол запретной зоны на курсе y (локальный, от ЦМ кабины): контур днища,
-/// интерполяция хребта. За пределами станций — крайние значения контура.
+/// интерполяция профиля. За пределами станций — крайние значения контура.
 private float cabinFloor(const CockpitGeometry cg, float yLocal)
 {
-    const spine = cg.spine;
-    if (yLocal <= spine[0].y)
-        return spine[0].z;
-    if (yLocal >= spine[$ - 1].y)
-        return spine[$ - 1].z;
-    foreach (i; 1 .. spine.length)
-        if (yLocal <= spine[i].y)
+    const profile = cg.floorProfile;
+    if (yLocal <= profile[0].y)
+        return profile[0].z;
+    if (yLocal >= profile[$ - 1].y)
+        return profile[$ - 1].z;
+    foreach (i; 1 .. profile.length)
+        if (yLocal <= profile[i].y)
         {
-            const t = (yLocal - spine[i - 1].y)
-                / (spine[i].y - spine[i - 1].y);
-            return spine[i - 1].z + (spine[i].z - spine[i - 1].z) * t;
+            const float t = (yLocal - profile[i - 1].y)
+                / (profile[i].y - profile[i - 1].y);
+            return profile[i - 1].z + (profile[i].z - profile[i - 1].z) * t;
         }
     assert(false);
 }
@@ -214,14 +214,14 @@ private bool beamPiercesCabin(const vec3 a, const vec3 b,
     if (!(tmin < tmax))
         return false;
 
-    // Изломы пола (станции хребта) и границы окна — кандидаты на максимум
+    // Изломы профиля пола и границы окна — кандидаты на максимум
     // g(t) = z(t) − пол(y(t)); внутри каждого вдоль-линейного куска максимум
     // достигается на его концах.
     float[3 + 8] tPts;
     tPts[0] = tmin;
     size_t n = 1;
     if (abs(d.y) > 1e-12f)
-        foreach (s; cg.spine)
+        foreach (s; cg.floorProfile)
         {
             const float t = (node0.y + s.y - a.y) / d.y;
             if (t > tmin + 1e-9f && t < tmax - 1e-9f)
@@ -275,7 +275,7 @@ private bool wheelHitsCabin(const vec3 p, float r,
 
 /// Первое касание корпуса кабины в каркасе: none — никто её не трогает.
 /// Запретная зона — параллелепипед от узла 0 (ЦМ кабины, совмещён с началом
-/// координат меша) по AABB меша, пол по контуру днища (хребет). Эфемерные
+/// координат меша) по AABB меша, пол по профилю днища. Эфемерные
 /// балки крепления корпуса зону не проверяют: они не входят в каркас.
 private RunOutcome frameCabinContact(const Frame f)
 {

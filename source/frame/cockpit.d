@@ -22,7 +22,7 @@ import std.algorithm : sort;
 import dlib.core.memory;
 import dlib.math.vector;
 
-import frame.frame : right, up, forward;
+import frame.frame : right, up, forward, origin, Node, EphemeralBeam, FrameContext;
 import frame.objmesh : ObjModel, loadObjText, ObjLoadOptions;
 
 /// Текст меша кабины, вшитый в бинарник компилятором (нужен
@@ -51,15 +51,10 @@ struct CockpitGeometry
     /// каркаса не проходит (запретная зона в fitness).
     vec3 minP, maxP;
 
-    /// «Хребет»: станции крепления на контуре днища. Ширина x = 0; высота —
-    /// из пересечения рёбер меша с плоскостью x = 0 (повторяет наклон дна).
-    vec3[] spine;
-
-    /// Индексы станций хребта с боковыми точками (spineSideAt[i] → spine).
-    size_t[] spineSideAt;
-
-    /// Боковые пары (right, left) станций крепления.
-    vec3[2][] spineSides;
+    vec3[] floorProfile;
+    vec3[] mountStations;
+    size_t[] mountPairStations;
+    vec3[2][] mountPairs;
 }
 
 /// Загрузить меш кабины из вшитого текста (парсинг в рантайме).
@@ -93,7 +88,7 @@ const(CockpitGeometry) cockpitGeometry()
     return cockpitGeom_;
 }
 
-/// Геометрия кабины из меша: AABB, углы дна и хребет крепления.
+/// Геометрия кабины из меша: AABB, профиль дна и точки крепления.
 /// Центр масс — в (0,0,0) координат OBJ, он же узел 0 каркаса.
 CockpitGeometry cockpitGeometry(const ObjModel model)
 {
@@ -122,13 +117,12 @@ CockpitGeometry cockpitGeometry(const ObjModel model)
             g.floorCorners[ix * 2 + iy] = vec3(px, py, minP.z);
         }
 
-    buildKeel(g, model);
+    buildMounts(g, model);
     return g;
 }
 
-/// Станции хребта: рёбра днища, пересекающие плоскость x = 0. Рёбра,
-/// параллельные оси ширины, дают боковые пары с полушириной корпуса.
-private void buildKeel(ref CockpitGeometry g, const ObjModel model)
+/// Точки крепления из рёбер днища, пересекающих плоскость x = 0.
+private void buildMounts(ref CockpitGeometry g, const ObjModel model)
 {
     enum float triEps = 1e-5f;
 
@@ -168,15 +162,85 @@ private void buildKeel(ref CockpitGeometry g, const ObjModel model)
         return;
 
     foreach (s; stations)
-        g.spine ~= vec3(0.0f, s.y, s.z);
+    {
+        const vec3 p = vec3(0.0f, s.y, s.z);
+        g.floorProfile ~= p;
+        g.mountStations ~= p;
+    }
     foreach (i; 0 .. stations.length)
         if (stations[i].side)
         {
-            g.spineSideAt ~= i;
+            g.mountPairStations ~= i;
             const float h = stations[i].half;
-            g.spineSides ~= [vec3(h, stations[i].y, stations[i].z),
+            g.mountPairs ~= [vec3(h, stations[i].y, stations[i].z),
                 vec3(-h, stations[i].y, stations[i].z)];
         }
+}
+
+FrameContext cockpitFrameContext()
+{
+    const auto cg = cockpitGeometry();
+    FrameContext context;
+    context.frame.nodes ~= Node(origin);
+    context.twinOf ~= 0;
+    context.inertNode = 0;
+
+    const size_t station0 = context.frame.nodes.length;
+    foreach (p; cg.mountStations)
+    {
+        context.frame.nodes ~= Node(p);
+        context.twinOf ~= context.frame.nodes.length - 1;
+    }
+
+    const size_t pair0 = context.frame.nodes.length;
+    foreach (i, pair; cg.mountPairs)
+    {
+        const size_t right = pair0 + i * 2;
+        context.frame.nodes ~= Node(pair[0]);
+        context.frame.nodes ~= Node(pair[1]);
+        context.twinOf ~= right + 1;
+        context.twinOf ~= right;
+    }
+    context.growthNode = context.frame.nodes.length - 1;
+
+    auto eph = (size_t a, size_t b) {
+        context.frame.beams ~= new EphemeralBeam(a, b);
+    };
+
+    size_t best = 0;
+    float bestD = distance(origin, cg.mountStations[0]);
+    foreach (i; 1 .. cg.mountStations.length)
+    {
+        const float d = distance(origin, cg.mountStations[i]);
+        if (d < bestD)
+        {
+            bestD = d;
+            best = i;
+        }
+    }
+    eph(0, station0 + best);
+    foreach (i; 0 .. cg.mountStations.length - 1)
+        eph(station0 + i, station0 + i + 1);
+
+    foreach (j; 0 .. cg.mountPairs.length)
+    {
+        const size_t right = pair0 + j * 2;
+        eph(station0 + cg.mountPairStations[j], right);
+        eph(station0 + cg.mountPairStations[j], right + 1);
+    }
+    return context;
+}
+
+size_t cockpitFrameNodeCount()
+{
+    const auto cg = cockpitGeometry();
+    return 1 + cg.mountStations.length + cg.mountPairs.length * 2;
+}
+
+size_t cockpitFrameBeamCount()
+{
+    const auto cg = cockpitGeometry();
+    return 1 + (cg.mountStations.length - 1) + cg.mountPairs.length * 2;
 }
 
 private bool edgeSeen(ref vec3[2][] seen, vec3 a, vec3 b)
@@ -234,8 +298,8 @@ unittest
 
     // Хребет: станции по центру, повторяют контур днища (наклон от кормы
     // к носу), все ниже центра масс.
-    assert(g.spine.length == 5, "пять станций под днищем");
-    foreach (s; g.spine)
+    assert(g.floorProfile.length == 5, "пять станций под днищем");
+    foreach (s; g.floorProfile)
     {
         assert(abs(s.x) < 1e-4f, "станции по оси ширины виляют");
         assert(s.z <= 0.0f && s.z >= g.minP.z, "станции на контуре днища");
@@ -243,7 +307,7 @@ unittest
     // Станции упорядочены от носа к корме, без повторов y; контур дна при
     // этом монотонно понижается к корме.
     float prevY = -float.max, prevZ = float.max;
-    foreach (s; g.spine)
+    foreach (s; g.floorProfile)
     {
         assert(s.y > prevY, "станции идут от носа к корме");
         prevY = s.y;
@@ -252,17 +316,52 @@ unittest
     }
 
     // Боковые пары: в станциях, где рёбра днища параллельны ширине.
-    assert(g.spineSideAt == [0, 2, 4], "боковые пары на параллельных рёбрах");
-    assert(g.spineSides.length == g.spineSideAt.length);
-    foreach (i; 0 .. g.spineSides.length)
+    assert(g.mountPairStations == [0, 2, 4], "боковые пары на параллельных рёбрах");
+    assert(g.mountPairs.length == g.mountPairStations.length);
+    foreach (i; 0 .. g.mountPairs.length)
     {
-        const vec3 right = g.spineSides[i][0], left = g.spineSides[i][1];
-        const size_t sIdx = g.spineSideAt[i];
+        const vec3 right = g.mountPairs[i][0], left = g.mountPairs[i][1];
+        const size_t sIdx = g.mountPairStations[i];
         assert(right.x > 0.0f && right.x == -left.x, "пара зеркальна");
-        assert(abs(right.y - g.spine[sIdx].y) < 1e-4f, "пара в станции");
+        assert(abs(right.y - g.floorProfile[sIdx].y) < 1e-4f, "пара в станции");
         const vec3 half = g.maxP;
         assert(right.x <= half.x && right.x > 0.0f, "пара в раскрыве корпуса");
     }
+
+    const context = cockpitFrameContext();
+    const vec3[12] expectedNodes = [
+        vec3(0.0f, 0.0f, 0.0f),
+        vec3(0.0f, -1.405f, -0.299f),
+        vec3(0.0f, -0.82435484f, -0.32319355f),
+        vec3(0.0f, -0.205f, -0.349f),
+        vec3(0.0f, 0.22485075f, -0.39677612f),
+        vec3(0.0f, 0.695f, -0.449f),
+        vec3(0.30f, -1.405f, -0.299f),
+        vec3(-0.30f, -1.405f, -0.299f),
+        vec3(0.32f, -0.205f, -0.349f),
+        vec3(-0.32f, -0.205f, -0.349f),
+        vec3(0.35f, 0.695f, -0.449f),
+        vec3(-0.35f, 0.695f, -0.449f),
+    ];
+    foreach (i, expected; expectedNodes)
+        assert(distance(context.frame.nodes[i].pos, expected) < 1e-4f);
+
+    const size_t[12] expectedTwins = [0, 1, 2, 3, 4, 5, 7, 6, 9, 8, 11, 10];
+    foreach (i, expected; expectedTwins)
+        assert(context.twinOf[i] == expected);
+
+    const size_t[22] expectedBeamEnds = [
+        0, 3, 1, 2, 2, 3, 3, 4, 4, 5,
+        1, 6, 1, 7, 3, 8, 3, 9, 5, 10, 5, 11,
+    ];
+    foreach (i, beam; context.frame.beams)
+    {
+        assert(beam.a == expectedBeamEnds[i * 2]);
+        assert(beam.b == expectedBeamEnds[i * 2 + 1]);
+    }
+    assert(context.growthNode == 11 && context.inertNode == 0);
+    assert(context.frame.nodes.length == cockpitFrameNodeCount());
+    assert(context.frame.beams.length == cockpitFrameBeamCount());
 
     // Константы дизайна на месте.
     assert(cockpitMass == 100.0f);

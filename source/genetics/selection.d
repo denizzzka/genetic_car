@@ -13,6 +13,7 @@ import genetics.generation : buildNextGeneration;
 import physics_world;
 import dlib.math.vector;
 import frame.frame;
+import frame.cockpit : cockpitFrameBeamCount;
 
 /// Отобранный индивид: геном и его фитнес (0 — невалидный/неразвиваемый).
 struct Individual
@@ -283,7 +284,7 @@ unittest
         foreach (e; evolved)
             if (auto may = develop(gr, e.genotype))
             {
-                if (may.get.frame.beams.length > skeletonBeamCount() + 2)
+                if (may.get.frame.beams.length > cockpitFrameBeamCount() + 2)
                     grewBeams = true;
                 if (may.get.frame.anchors.length < startAnchors)
                     dropAnchors = true;

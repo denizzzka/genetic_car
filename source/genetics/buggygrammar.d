@@ -5,7 +5,7 @@ import std.algorithm : min, max;
 import std.typecons: Nullable;
 import dlib.math.vector;
 import frame.frame;
-import frame.cockpit : cockpitGeometry;
+import frame.cockpit : cockpitFrameContext, cockpitFrameNodeCount, cockpitFrameBeamCount;
 import physics_world.wheel : defaultWheelRadius;
 import genetics.sge;
 import genetics.buggyast;
@@ -217,7 +217,7 @@ unittest
 }
 
 /**
- * Построить геометрию каркаса из AST.
+ * Построить геометрию каркаса из AST и готового контекста.
  *
  * Исполнитель «глупо» выполняет решения дерева: читает turtle-заголовок,
  * разрешает рефы, при раздвоенном сегменте рождает узлы парой вокруг оси
@@ -225,14 +225,20 @@ unittest
  * и дублирует балки/якоря в twin. Вся семантика — fork, ось, морфоген,
  * turtle — зафиксирована в AST.
  */
-Nullable!Frame frameFromAst(const Ast ast)
+Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
 {
     enum float mergeRadius = 0.15f;
 
-    Frame result;
+    Frame result = context.frame;
+    result.nodes = result.nodes.dup;
+    result.beams = result.beams.dup;
+    result.anchors = result.anchors.dup;
+    assert(context.growthNode < result.nodes.length);
+    assert(context.twinOf.length == result.nodes.length);
+    assert(context.inertNode == size_t.max || context.inertNode < result.nodes.length);
 
     // Таблица пар: node -> его twin вокруг оси раздвоения сегмента.
-    size_t[] forkOf;
+    size_t[] forkOf = context.twinOf.dup;
 
     // Узел; при раздвоении сегмента — пара (узел, twin) вокруг оси.
     auto addNode = (vec3 target, bool fork, float axis) {
@@ -254,51 +260,7 @@ Nullable!Frame frameFromAst(const Ast ast)
         return n;
     };
 
-    size_t last = addNode(origin, false, 0.0f);
-
-    // Скелет крепления: станции «хребта» и боковые пары на общей плоскости
-    // ниже днища (кель), эфемерные балки между ними. Нода 0 — ЦМ кабины.
-    auto insertSkeleton = () {
-        const auto cg = cockpitGeometry();
-
-        const size_t spine0 = result.nodes.length;
-        foreach (sp; cg.spine)
-            addNode(sp, false, 0.0f);
-        foreach (pair; cg.spineSides)
-            addNode(pair[0], true, 0.0f);
-
-        void eph(size_t a, size_t b)
-        {
-            result.beams ~= new EphemeralBeam(a, b);
-        }
-
-        // От ЦМ к ближайшей станции и цепь по всему хребту.
-        size_t best = 0;
-        float bestD = distance(origin, cg.spine[0]);
-        foreach (i; 1 .. cg.spine.length)
-        {
-            const d = distance(origin, cg.spine[i]);
-            if (d < bestD)
-            {
-                bestD = d;
-                best = i;
-            }
-        }
-        eph(0, spine0 + best);
-        foreach (i; 0 .. cg.spine.length - 1)
-            eph(spine0 + i, spine0 + i + 1);
-
-        // Каждая боковая пара крепится балками к своей станции.
-        foreach (j; 0 .. cg.spineSides.length)
-        {
-            const size_t right = result.nodes.length - 2 * (cg.spineSides.length - j);
-            const size_t left = right + 1;
-            eph(spine0 + cg.spineSideAt[j], right);
-            eph(spine0 + cg.spineSideAt[j], left);
-        }
-        return result.nodes.length - 1;
-    };
-    last = insertSkeleton();
+    size_t last = context.growthNode;
 
     float heading = ast.heading;
     auto turtleDelta = (float dx, float dy, float dz) {
@@ -409,15 +371,13 @@ Nullable!Frame frameFromAst(const Ast ast)
             }
             ++j;
 
-            // Балка, касающаяся узла 0 (ЦМ кабины), — эфемерная: крепление
-            // через скелет, а не сквозь кабину. Нода 0 — точка роста, без
-            // массы и рендера.
-            const bool onAxis = start == 0 || end == 0;
-            result.beams ~= addEvolvedBeam(start, end, radius, b.kind, onAxis);
+            const bool onInertNode = start == context.inertNode || end == context.inertNode;
+            result.beams ~= addEvolvedBeam(start, end, radius, b.kind, onInertNode);
             if (seg.fork && !(forkOf[start] == start && forkOf[end] == end))
                 result.beams ~= addEvolvedBeam(forkOf[start], forkOf[end],
                     radius * (1.0f + forkAsymmetry(b.nodal, b.lefty)), b.kind,
-                    onAxis || forkOf[start] == 0 || forkOf[end] == 0);
+                    onInertNode || forkOf[start] == context.inertNode
+                        || forkOf[end] == context.inertNode);
 
             heading += b.turn;
         }
@@ -434,27 +394,12 @@ Nullable!Frame frameFromAst(const Ast ast)
     return Nullable!Frame(result);
 }
 
-/// Балка роста: при касании узла 0 (ЦМ) — эфемерная, иначе обычная.
 private EphemeralBeam addEvolvedBeam(size_t a, size_t b, float radius,
     BeamKind kind, bool ephemeral)
 {
     if (ephemeral)
         return new EphemeralBeam(a, b);
     return new Beam(a, b, radius, kind);
-}
-
-/// Число узлов скелета крепления (нода 0 + хребет + пары).
-size_t skeletonNodeCount()
-{
-    const auto cg = cockpitGeometry();
-    return 1 + cg.spine.length + cg.spineSides.length * 2;
-}
-
-/// Число балок скелета (эфемерных) — для тестов и потребителей.
-size_t skeletonBeamCount()
-{
-    const auto cg = cockpitGeometry();
-    return 1 + (cg.spine.length - 1) + cg.spineSides.length * 2;
 }
 
 enum float minBeamLength = 0.05f;
@@ -550,7 +495,7 @@ Nullable!Developed develop(const Grammar gr, const Genotype g)
     auto mayAst = buildAst(tokens);
     if (mayAst.isNull)
         return Nullable!Developed.init;
-    auto frame = frameFromAst(mayAst.get);
+    auto frame = frameFromAst(mayAst.get, cockpitFrameContext());
     if (frame.isNull)
         return Nullable!Developed.init;
     auto valid = isValidFrame(frame.get);
@@ -565,7 +510,7 @@ Nullable!Frame toFrame(const Terminal!Tok[] tokens)
     auto ast = buildAst(tokens);
     if (ast.isNull)
         return Nullable!Frame.init;
-    return frameFromAst(ast.get);
+    return frameFromAst(ast.get, cockpitFrameContext());
 }
 
 version (unittest)
@@ -582,6 +527,37 @@ version (unittest)
             new Terminal!Tok(Tok.coord, v.z),
         ];
     }
+}
+
+unittest
+{
+    FrameContext context;
+    context.frame.nodes = [Node(origin), Node(vec3(0.0f, 1.0f, 0.0f))];
+    context.twinOf = [0, 1];
+    context.growthNode = 1;
+
+    Terminal!Tok[] t;
+    t ~= dirCoords(origin, 1.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= dirCoords(forward, 1.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.anchors);
+
+    auto ast = buildAst(t);
+    assert(!ast.isNull);
+    auto frame = frameFromAst(ast.get, context);
+    assert(!frame.isNull);
+    assert(frame.get.nodes.length == 3);
+    assert(frame.get.beams.length == 1);
+    assert(cast(Beam) frame.get.beams[0] !is null);
+    assert(abs(distance(frame.get.nodes[1].pos, frame.get.nodes[2].pos) - 1.0f) < 1e-6f);
 }
 
 unittest
@@ -656,15 +632,15 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == skeletonNodeCount() + 1,
+    assert(f.get.nodes.length == cockpitFrameNodeCount() + 1,
         "endNear должен слиться с узлом 0, а не создавать новый");
-    assert(f.get.beams.length == skeletonBeamCount() + 2);
-    assert(f.get.beams[skeletonBeamCount() + 1].a == skeletonNodeCount()
-        && f.get.beams[skeletonBeamCount() + 1].b == 0,
+    assert(f.get.beams.length == cockpitFrameBeamCount() + 2);
+    assert(f.get.beams[cockpitFrameBeamCount() + 1].a == cockpitFrameNodeCount()
+        && f.get.beams[cockpitFrameBeamCount() + 1].b == 0,
         "вторая балка замыкает петлю на узел 0 (ЦМ)");
-    assert(cast(Beam) f.get.beams[skeletonBeamCount() + 1] is null,
+    assert(cast(Beam) f.get.beams[cockpitFrameBeamCount() + 1] is null,
         "балка, касающаяся узла 0, — эфемерная, без массы");
-    assert(cast(Beam) f.get.beams[skeletonBeamCount()] !is null,
+    assert(cast(Beam) f.get.beams[cockpitFrameBeamCount()] !is null,
         "первая балка не касается ЦМ — обычная");
     assert(!isValidFrame(f.get).isNull, "замкнутая петля остаётся связной");
 }
@@ -691,8 +667,8 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == skeletonNodeCount() + 1);
-    assert(f.get.beams.length == skeletonBeamCount() + 1);
+    assert(f.get.nodes.length == cockpitFrameNodeCount() + 1);
+    assert(f.get.beams.length == cockpitFrameBeamCount() + 1);
 }
 
 unittest
@@ -727,9 +703,9 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == skeletonNodeCount() + 2);
-    const n1 = f.get.nodes[skeletonNodeCount()].pos;
-    const n2 = f.get.nodes[skeletonNodeCount() + 1].pos;
+    assert(f.get.nodes.length == cockpitFrameNodeCount() + 2);
+    const n1 = f.get.nodes[cockpitFrameNodeCount()].pos;
+    const n2 = f.get.nodes[cockpitFrameNodeCount() + 1].pos;
     // Первая балка растёт от узла 11 (конец скелета) — сдвиг от него.
     const vec3 d1 = n1 - f.get.nodes[11].pos;
     // Заголовок π/2 поворачивает дельту вперёд вдоль right-направления рамы.
@@ -776,16 +752,16 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
     t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.wheel);
-    t ~= new Terminal!Tok(Tok.refIdx, cast(int) skeletonNodeCount());
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) cockpitFrameNodeCount());
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == skeletonNodeCount() + 4,
+    assert(f.get.nodes.length == cockpitFrameNodeCount() + 4,
         "ствол-пара + пара ветвей");
-    const vec3 n1 = f.get.nodes[skeletonNodeCount()].pos;
-    const vec3 n2 = f.get.nodes[skeletonNodeCount() + 1].pos;
-    const vec3 n3 = f.get.nodes[skeletonNodeCount() + 2].pos;
-    const vec3 n4 = f.get.nodes[skeletonNodeCount() + 3].pos;
+    const vec3 n1 = f.get.nodes[cockpitFrameNodeCount()].pos;
+    const vec3 n2 = f.get.nodes[cockpitFrameNodeCount() + 1].pos;
+    const vec3 n3 = f.get.nodes[cockpitFrameNodeCount() + 2].pos;
+    const vec3 n4 = f.get.nodes[cockpitFrameNodeCount() + 3].pos;
     assert(abs(n1.x + 0.35f) < 1e-4f && abs(n1.y + 0.305f) < 1e-4f,
         "ствол продолжает левый борт кормы: (-0.35,-0.305)");
     assert(abs(n2.x - 0.35f) < 1e-4f && abs(n2.y - n1.y) < 1e-4f,
@@ -795,27 +771,27 @@ unittest
     assert(abs(n4.x + 0.65f) < 1e-4f,
         "твин-ветвь зеркальна вокруг оси: (-0.65,-0.305)");
 
-    assert(f.get.beams.length == skeletonBeamCount() + 4);
-    assert(f.get.beams[skeletonBeamCount()].a == 11
-        && f.get.beams[skeletonBeamCount()].b == skeletonNodeCount());
-    assert(f.get.beams[skeletonBeamCount() + 1].a == 10
-        && f.get.beams[skeletonBeamCount() + 1].b == skeletonNodeCount() + 1,
+    assert(f.get.beams.length == cockpitFrameBeamCount() + 4);
+    assert(f.get.beams[cockpitFrameBeamCount()].a == 11
+        && f.get.beams[cockpitFrameBeamCount()].b == cockpitFrameNodeCount());
+    assert(f.get.beams[cockpitFrameBeamCount() + 1].a == 10
+        && f.get.beams[cockpitFrameBeamCount() + 1].b == cockpitFrameNodeCount() + 1,
         "зеркальная половина ствола — от правого борта");
-    assert(f.get.beams[skeletonBeamCount() + 2].a == skeletonNodeCount()
-        && f.get.beams[skeletonBeamCount() + 2].b == skeletonNodeCount() + 2,
+    assert(f.get.beams[cockpitFrameBeamCount() + 2].a == cockpitFrameNodeCount()
+        && f.get.beams[cockpitFrameBeamCount() + 2].b == cockpitFrameNodeCount() + 2,
         "вторая балка — ветвь из конца ствола");
-    assert(f.get.beams[skeletonBeamCount() + 3].a == skeletonNodeCount() + 1
-        && f.get.beams[skeletonBeamCount() + 3].b == skeletonNodeCount() + 3,
+    assert(f.get.beams[cockpitFrameBeamCount() + 3].a == cockpitFrameNodeCount() + 1
+        && f.get.beams[cockpitFrameBeamCount() + 3].b == cockpitFrameNodeCount() + 3,
         "третья — твин ветви через ось сегмента");
 
     // Nodal=0.1 без ингибитора даёт сдвиг 0.1; радиус твин-балки:
     // 0.04 · (1 + 0.1) = 0.044.
-    assert(abs(asBeam(f.get.beams[skeletonBeamCount()]).radius - 0.04f) < 1e-4f);
-    assert(abs(asBeam(f.get.beams[skeletonBeamCount() + 3]).radius - 0.044f) < 1e-4f);
+    assert(abs(asBeam(f.get.beams[cockpitFrameBeamCount()]).radius - 0.04f) < 1e-4f);
+    assert(abs(asBeam(f.get.beams[cockpitFrameBeamCount() + 3]).radius - 0.044f) < 1e-4f);
 
     assert(f.get.anchors.length == 2, "ствол-пара несёт пару якорей");
-    assert(f.get.anchors[0].node == skeletonNodeCount()
-        && f.get.anchors[1].node == skeletonNodeCount() + 1);
+    assert(f.get.anchors[0].node == cockpitFrameNodeCount()
+        && f.get.anchors[1].node == cockpitFrameNodeCount() + 1);
 
     assert(!isValidFrame(f.get).isNull,
         "раздвоенный каркас со стволом от боковой пары остаётся связным");
@@ -846,9 +822,9 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == skeletonNodeCount() + 2);
-    const vec3 n1 = f.get.nodes[skeletonNodeCount()].pos;
-    const vec3 n2 = f.get.nodes[skeletonNodeCount() + 1].pos;
+    assert(f.get.nodes.length == cockpitFrameNodeCount() + 2);
+    const vec3 n1 = f.get.nodes[cockpitFrameNodeCount()].pos;
+    const vec3 n2 = f.get.nodes[cockpitFrameNodeCount() + 1].pos;
     const float c = cos(0.78539815f);
     const float s = sin(0.78539815f);
     // Дельта вперёд при заголовке π/4: right·s + forward·c.
@@ -896,18 +872,18 @@ unittest
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == skeletonNodeCount() + 4,
+    assert(f.get.nodes.length == cockpitFrameNodeCount() + 4,
         "ствол-пара + пара ветвей от боковой станции");
-    assert(abs(f.get.nodes[skeletonNodeCount()].pos.x - 0.30f) < 1e-4f
-        && abs(f.get.nodes[skeletonNodeCount()].pos.y + 2.405f) < 1e-4f,
+    assert(abs(f.get.nodes[cockpitFrameNodeCount()].pos.x - 0.30f) < 1e-4f
+        && abs(f.get.nodes[cockpitFrameNodeCount()].pos.y + 2.405f) < 1e-4f,
         "ствол идёт вперёд от правого переднего борта");
-    assert(abs(f.get.nodes[skeletonNodeCount() + 1].pos.x + 0.30f) < 1e-4f,
+    assert(abs(f.get.nodes[cockpitFrameNodeCount() + 1].pos.x + 0.30f) < 1e-4f,
         "твин ствола — от левого борта той же станции");
-    const float yBranch = f.get.nodes[skeletonNodeCount() + 1].pos.y;
-    assert(abs(f.get.nodes[skeletonNodeCount() + 2].pos.x - 1.30f) < 1e-4f
-        && abs(f.get.nodes[skeletonNodeCount() + 2].pos.y - yBranch) < 1e-4f,
+    const float yBranch = f.get.nodes[cockpitFrameNodeCount() + 1].pos.y;
+    assert(abs(f.get.nodes[cockpitFrameNodeCount() + 2].pos.x - 1.30f) < 1e-4f
+        && abs(f.get.nodes[cockpitFrameNodeCount() + 2].pos.y - yBranch) < 1e-4f,
         "ветвь растёт вправо от конца ствола");
-    assert(abs(f.get.nodes[skeletonNodeCount() + 3].pos.x + 1.30f) < 1e-4f,
+    assert(abs(f.get.nodes[cockpitFrameNodeCount() + 3].pos.x + 1.30f) < 1e-4f,
         "twin ветви зеркалит вокруг оси — середины пары, а не узла старта");
     assert(!isValidFrame(f.get).isNull,
         "обе стороны связаны парами боковой станции — каркас связен");
@@ -934,17 +910,17 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
     t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.motorWheel);
-    t ~= new Terminal!Tok(Tok.refIdx, cast(int) skeletonNodeCount());
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) cockpitFrameNodeCount());
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == skeletonNodeCount() + 1);
-    assert(f.get.beams.length == skeletonBeamCount() + 1);
-    assert(cast(Beam) f.get.beams[skeletonBeamCount()] !is null,
+    assert(f.get.nodes.length == cockpitFrameNodeCount() + 1);
+    assert(f.get.beams.length == cockpitFrameBeamCount() + 1);
+    assert(cast(Beam) f.get.beams[cockpitFrameBeamCount()] !is null,
         "обычная балка без раздвоения");
     assert(f.get.anchors.length == 1,
         "без раздвоения якорь не дублируется");
-    assert(f.get.anchors[0].node == skeletonNodeCount());
+    assert(f.get.anchors[0].node == cockpitFrameNodeCount());
     assert(abs(f.get.anchors[0].radius - defaultWheelRadius) < 1e-6f,
         "вручную собранный поток без wheelRadius даёт якорь заводского размера");
 }
@@ -979,14 +955,14 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
     t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.wheel);
-    t ~= new Terminal!Tok(Tok.refIdx, cast(int) skeletonNodeCount());
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) cockpitFrameNodeCount());
     t ~= new Terminal!Tok(Tok.wheelRadius, 0.37f);
 
     auto f = toFrame(t);
     assert(!f.isNull);
     assert(f.get.anchors.length == 2, "twin-якорь дублируется вместе с узлом");
-    assert(f.get.anchors[0].node == skeletonNodeCount()
-        && f.get.anchors[1].node == skeletonNodeCount() + 1,
+    assert(f.get.anchors[0].node == cockpitFrameNodeCount()
+        && f.get.anchors[1].node == cockpitFrameNodeCount() + 1,
         "колёса висят на концах пары");
     assert(abs(f.get.anchors[0].radius - 0.37f) < 1e-6f
         && abs(f.get.anchors[1].radius - 0.37f) < 1e-6f,
@@ -1035,36 +1011,36 @@ unittest
     auto f = toFrame(t);
     assert(!f.isNull);
     // Скелет + ствол-пара + две пальцевые пары.
-    assert(f.get.nodes.length == skeletonNodeCount() + 6);
-    assert(f.get.beams.length == skeletonBeamCount() + 6,
+    assert(f.get.nodes.length == cockpitFrameNodeCount() + 6);
+    assert(f.get.beams.length == cockpitFrameBeamCount() + 6,
         "ствол + по паре на каждый палец");
 
     // Ствол: рука от базы (узел 11 — конец скелета) с зеркальной парой.
-    assert(f.get.beams[skeletonBeamCount()].a == 11
-        && f.get.beams[skeletonBeamCount()].b == skeletonNodeCount(),
+    assert(f.get.beams[cockpitFrameBeamCount()].a == 11
+        && f.get.beams[cockpitFrameBeamCount()].b == cockpitFrameNodeCount(),
         "рука — ствол форка");
-    assert(f.get.beams[skeletonBeamCount() + 1].a == 10
-        && f.get.beams[skeletonBeamCount() + 1].b == skeletonNodeCount() + 1,
+    assert(f.get.beams[cockpitFrameBeamCount() + 1].a == 10
+        && f.get.beams[cockpitFrameBeamCount() + 1].b == cockpitFrameNodeCount() + 1,
         "зеркальная половина ствола");
 
     // Пальцы стартуют с той же базы (refBase), а не с конца предыдущей
     // балки; каждый — своя зеркальная пара.
-    assert(f.get.beams[skeletonBeamCount() + 2].a == 11
-        && f.get.beams[skeletonBeamCount() + 2].b == skeletonNodeCount() + 2
-        && f.get.beams[skeletonBeamCount() + 3].a == 10
-        && f.get.beams[skeletonBeamCount() + 3].b == skeletonNodeCount() + 3,
+    assert(f.get.beams[cockpitFrameBeamCount() + 2].a == 11
+        && f.get.beams[cockpitFrameBeamCount() + 2].b == cockpitFrameNodeCount() + 2
+        && f.get.beams[cockpitFrameBeamCount() + 3].a == 10
+        && f.get.beams[cockpitFrameBeamCount() + 3].b == cockpitFrameNodeCount() + 3,
         "первый палец и его twin растут из базы сегмента");
-    assert(f.get.beams[skeletonBeamCount() + 4].a == 11
-        && f.get.beams[skeletonBeamCount() + 4].b == skeletonNodeCount() + 4
-        && f.get.beams[skeletonBeamCount() + 5].a == 10
-        && f.get.beams[skeletonBeamCount() + 5].b == skeletonNodeCount() + 5,
+    assert(f.get.beams[cockpitFrameBeamCount() + 4].a == 11
+        && f.get.beams[cockpitFrameBeamCount() + 4].b == cockpitFrameNodeCount() + 4
+        && f.get.beams[cockpitFrameBeamCount() + 5].a == 10
+        && f.get.beams[cockpitFrameBeamCount() + 5].b == cockpitFrameNodeCount() + 5,
         "второй палец и его twin — тоже из базы сегмента");
 
-    assert(abs(f.get.nodes[skeletonNodeCount() + 2].pos.x - 0.15f) < 1e-4f
-        && abs(f.get.nodes[skeletonNodeCount() + 3].pos.x + 0.15f) < 1e-4f,
+    assert(abs(f.get.nodes[cockpitFrameNodeCount() + 2].pos.x - 0.15f) < 1e-4f
+        && abs(f.get.nodes[cockpitFrameNodeCount() + 3].pos.x + 0.15f) < 1e-4f,
         "пальцы зеркальны вокруг оси сегмента");
-    assert(abs(f.get.nodes[skeletonNodeCount() + 4].pos.x - 1.15f) < 1e-4f
-        && abs(f.get.nodes[skeletonNodeCount() + 5].pos.x + 1.15f) < 1e-4f,
+    assert(abs(f.get.nodes[cockpitFrameNodeCount() + 4].pos.x - 1.15f) < 1e-4f
+        && abs(f.get.nodes[cockpitFrameNodeCount() + 5].pos.x + 1.15f) < 1e-4f,
         "второй палец отражается так же, и обе пары симметричны");
 
     // Пальцы-твины пересекаются в теле на оси сегмента: по правилу
@@ -1095,24 +1071,24 @@ unittest
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
     t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.wheel);
-    t ~= new Terminal!Tok(Tok.refIdx, cast(int) skeletonNodeCount());
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) cockpitFrameNodeCount());
 
     auto f = toFrame(t);
     assert(!f.isNull);
-    assert(f.get.nodes.length == skeletonNodeCount() + 1,
+    assert(f.get.nodes.length == cockpitFrameNodeCount() + 1,
         "глаз не рождает twin: нового узла ровно один");
-    assert(f.get.beams.length == skeletonBeamCount() + 1,
+    assert(f.get.beams.length == cockpitFrameBeamCount() + 1,
         "глаз — одиночная балка на оси, без twin");
-    assert(f.get.beams[skeletonBeamCount()].a == 3
-        && f.get.beams[skeletonBeamCount()].b == skeletonNodeCount(),
+    assert(f.get.beams[cockpitFrameBeamCount()].a == 3
+        && f.get.beams[cockpitFrameBeamCount()].b == cockpitFrameNodeCount(),
         "балка-глаз растёт из спина вперёд");
-    assert(cast(Beam) f.get.beams[skeletonBeamCount()] !is null,
+    assert(cast(Beam) f.get.beams[cockpitFrameBeamCount()] !is null,
         "глаз на оси не задевает ЦМ — обычная балка");
-    assert(abs(f.get.nodes[skeletonNodeCount()].pos.x) < 1e-4f
-        && abs(f.get.nodes[skeletonNodeCount()].pos.y + 1.205f) < 1e-4f,
+    assert(abs(f.get.nodes[cockpitFrameNodeCount()].pos.x) < 1e-4f
+        && abs(f.get.nodes[cockpitFrameNodeCount()].pos.y + 1.205f) < 1e-4f,
         "конец-глаз строго на оси X == 0");
     assert(f.get.anchors.length == 1
-        && f.get.anchors[0].node == skeletonNodeCount(),
+        && f.get.anchors[0].node == cockpitFrameNodeCount(),
         "якорь-глаз не дублируется twin'ом");
     assert(!isValidFrame(f.get).isNull, "каркас с глазом остаётся связным");
 }
@@ -1148,12 +1124,12 @@ unittest
     assert(ast.get.taper == 0.5f && ast.get.taperPow == 1.0f,
         "морфоген читается в AST, а не тонет в потоке");
 
-    auto f = frameFromAst(ast.get);
+    auto f = frameFromAst(ast.get, cockpitFrameContext());
     assert(!f.isNull);
-    assert(f.get.beams.length == skeletonBeamCount() + 2);
-    assert(abs(asBeam(f.get.beams[skeletonBeamCount()]).radius - 0.06f) < 1e-5f,
+    assert(f.get.beams.length == cockpitFrameBeamCount() + 2);
+    assert(abs(asBeam(f.get.beams[cockpitFrameBeamCount()]).radius - 0.06f) < 1e-5f,
         "первая балка не меняется");
-    assert(abs(asBeam(f.get.beams[skeletonBeamCount() + 1]).radius - 0.03f) < 1e-5f,
+    assert(abs(asBeam(f.get.beams[cockpitFrameBeamCount() + 1]).radius - 0.03f) < 1e-5f,
         "последняя балка сужается в taper раз");
 }
 
