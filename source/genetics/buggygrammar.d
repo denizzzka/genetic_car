@@ -70,6 +70,12 @@ Grammar buggyGrammar()
 
     auto nodal = new Sampler!Tok("nodal", Tok.nodal, -0.2f, 0.2f);
     auto lefty = new Sampler!Tok("lefty", Tok.lefty, 0.0f, 8.0f);
+    // Множитель видовой мёртвой зоны: среднее 1.0 держит видовую норму,
+    // ноль открывает асимметрию, значения выше единицы замораживают её.
+    auto bilateral = new Sampler!Tok("bilateralThreshold", Tok.bilateralThreshold,
+        0.0f, 2.0f);
+    // Организменный LR-градиент: полярность лево/право всего тела.
+    auto lrGradient = new Sampler!Tok("lrGradient", Tok.lrGradient, -0.2f, 0.2f);
 
     auto segment = nt("segment", [
         new Production([marker(Tok.segStart), segMode, beamList_]),
@@ -104,7 +110,8 @@ Grammar buggyGrammar()
     ]);
 
     auto startPos = nt("startPos", [
-        new Production([startForward, startRight, startUp, taper, taperPow, heading, motorPower]),
+        new Production([startForward, startRight, startUp, taper, taperPow, heading,
+            motorPower, lrGradient]),
     ]);
 
     auto endRef = nt("endRef", [
@@ -118,7 +125,8 @@ Grammar buggyGrammar()
     ]);
 
     auto beam = nt("beam", [
-        new Production([startRef, endRef, radius, nodal, lefty, beamKind, turn]),
+        new Production([startRef, endRef, radius, nodal, lefty, bilateral,
+            beamKind, turn]),
     ]);
 
     beamList_.productions = [
@@ -156,8 +164,8 @@ Grammar buggyGrammar()
 
     auto symbols = [
         start, startPos, startForward, startRight, startUp, taper, taperPow, heading, turn,
-        motorPower,
-        segmentList_, segment, segMode, nodal, lefty,
+        motorPower, lrGradient,
+        segmentList_, segment, segMode, nodal, lefty, bilateral,
         beamList_, beam, startRef,
         idx, endRef, forward, right, up, radius, beamKind,
         anchorMarker, anchorList_, anchor, anchorKind, wheelRadius,
