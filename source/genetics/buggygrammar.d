@@ -197,27 +197,32 @@ float[] mutationWeights(const Grammar gr)
 {
     auto w = new float[gr.symbols.length];
     foreach (i, sym; gr.symbols)
-        w[i] = geneMutWeight(sym.name);
+    {
+        auto nt = cast(NonTerminal) sym;
+        assert(nt !is null, "в грамматике лежат только нетерминалы");
+        w[i] = geneMutWeight(nt);
+    }
     return w;
 }
 
 /// Вес i-го гена: 0 — не мишень вовсе, 1 — обычная.
-private float geneMutWeight(string name)
+private float geneMutWeight(const NonTerminal sym)
 {
     // Значения-индексы узлов: флип почти всегда ссылка на несуществующий узел.
-    if (name == "idx")
+    if (sym.name == "idx")
         return 0.0f;
     // Списки элементов: точечная правка переключает «продолжить/конец»,
     // обрывая или раздувая цепочку — для этого есть инделы.
-    if (name == "beamList" || name == "segmentList" || name == "anchorList")
+    if (sym.name == "beamList" || sym.name == "segmentList"
+        || sym.name == "anchorList")
         return 0.2f;
     // Ссылка на узел: refLast/refBase безопасны, idx-ветвь — не всегда.
-    if (name == "startRef" || name == "endRef")
+    if (sym.name == "startRef" || sym.name == "endRef")
         return 0.5f;
-    // Выбор единственной продукции: флип не меняет фенотип.
-    if (name == "frame" || name == "startPos" || name == "segment"
-        || name == "beam" || name == "beamKind" || name == "anchor"
-        || name == "anchorMarker")
+    // Выбор единственной продукции: флип не меняет фенотип. Берём из самой
+    // грамматики, а не поимённо: вторая продукция иначе молча осталась бы
+    // вне точечных мутаций.
+    if (sym.productions.length == 1)
         return 0.0f;
     return 1.0f;
 }
@@ -239,6 +244,16 @@ unittest
 
     assert(w[idOf("idx")] == 0.0f, "idx не мишень точечной мутации");
     assert(w[idOf("forward")] == 1.0f, "геометрия — обычная мишень");
+    // Единственная продукция: правило выведено из грамматики, а не из списка
+    // имён, поэтому новый gene с одной продукцией обнулится сам.
+    foreach (sym; gr.symbols)
+    {
+        auto nt = cast(NonTerminal) sym;
+        const bool oneProduction = nt.productions.length == 1;
+        if (oneProduction)
+            assert(w[sym.id] == 0.0f,
+                "ген с одной продукцией не мишень: " ~ sym.name);
+    }
     assert(w[idOf("beamList")] < 1.0f, "структура растёт инделами");
     assert(w[idOf("startRef")] < 1.0f, "ссылки мутируются осторожно");
 }
