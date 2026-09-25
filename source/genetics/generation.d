@@ -14,7 +14,7 @@ import genetics.sge;
 private enum float elitePercent = 5.0f;
 
 /// Попыток мутации одного элемента, прежде чем тот считается провальным.
-private enum size_t maxMutationAttempts = 5;
+private enum size_t maxMutationAttempts = 30;
 
 /// Полных проходов по массиву родителей вне элиты, после которых
 /// незаполненные слоты поколения — повод для `enforce`.
@@ -22,17 +22,17 @@ private enum size_t maxParentCycles = 3;
 
 /// Жизнеспособный мутант `base` для слотов будущей физической симуляции.
 /// Темпы мутаций наследуются с самоадаптацией; число правок — из параметров
-/// особи, а доля структурных мутаций выбирается один раз на все попытки.
+/// особи, а доля структурных мутаций перебрасывается на каждой попытке.
 Nullable!Genotype tryCreateViableMutant(const Grammar gr, const Genotype base,
     ref Random rnd)
 {
     auto candidate = base.dup;
     mutateSelfAdaptation(candidate, rnd);
-    const structural = uniform(0.0f, 1.0f, rnd) < candidate.structuralChance;
 
     foreach (_; 0 .. maxMutationAttempts)
     {
         auto trial = candidate.dup;
+        const structural = uniform(0.0f, 1.0f, rnd) < candidate.structuralChance;
         if (structural)
             mutateIndel(trial, candidate.indelHits, rnd);
         else
