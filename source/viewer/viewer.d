@@ -719,13 +719,7 @@ class BuggyScene: Scene
                 break;
             const a = livePhysics.framePointWorld(ends[0]);
             const c = livePhysics.framePointWorld(ends[1]);
-            const dir = c - a;
-            const float length = dir.length;
-            if (length < 1e-5f)
-                continue;
-            liveEphemeral[i].position = (a + c) * 0.5f;
-            liveEphemeral[i].rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
-            liveEphemeral[i].scaling = Vector3f(ephVisRadius, length, ephVisRadius);
+            placeBeam(liveEphemeral[i], a, c, ephVisRadius);
         }
     }
 
@@ -818,17 +812,13 @@ class BuggyScene: Scene
             }
             const a = buggy.frame.nodes[b.a].pos + off;
             const b2 = buggy.frame.nodes[b.b].pos + off;
-            const dir = b2 - a;
-            const float length = dir.length;
-            if (length < 1e-5f)
+            if ((b2 - a).length < 1e-5f)
                 continue;
 
             auto e = addEntity(galleryRoot);
             e.drawable = meshBeam;
             e.material = matBeam;
-            e.position = (a + b2) * 0.5f;
-            e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
-            e.scaling = Vector3f(beam.radius, length, beam.radius);
+            placeBeam(e, a, b2, beam.radius);
         }
 
         foreach (anchor; buggy.frame.anchors)
@@ -865,17 +855,26 @@ class BuggyScene: Scene
     {
         const a = fr.nodes[na].pos + off;
         const c = fr.nodes[nb].pos + off;
-        const dir = c - a;
-        const float length = dir.length;
-        if (length < 1e-5f)
+        if ((c - a).length < 1e-5f)
             return;
 
         auto e = addEntity(galleryRoot);
         e.drawable = meshBeam;
         e.material = matEphemeral;
+        placeBeam(e, a, c, ephVisRadius);
+    }
+
+    /// Ставит цилиндр вдоль отрезка a→c: середина — позиция, ось цилиндра
+    /// (локальный +Y) совпадает с направлением, длина — масштаб по Y.
+    private void placeBeam(Entity e, const vec3 a, const vec3 c, const float radius)
+    {
+        const dir = c - a;
+        const float length = dir.length;
+        if (length < 1e-5f)
+            return;
         e.position = (a + c) * 0.5f;
         e.rotation = rotationBetween(Vector3f(0, 1, 0), dir / length);
-        e.scaling = Vector3f(ephVisRadius, length, ephVisRadius);
+        e.scaling = Vector3f(radius, length, radius);
     }
 
     private void addWheel(const vec3 pos, const vec3 axle, Material mat,
