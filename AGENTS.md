@@ -10,6 +10,7 @@
 - Never duplicate identifiers, default values, ranges, or type info already visible in the signature or declaration.
 - Prefer self-documenting code (clear names, small functions) over explanatory comments.
 - If a comment is needed, explain WHY, not WHAT.
+- The colon in imports should be placed on the left side: "import std.algorithm: min, max, sort, map;"
 
 ## Editing Existing Comments
 
