@@ -489,7 +489,7 @@ private bool beamsCross(const vec3 a1, const vec3 a2, const vec3 b1, const vec3 
     const float b = dot(d1, d2);
     const float denom = a * e - b * b; // |d1 × d2|²
     if (denom <= 1e-12f)
-        return false; // коллинеарные (твины форка) не пересекаются в точке
+        return collinearOverlap(a1, a2, b1, b2);
     const float c = dot(d1, r);
     const float f = dot(d2, r);
     const float s = (e * c - b * f) / denom;
@@ -498,6 +498,28 @@ private bool beamsCross(const vec3 a1, const vec3 a2, const vec3 b1, const vec3 
         return false;
     return ((a1 + d1 * s) - (b1 + d2 * t)).lengthsqr
         < beamCrossGap * beamCrossGap;
+}
+
+/// Коллинеарные отрезки: пересечение — это налезание друг на друга, а общий
+/// конец им не мешает. Смещение прямых проверяем отдельно, иначе параллельные
+/// борта вразнобой сочлись бы за пересечение.
+private bool collinearOverlap(const vec3 a1, const vec3 a2,
+    const vec3 b1, const vec3 b2)
+{
+    const vec3 d2 = b2 - b1;
+    const float e = d2.lengthsqr;
+    if (e <= 0.0f)
+        return false;
+    const float along = dot(a1 - b1, d2) / e;
+    if (distance(a1, b1 + d2 * along) > beamCrossGap)
+        return false;
+
+    const vec3 dir = d2 / sqrt(e);
+    const float aLo = dot(a1 - b1, dir);
+    const float aHi = dot(a2 - b1, dir);
+    const float bLo = min(0.0f, dot(d2, dir));
+    const float bHi = max(0.0f, dot(d2, dir));
+    return min(aHi, bHi) - max(aLo, bLo) > beamCrossGap;
 }
 
 /**
@@ -1118,6 +1140,40 @@ unittest
     // Пальцы-твины пересекаются в теле на оси сегмента: по правилу
     // «балки не пересекаются» такой каркас невалиден.
     assert(isValidFrame(f.get).isNull, "перекрёст пальцев на оси — невалидный каркас");
+}
+
+unittest
+{
+    // Коллинеарные балки: налезание друг на друга — пересечение, общий конец
+    // нет. Без этого дублированная балка проходила валидацию.
+    Frame duplicate;
+    duplicate.nodes = [Node(origin), Node(vec3(0.5f, 0.0f, 0.0f))];
+    duplicate.beams = [new Beam(0, 1, 0.04f), new Beam(0, 1, 0.04f)];
+    duplicate.anchors = [Anchor(0, AnchorKind.wheel), Anchor(1, AnchorKind.wheel)];
+    assert(isValidFrame(duplicate).isNull, "две одинаковые балки — невалидный каркас");
+
+    Frame overlap;
+    overlap.nodes = [Node(origin), Node(vec3(0.5f, 0.0f, 0.0f)),
+        Node(vec3(1.0f, 0.0f, 0.0f))];
+    overlap.beams = [new Beam(0, 2, 0.04f), new Beam(0, 1, 0.04f)];
+    overlap.anchors = [Anchor(0, AnchorKind.wheel), Anchor(2, AnchorKind.wheel)];
+    assert(isValidFrame(overlap).isNull, "балка внутри другой — невалидный каркас");
+
+    // Прямая цепь: коллинеарные, но стык узла пересечением не считается.
+    Frame chain;
+    chain.nodes = [Node(origin), Node(vec3(0.5f, 0.0f, 0.0f)),
+        Node(vec3(1.0f, 0.0f, 0.0f))];
+    chain.beams = [new Beam(0, 1, 0.04f), new Beam(1, 2, 0.04f)];
+    chain.anchors = [Anchor(0, AnchorKind.wheel), Anchor(2, AnchorKind.wheel)];
+    assert(!isValidFrame(chain).isNull, "прямая цепь из двух балок — валидна");
+
+    // Параллельные борта вразнобой: проекции совпадают, прямые разведены.
+    Frame rails;
+    rails.nodes = [Node(origin), Node(vec3(0.5f, 0.0f, 0.0f)),
+        Node(vec3(0.0f, 0.4f, 0.0f)), Node(vec3(0.5f, 0.4f, 0.0f))];
+    rails.beams = [new Beam(0, 1, 0.04f), new Beam(2, 3, 0.04f), new Beam(0, 2, 0.04f)];
+    rails.anchors = [Anchor(0, AnchorKind.wheel), Anchor(3, AnchorKind.wheel)];
+    assert(!isValidFrame(rails).isNull, "параллельные борта — не пересечение");
 }
 
 unittest
