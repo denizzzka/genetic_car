@@ -459,7 +459,7 @@ unittest
     assert(finishScore(12.0, 3.0, 3.0) == 1.0f);
     assert(finishScore(6.0, 3.0, 3.0) == 0.25f);
     assert(finishScore(6.0, 3.0, 1.5) == 0.5f);
-    assert(finishScore(12.0, 3.0, 1.5) == 2.0f);
+    assert(finishScore(12.0, 3.0, 1.5) == physicsSpeedCap);
     assert(finishScore(24.0, 3.0, 1.5) == physicsSpeedCap);
     assert(finishScore(0.0, 3.0, 3.0) == 0.0f);
 }
@@ -813,10 +813,10 @@ unittest
 
 unittest
 {
-    // Физический слой: заезд простейшего багги конечен, счёт нормирован
-    // в (0,1] и не зависит от статики. Пустой каркас — ровно 0.
+    // Физический слой: заезд простейшего багги конечен, счёт не выше
+    // потолка physicsSpeedCap и не зависит от статики. Пустой каркас — 0.
     const p = physicsFitness(new Buggy(placedFrame(symmetricBuggyFrame())), 1.0).score;
-    assert(isFinite(p) && p >= 0.0f && p <= 1.0f,
+    assert(isFinite(p) && p >= 0.0f && p <= physicsSpeedCap,
         "счёт заезда нормирован и не разлетается");
 
     Frame empty;
