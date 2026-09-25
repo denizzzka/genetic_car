@@ -400,6 +400,31 @@ Terminal!TokT[] decode(TokT)(const Grammar gr, const Genotype genotype)
 
 unittest
 {
+    // `decode` возвращает либо null, либо непустой массив: пустой результат
+    // возможен только при пустой production, и тогда `appender.data` — это null.
+    // На этом контракте держится проверка `tokens is null` в `develop`.
+    auto start = new NonTerminal("start");
+    auto empty = new NonTerminal("empty");
+    auto gr = new Grammar(start, [cast(NonTerminal) start, cast(NonTerminal) empty]);
+    start.productions = [new Production([cast(NonTerminal) empty])];
+    empty.productions = [new Production([])];
+
+    auto g = new Genotype(2);
+    g.genes = [[0u], [0u]];
+    auto toks = decode!int(gr, g);
+    assert(toks is null, "пустое дерево развёртки обязано давать null, а не пустой массив");
+
+    auto s2 = new NonTerminal("s2");
+    auto gr2 = new Grammar(s2, [cast(NonTerminal) s2]);
+    s2.productions = [new Production([new Terminal!int(7, 1.0f)])];
+    auto g2 = new Genotype(1);
+    g2.genes = [[0u]];
+    auto toks2 = decode!int(gr2, g2);
+    assert(toks2 !is null && toks2.length == 1, "успешное декодирование даёт непустой массив");
+}
+
+unittest
+{
     import std.random : Random;
 
     auto g = new Genotype(3);
