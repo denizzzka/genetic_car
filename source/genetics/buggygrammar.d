@@ -660,43 +660,46 @@ version (unittest)
 
 unittest
 {
-    // `refBase` берёт узел, созданный раньше в этом же разборе, а не только
-    // исходный каркас: индекс зачатка уезжает за пределы `result.nodes`.
+    // `refBase` берёт зачаток сегмента, а не текущий курсор: в первом
+    // сегменте это узел исходного каркаса, во втором — выросший в разборе.
+    // Второй отросток идёт от зачатка, а не от первого отростка — иначе
+    // `refBase` не отличался бы от `refLast`.
     Terminal!Tok[] t;
     t ~= dirCoords(origin, 1.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.0f);
 
-    t ~= new Terminal!Tok(Tok.segStart);
-    t ~= new Terminal!Tok(Tok.refLast);
-    t ~= new Terminal!Tok(Tok.endNew);
-    t ~= dirCoords(forward, 1.0f);
-    t ~= new Terminal!Tok(Tok.radius, 0.04f);
-    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
-    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
-    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
-    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    void beam(Tok startTok, Tok endTok)
+    {
+        t ~= new Terminal!Tok(startTok);
+        t ~= new Terminal!Tok(endTok);
+        t ~= dirCoords(forward, 1.0f);
+        t ~= new Terminal!Tok(Tok.radius, 0.04f);
+        t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+        t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+        t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+        t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    }
 
     t ~= new Terminal!Tok(Tok.segStart);
-    t ~= new Terminal!Tok(Tok.refBase);
-    t ~= new Terminal!Tok(Tok.endNew);
-    t ~= dirCoords(forward, 1.0f);
-    t ~= new Terminal!Tok(Tok.radius, 0.04f);
-    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
-    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
-    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
-    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    beam(Tok.refLast, Tok.endNew);
+    beam(Tok.refBase, Tok.endNew);
+
+    t ~= new Terminal!Tok(Tok.segStart);
+    beam(Tok.refBase, Tok.endNew);
 
     t ~= new Terminal!Tok(Tok.anchors);
 
     auto f = toFrame(t);
     assert(!f.isNull, "refBase должен доставать и выросший узел");
     const size_t grown = cockpitFrameNodeCount();
-    assert(f.get.nodes.length == grown + 2, "каждый endNew добавляет узел");
+    assert(f.get.nodes.length == grown + 3, "каждый endNew добавляет узел");
     const size_t first = cockpitFrameBeamCount();
-    assert(f.get.beams[first].a == grown - 1, "первый отросток идёт от узла кокпита");
-    assert(f.get.beams[first + 1].a == grown,
-        "второй отросток идёт от узла, выросшего в первом сегменте");
-    assert(f.get.beams[first + 1].b == grown + 1, "и заканчивается новым узлом");
+    assert(f.get.beams[first].a == grown - 1, "refLast идёт от узла кокпита");
+    assert(f.get.beams[first + 1].a == grown - 1,
+        "refBase возвращает зачаток сегмента, а не курсор last");
+    assert(f.get.beams[first + 1].b == grown + 1, "и растит узел от зачатка");
+    assert(f.get.beams[first + 2].a == grown + 1,
+        "зачаток второго сегмента — конец последней балки первого");
 }
 
 unittest
