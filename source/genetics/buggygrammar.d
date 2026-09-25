@@ -315,6 +315,8 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
         return n;
     };
 
+    // Курсор продолжения, а не «последний созданный узел»: ссылка на
+    // существующий узел его не двигает, иначе отросток уехал бы на старый узел.
     size_t last = growth;
 
     float heading = ast.heading;
