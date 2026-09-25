@@ -16,7 +16,7 @@ private enum float elitePercent = 5.0f;
 /// Попыток мутации одного элемента, прежде чем тот считается провальным.
 private enum size_t maxMutationAttempts = 30;
 
-/// Полных проходов по массиву родителей вне элиты, после которых
+/// Полных проходов по массиву родителей, после которых
 /// незаполненные слоты поколения — повод для `enforce`.
 private enum size_t maxParentCycles = 3;
 
@@ -49,7 +49,7 @@ Nullable!Genotype tryCreateViableMutant(const Grammar gr, const Genotype base,
 /// Построение следующего поколения — заполнение слотов физической симуляции.
 ///
 /// Слоты заполняются, пока хватает бюджета `maxParentCycles` циклов по
-/// родителям вне элиты; когда бюджет исчерпан, а слоты не заполнены — `enforce`.
+/// родителям; когда бюджет исчерпан, а слоты не заполнены — `enforce`.
 Genotype[] buildNextGeneration(const Grammar gr, Individual[] pop,
     const EvolutionConfig p, ref Random rnd)
 {
@@ -67,17 +67,17 @@ Genotype[] buildNextGeneration(const Grammar gr, Individual[] pop,
             cast(size_t) (ranked.length * elitePercent / 100.0f)));
     next ~= ranked[0 .. elites].map!(e => e.genotype.dup).array;
 
-    // Заполнение остальных слотов: диапазон родителей вне элиты (лучшие
-    // первыми), по нему счётчик идёт по кругу; на каждого — кроссовер со
-    // случайным партнёром (турнир по всей популяции) и до maxMutationAttempts
-    // мутаций получившегося ребёнка.
-    auto pool = ranked[elites .. $];
+    // Заполнение остальных слотов: родители — все, лучшие первыми, по ним
+    // счётчик идёт по кругу; на каждого — кроссовер со случайным партнёром
+    // (турнир по всей популяции) и до maxMutationAttempts мутаций ребёнка.
+    // Элита участвует и как «главный» родитель: её геном тоже мутируется.
+    auto pool = ranked;
     size_t parentIdx;
     for (size_t visited; next.length < EvolutionConfig.populationSize; ++visited)
     {
         enforce(visited < maxParentCycles * pool.length,
             "не удалось заполнить кандидаты физической симуляции: "
-            ~ "исчерпаны 3 цикла по родителям вне элиты");
+            ~ "исчерпаны 3 цикла по родителям");
 
         const base = pool[parentIdx].genotype;
         const mate = ranked[tournament(ranked, p.tournamentSize, rnd)].genotype;
