@@ -393,8 +393,8 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
             result.beams ~= addEvolvedBeam(start, end, radius, b.kind, onInertNode);
             if (seg.fork)
             {
-                const size_t ts = twinIndex(forks, start, plane);
-                const size_t te = twinIndex(forks, end, plane);
+                const size_t ts = twinIndex(forks, start);
+                const size_t te = twinIndex(forks, end);
                 if (ts != size_t.max || te != size_t.max)
                 {
                     const size_t twinStart = ts == size_t.max ? start : ts;
@@ -451,16 +451,13 @@ private vec3 mirrorInPlane(const vec3 p, const MirrorPlane plane)
     return p - plane.normal * (2.0f * dot(p - plane.point, plane.normal));
 }
 
-/// Ближайший twin узла: запись в таблице пар, иначе уже существующий узел на
-/// зеркальном месте плоскости. `size_t.max`, если зеркала в каркасе нет.
-private size_t twinIndex(const NodeTwin[] forks, size_t n, const MirrorPlane plane)
+/// Twin узла по таблице пар. `size_t.max`, если пара не зарегистрирована:
+/// угадывать близость по допуску нельзя — два разных узла, случайно
+/// сошедшиеся в пределах planeEps, выдали бы чужой узел вместо зеркала.
+private size_t twinIndex(const NodeTwin[] forks, size_t n)
 {
     if (forks[n].twin != n)
         return forks[n].twin;
-    const vec3 mirrored = mirrorInPlane(forks[n].node.pos, plane);
-    foreach (i, ft; forks)
-        if (i != n && distance(ft.node.pos, mirrored) < planeEps)
-            return i;
     return size_t.max;
 }
 
