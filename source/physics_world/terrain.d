@@ -260,8 +260,12 @@ unittest
     const float h0 = t.heightAt(origin);
     assert(abs(h0) < 0.5f, "в origin поверхность почти ровная");
     const vec3 p = forward * 10.0f - right * 3.0f;
-    assert(t.heightAt(p) == t.heightAt(p),
-        "высота детерминирована");
+    // Детерминизм: поверхность одной и той же точки, спрошенная дважды,
+    // отдаёт одинаковую высоту (нет скрытого рандома в генерации).
+    const float h1 = t.heightAt(p);
+    const float h2 = t.heightAt(p);
+    assert(h1 == h2,
+        "два запроса высоты одной точки дают одинаковую величину");
 
     // Тайлы кэшируются: второй запрос — тот же immutable, без пересчёта.
     const td1 = t.tileData(0, 0);
