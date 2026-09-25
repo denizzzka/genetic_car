@@ -28,6 +28,7 @@ Nullable!Genotype tryCreateViableMutant(const Grammar gr, const Genotype base,
 {
     auto candidate = base.dup;
     mutateSelfAdaptation(candidate, rnd);
+    const weights = mutationWeights(gr);
 
     foreach (_; 0 .. maxMutationAttempts)
     {
@@ -36,7 +37,7 @@ Nullable!Genotype tryCreateViableMutant(const Grammar gr, const Genotype base,
         if (structural)
             mutateIndel(trial, candidate.indelHits, rnd);
         else
-            mutate(trial, candidate.pointHits, rnd);
+            mutate(trial, candidate.pointHits, rnd, weights);
 
         auto dev = develop(gr, trial);
         if (!dev.isNull && buggyFitness(dev.get.frame, dev.get.ast) > 0.0f)

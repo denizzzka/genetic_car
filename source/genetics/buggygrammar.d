@@ -165,6 +165,57 @@ Grammar buggyGrammar()
     return new Grammar(start, symbols);
 }
 
+/// Вес гена в точечной мутации: правки попадают в него с этой долей.
+float[] mutationWeights(const Grammar gr)
+{
+    auto w = new float[gr.symbols.length];
+    foreach (i, sym; gr.symbols)
+        w[i] = geneMutWeight(sym.name);
+    return w;
+}
+
+/// Вес i-го гена: 0 — не мишень вовсе, 1 — обычная.
+private float geneMutWeight(string name)
+{
+    // Значения-индексы узлов: флип почти всегда ссылка на несуществующий узел.
+    if (name == "idx")
+        return 0.0f;
+    // Списки элементов: точечная правка переключает «продолжить/конец»,
+    // обрывая или раздувая цепочку — для этого есть инделы.
+    if (name == "beamList" || name == "segmentList" || name == "anchorList")
+        return 0.2f;
+    // Ссылка на узел: refLast/refBase безопасны, idx-ветвь — не всегда.
+    if (name == "startRef" || name == "endRef")
+        return 0.5f;
+    // Выбор единственной продукции: флип не меняет фенотип.
+    if (name == "frame" || name == "startPos" || name == "segment"
+        || name == "beam" || name == "beamKind" || name == "anchor"
+        || name == "anchorMarker")
+        return 0.0f;
+    return 1.0f;
+}
+
+unittest
+{
+    // Вес на каждый ген грамматики; токсичный idx — не мишень, а геометрия
+    // и структурные списки получают обычный и пониженный веса.
+    auto gr = buggyGrammar();
+    auto w = mutationWeights(gr);
+    assert(w.length == gr.symbols.length, "вес на каждый ген");
+
+    auto idOf = (string n) {
+        foreach (sym; gr.symbols)
+            if (sym.name == n)
+                return sym.id;
+        assert(false);
+    };
+
+    assert(w[idOf("idx")] == 0.0f, "idx не мишень точечной мутации");
+    assert(w[idOf("forward")] == 1.0f, "геометрия — обычная мишень");
+    assert(w[idOf("beamList")] < 1.0f, "структура растёт инделами");
+    assert(w[idOf("startRef")] < 1.0f, "ссылки мутируются осторожно");
+}
+
 /**
  * Построить геометрию каркаса из AST.
  *

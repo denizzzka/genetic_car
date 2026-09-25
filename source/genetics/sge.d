@@ -193,11 +193,30 @@ Genotype crossover(const Genotype a, const Genotype b, ref Random rnd)
  * `beamList` кодирует длину цепочки балок, и один флип "продолжить"->"конец"
  * обрывает почти всю раму. Фиксированное число правок делает одну мутацию
  * умеренным изменением фенотипа.
+ *
+ * `weights` — вес каждого гена при выборе мишени правки: ген-токсикант
+ * (индексы узлов) получает нуль, полезные (геометрия) — единицу, тогда
+ * правки не тратятся впустую. Без весов выбор — равномерный по всем кодонам.
  */
-void mutate(Genotype genotype, size_t hits, ref Random rnd)
+void mutate(Genotype genotype, size_t hits, ref Random rnd,
+    const float[] weights = null)
 {
     if (hits == 0)
         return;
+
+    const bool weighted = weights !is null && weights.length == genotype.genes.length;
+    if (weighted)
+    {
+        foreach (_; 0 .. hits)
+        {
+            auto gi = weightedGeneIndex(weights, rnd);
+            auto gene = genotype.genes[gi];
+            if (gene.length == 0)
+                continue;
+            gene[uniform(0, gene.length, rnd)] = uniform(0u, uint.max, rnd);
+        }
+        return;
+    }
 
     size_t total;
     foreach (gene; genotype.genes)
@@ -218,6 +237,25 @@ void mutate(Genotype genotype, size_t hits, ref Random rnd)
             pos -= gene.length;
         }
     }
+}
+
+/// Индекс гена по его весу: правки целятся в малочисленные полезные гены.
+private size_t weightedGeneIndex(const float[] w, ref Random rnd)
+{
+    float total = 0.0f;
+    foreach (x; w)
+        total += x;
+    if (total <= 0.0f)
+        return uniform(0, w.length, rnd);
+
+    float v = uniform(0.0f, total, rnd);
+    foreach (i, x; w)
+    {
+        if (v < x)
+            return i;
+        v -= x;
+    }
+    return w.length - 1;
 }
 
 /**
@@ -387,6 +425,23 @@ unittest
             if (codon != g0.genes[i][j])
                 ++diffs0;
     assert(diffs0 == 4, "mutate с hits == 0 ничего не меняет");
+}
+
+unittest
+{
+    import std.random : Random;
+
+    // Взвешенная мутация: ген с нулевым весом не трогается, все правки
+    // ложатся только в гены с ненулевым весом.
+    auto g = new Genotype(3);
+    g.genes = [[111u, 222u], [333u, 444u], [555u, 666u]];
+    const weights = [0.0f, 0.0f, 1.0f];
+    auto rnd = Random(4);
+    mutate(g, 40, rnd, weights);
+    assert(g.genes[0] == [111u, 222u] && g.genes[1] == [333u, 444u],
+        "нулевой вес исключает ген из мишеней");
+    assert(g.genes[2] != [555u, 666u],
+        "все правки легли в ген с ненулевым весом");
 }
 
 unittest
