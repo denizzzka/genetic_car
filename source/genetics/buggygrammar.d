@@ -44,6 +44,14 @@ private struct MirrorPlane
     vec3 normal;
 }
 
+/// Узел вместе со своим twin (индекс самого себя, если пара нет): держать
+/// парой, чтобы таблица не могла разойтись по длине с каркасом.
+private struct NodeTwin
+{
+    Node node;
+    size_t twin;
+}
+
 /// Допуск «узел лежит на плоскости» и «узел совпал с отражением».
 enum float planeEps = 1e-4f;
 
@@ -256,25 +264,23 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
     assert(context.twinOf.length == result.nodes.length);
     assert(context.inertNode == size_t.max || context.inertNode < result.nodes.length);
 
-    // Таблица пар: node -> его twin в сагиттальной плоскости сегмента.
-    size_t[] forkOf = context.twinOf.dup;
+    // Растущий каркас: узел вместе со своим twin. Узлы больше не дописываются
+    // в result.nodes по ходу — итоговый список собирается из forks в конце.
+    NodeTwin[] forks;
+    foreach (i, n; result.nodes)
+        forks ~= NodeTwin(n, context.twinOf[i]);
 
     // Узел; при раздвоении сегмента — пара (узел, twin) вокруг плоскости.
     auto addNode = (vec3 target, bool fork, MirrorPlane plane) {
-        result.nodes ~= Node(target);
-        const n = result.nodes.length - 1;
+        const size_t n = forks.length;
         if (fork && abs(dot(target - plane.point, plane.normal)) >= planeEps)
         {
-            result.nodes ~= Node(mirrorInPlane(target, plane));
-            const nm = result.nodes.length - 1;
-            forkOf.length = result.nodes.length;
-            forkOf[n] = nm;
-            forkOf[nm] = n;
+            forks ~= NodeTwin(Node(target), n + 1);
+            forks ~= NodeTwin(Node(mirrorInPlane(target, plane)), n);
         }
         else
         {
-            forkOf.length = result.nodes.length;
-            forkOf[n] = n;
+            forks ~= NodeTwin(Node(target), n);
         }
         return n;
     };
@@ -313,19 +319,19 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
                     break;
                 case StartRefKind.base:
                     start = segBase;
-                    if (start >= result.nodes.length)
+                    if (start >= forks.length)
                         return Nullable!Frame.init;
                     break;
                 case StartRefKind.idx:
                     start = b.start.idx;
-                    if (start >= result.nodes.length)
+                    if (start >= forks.length)
                         return Nullable!Frame.init;
                     break;
             }
 
             if (seg.fork && !havePlane)
             {
-                plane = sagittalPlane(result.nodes, forkOf, start, heading);
+                plane = sagittalPlane(forks, start, heading);
                 havePlane = true;
             }
 
@@ -334,7 +340,7 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
             {
                 case EndRefKind.newNode:
                 {
-                    auto target = result.nodes[start].pos
+                    auto target = forks[start].node.pos
                         + turtleDelta(b.end.delta.x, b.end.delta.y, b.end.delta.z);
                     end = addNode(target, seg.fork, plane);
                     last = end;
@@ -342,18 +348,18 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
                 }
                 case EndRefKind.nearNode:
                 {
-                    auto target = result.nodes[start].pos
+                    auto target = forks[start].node.pos
                         + turtleDelta(b.end.delta.x, b.end.delta.y, b.end.delta.z);
                     // Растущий конец сливается с ближайшим существующим узлом
                     // (кроме старта) в пределах mergeRadius — так сами возникают
                     // петли и самосборка каркаса.
                     size_t best = size_t.max;
                     auto bestD = mergeRadius;
-                    foreach (n; 0 .. result.nodes.length)
+                    foreach (n; 0 .. forks.length)
                     {
                         if (n == start)
                             continue;
-                        const d = distance(result.nodes[n].pos, target);
+                        const d = distance(forks[n].node.pos, target);
                         if (d < bestD)
                         {
                             bestD = d;
@@ -369,7 +375,7 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
                 }
                 case EndRefKind.idx:
                     end = b.end.idx;
-                    if (end >= result.nodes.length)
+                    if (end >= forks.length)
                         return Nullable!Frame.init;
                     break;
             }
@@ -387,8 +393,8 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
             result.beams ~= addEvolvedBeam(start, end, radius, b.kind, onInertNode);
             if (seg.fork)
             {
-                const size_t ts = twinIndex(result.nodes, forkOf, start, plane);
-                const size_t te = twinIndex(result.nodes, forkOf, end, plane);
+                const size_t ts = twinIndex(forks, start, plane);
+                const size_t te = twinIndex(forks, end, plane);
                 if (ts != size_t.max || te != size_t.max)
                 {
                     const size_t twinStart = ts == size_t.max ? start : ts;
@@ -406,11 +412,15 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
 
     foreach (a; ast.anchors)
     {
-        auto n = cast(size_t) a.idx % result.nodes.length;
+        auto n = cast(size_t) a.idx % forks.length;
         result.anchors ~= Anchor(n, a.kind, a.radius);
-        if (forkOf[n] != n)
-            result.anchors ~= Anchor(forkOf[n], a.kind, a.radius);
+        if (forks[n].twin != n)
+            result.anchors ~= Anchor(forks[n].twin, a.kind, a.radius);
     }
+
+    result.nodes.length = 0;
+    foreach (ft; forks)
+        result.nodes ~= ft.node;
     result.motorPower = ast.motorPower;
     return Nullable!Frame(result);
 }
@@ -421,13 +431,13 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
  * Порядок: пара стартового узла, иначе плоскость turtle-заголовка — его
  * боковая ось и есть нормаль, так что раздвоение зеркалит поперёк машины.
  */
-private MirrorPlane sagittalPlane(const Node[] nodes, const size_t[] forkOf,
-    size_t start, float heading)
+private MirrorPlane sagittalPlane(const NodeTwin[] forks, size_t start,
+    float heading)
 {
-    const vec3 from = nodes[start].pos;
-    if (forkOf[start] != start)
+    const vec3 from = forks[start].node.pos;
+    if (forks[start].twin != start)
     {
-        const vec3 to = nodes[forkOf[start]].pos;
+        const vec3 to = forks[forks[start].twin].node.pos;
         const vec3 d = to - from;
         if (d.lengthsqr > 0.0f)
             return MirrorPlane((from + to) * 0.5f, d / d.length);
@@ -443,14 +453,13 @@ private vec3 mirrorInPlane(const vec3 p, const MirrorPlane plane)
 
 /// Ближайший twin узла: запись в таблице пар, иначе уже существующий узел на
 /// зеркальном месте плоскости. `size_t.max`, если зеркала в каркасе нет.
-private size_t twinIndex(const Node[] nodes, const size_t[] forkOf, size_t n,
-    const MirrorPlane plane)
+private size_t twinIndex(const NodeTwin[] forks, size_t n, const MirrorPlane plane)
 {
-    if (forkOf[n] != n)
-        return forkOf[n];
-    const vec3 mirrored = mirrorInPlane(nodes[n].pos, plane);
-    foreach (i, m; nodes)
-        if (i != n && distance(m.pos, mirrored) < planeEps)
+    if (forks[n].twin != n)
+        return forks[n].twin;
+    const vec3 mirrored = mirrorInPlane(forks[n].node.pos, plane);
+    foreach (i, ft; forks)
+        if (i != n && distance(ft.node.pos, mirrored) < planeEps)
             return i;
     return size_t.max;
 }
