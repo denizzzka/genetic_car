@@ -5,7 +5,8 @@ import dagon.core.keycodes;
 import dagon.core.time;
 import core.thread : Thread;
 import core.atomic : atomicStore, atomicLoad;
-import std.algorithm : min, max, sort, map;
+import std.algorithm : min, map, reduce;
+import std.range : evenChunks;
 import std.array : array;
 import std.random;
 import std.stdio : writefln;
@@ -769,22 +770,20 @@ class BuggyScene: Scene
         }
     }
 
-    /// Витрина: топ-min(galleryTop) лучших в ряд по убыванию фитнеса.
     private void buildGallery()
     {
         removeCar();
 
-        Individual[] ranked = new Individual[population.length];
-        foreach (i, e; population)
-            ranked[i] = e;
-        sort!((a, b) => a.fitness > b.fitness)(ranked);
+        const size_t strata = min(cast(size_t) galleryTop, population.length);
+        Individual[] picks;
+        foreach (members; population[0 .. $].evenChunks(strata))
+            picks ~= members.reduce!((a, b) => a.fitness > b.fitness ? a : b);
 
-        const n = min(cast(size_t) galleryTop, ranked.length);
-        const float firstX = (n - 1) * 0.5f * gallerySpacing;
+        const float firstX = (picks.length - 1) * 0.5f * gallerySpacing;
 
-        foreach (i; 0 .. n)
+        foreach (i, pick; picks)
         {
-            auto f = develop(grammar, ranked[i].genotype);
+            auto f = develop(grammar, pick.genotype);
             if (f.isNull)
                 continue;
             const float laneX = i * gallerySpacing - firstX;
