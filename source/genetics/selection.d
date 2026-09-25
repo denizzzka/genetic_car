@@ -28,9 +28,12 @@ struct EvolutionConfig
     enum size_t populationSize = 100;
     size_t tournamentSize = 2;
     /// Стартовые темпы мутаций поколения 0; дальше особи самоадаптируются.
+    /// Инделей заметно больше дефолтных: длина гена — единственное, что
+    /// ограничивает число костей, а точечная правка по замыслу не трогает
+    /// списки (их вес 0.2).
     size_t mutateHits = defaultPointHits;
-    size_t indelHits = defaultIndelHits;
-    float structuralChance = defaultStructuralChance;
+    size_t indelHits = 2;
+    float structuralChance = 0.5f;
     size_t generationsPerPress = 25;
 
     double simulateSeconds = 0.0;
