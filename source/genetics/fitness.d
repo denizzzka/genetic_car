@@ -55,16 +55,24 @@ enum float boxHeight = 2.5f;
 /// ящик, получает порог вместо ~e^-25 и остаётся видимым отбору и физике.
 enum float morphologyFloor = 0.01f;
 
+/// Слой симметрии в фитнесе выключен: симметрия, которую задаёт грамматика,
+/// должна быть видна в эволюции без давления отбора — ни в сторону зеркала,
+/// ни в сторону асимметрии. Включение возвращает и штраф за асимметрию
+/// (узлы, колёса, масса балок, радиальный разброс twin-пар), и поощрение
+/// симметрии; `motorBalance` (ведущие колёса по сторонам) — часть того же
+/// слоя и тоже выключен.
+enum bool symmetryFitnessEnabled = false;
+
 /// Оценочная фитнес-функция каркаса (без физики).
 ///
 /// Возвращает 0 для физически невыполнимых каркасов и значение в (0,1]
-/// для правдоподобных. Слои оценки (симметрия — это мягкое предпочтение
-/// с нижней границей 0.5, чтобы асимметричный каркас не обнулялся):
-///   - симметрия через плоскость X=0 (канализация из грамматики);
+/// для правдоподобных. Слои оценки (жёсткость, габаритный ящик и — пока
+/// выключенный — симметрия с балансом колёс по сторонам):
 ///   - жёсткость — петли в графе балок (цикломатическое число);
-///   - баланс ведущих колёс по сторонам;
 ///   - габаритный ящик — один параллелепипед 3×2.5×2.5 вокруг центра
-///     колёс: узлы за его гранью штрафуются долей.
+///     колёс: узлы за его гранью штрафуются долей;
+///   - симметрия через плоскость X=0 и баланс ведущих колёс (слой
+///     `symmetryFitnessEnabled`).
 float buggyFitness(const Frame f)
 {
     return buggyFitness(f, Ast.init);
@@ -127,17 +135,25 @@ float buggyFitness(const Frame f, const Ast ast)
         return 0.0f;
 
     // ---- Слоты морфологии ----
-    const float nodeSym = symmetryRatio(f);
-    const float wheelSym = wheelSymmetry(f);
-    const float pairSym = beamMassSymmetry(f);
-    const float forkSym = forkRadiusSymmetry(ast);
-    const float base = 0.5f * nodeSym + 0.3f * wheelSym + 0.2f * pairSym;
-    const float phiSym = (0.5f + 0.5f * base) * forkSym;
+    // Симметрия и баланс ведущих колёс по сторонам отключены: пока смотрят,
+    // как сама грамматика строит тело, отбор не должен давить на симметрию
+    // ни в сторону зеркала, ни в сторону асимметрии. Слой остаётся в коде и
+    // включается обратно одним флагом.
+    float phiSym = 1.0f;
+    float phiDrive = 1.0f;
+    if (symmetryFitnessEnabled)
+    {
+        const float nodeSym = symmetryRatio(f);
+        const float wheelSym = wheelSymmetry(f);
+        const float pairSym = beamMassSymmetry(f);
+        const float forkSym = forkRadiusSymmetry(ast);
+        const float base = 0.5f * nodeSym + 0.3f * wheelSym + 0.2f * pairSym;
+        phiSym = (0.5f + 0.5f * base) * forkSym;
+        phiDrive = 0.5f + 0.5f * motorBalance(f);
+    }
 
     const size_t cycles = cyclomaticNumber(f); // μ = E - V + c
     const float phiRigid = 0.5f + 0.5f * (1.0f - exp(-0.4f * cast(float) cycles));
-
-    const float phiDrive = 0.5f + 0.5f * motorBalance(f);
 
     // Габаритный ящик — единый потолок размера: параллелепипед
     // 3(курс) × 2.5(поперёк) × 2.5(высота над землёй), центр по колёсному
@@ -744,13 +760,12 @@ unittest
     assert(buggyFitness(boundary) > 0.0f,
         "касание плоскости земли в пределах допуска не отбраковывается");
 
-    // Симметричная машина должна оцениваться выше асимметричной той же формы.
-    const float symFitness = buggyFitness(symmetricBuggyFrame());
-    const float asymFitness = buggyFitness(asymmetricBuggyFrame());
-    assert(symFitness > 0.0f && asymFitness > 0.0f,
+    // Слой симметрии выключен, поэтому обе машины равноценны в фитнесе, а
+    // различие проверяется на самом слое.
+    assert(buggyFitness(symmetricBuggyFrame()) > 0.0f
+        && buggyFitness(asymmetricBuggyFrame()) > 0.0f,
         "обе машины физически выполнимы");
-    assert(symFitness > asymFitness,
-        "зеркальность колёс и каркаса даёт прирост фитнеса");
+    assert(!symmetryFitnessEnabled, "симметрия сейчас не влияет на фитнес");
 
     // Балки за габаритом: идентичные каркасы, отличающиеся только одним
     // узлом (внутри ящика против выступающего наружу), — выступающий
@@ -775,15 +790,23 @@ unittest
         "симметричный багги — полная зеркальная парность массы");
     assert(beamMassSymmetry(asymmetricBuggyFrame()) < 0.99f,
         "асимметричный багги не имеет пары части массы");
+
+    // Зеркальность узлов, колёс и баланс ведущих — свойства выключенного слоя,
+    // поэтому проверяются напрямую, а не через фитнес.
+    assert(symmetryRatio(symmetricBuggyFrame()) > symmetryRatio(asymmetricBuggyFrame()),
+        "зеркальность узлов измеряется зеркальностью узлов");
+    assert(wheelSymmetry(symmetricBuggyFrame()) > wheelSymmetry(asymmetricBuggyFrame()),
+        "зеркальность колёс измеряется зеркальностью колёс");
+    assert(motorBalance(symmetricBuggyFrame()) > 0.99f,
+        "ведущие колёса попарно по сторонам");
+    assert(motorBalance(asymmetricBuggyFrame()) < 1.0f,
+        "ведущие колёса только с одной стороны — баланс ниже единицы");
 }
 
 unittest
 {
-    // Nodal/Lefty из AST: тот же каркас, но AST сообщает о радиальном разбросе
-    // fork-пары — ненулевой |beamAsymmetry| снижает фитнес. Пустой AST нейтрален.
-    const base = buggyFitness(symmetricBuggyFrame());
-    assert(base > 0.0f);
-
+    // Nodal/Lefty из AST: слой симметрии штрафует ненулевой |beamAsymmetry|
+    // fork-пары. Пустой AST нейтрален.
     Ast a0;
     a0.segments ~= SegmentAst(true, []);
     Ast aD;
@@ -793,10 +816,10 @@ unittest
         EndRef(EndRefKind.newNode, origin, 0),
         0.04f, 0.1f, 0.0f, 0.0f, BeamKind.normal, 0.0f);
 
-    const f0 = buggyFitness(symmetricBuggyFrame(), a0);
-    const fD = buggyFitness(symmetricBuggyFrame(), aD);
-    assert(abs(f0 - base) < 1e-6f, "нулевой Nodal/Lefty не меняет фитнес");
-    assert(fD < f0, "ненулевой |beamAsymmetry| штрафует асимметрию fork-пары");
+    assert(abs(forkRadiusSymmetry(a0) - 1.0f) < 1e-6f,
+        "нулевой Nodal/Lefty не штрафуется");
+    assert(forkRadiusSymmetry(aD) < forkRadiusSymmetry(a0),
+        "ненулевой |beamAsymmetry| штрафует асимметрию fork-пары");
 }
 
 unittest
@@ -823,14 +846,11 @@ unittest
     polarized.segments ~= SegmentAst(true, []);
     polarized.segments[0].beams ~= b;
 
-    const float fBase = buggyFitness(symmetricBuggyFrame());
-    const float fOpen = buggyFitness(symmetricBuggyFrame(), open);
-    const float fFrozen = buggyFitness(symmetricBuggyFrame(), frozen);
-    const float fPolarized = buggyFitness(symmetricBuggyFrame(), polarized);
-    assert(fOpen < fBase, "шум-зазор без порога материализуется в асимметрию");
-    assert(abs(fFrozen - fBase) < 1e-6f,
+    const float sOpen = forkRadiusSymmetry(open);
+    assert(sOpen < 1.0f, "шум-зазор без порога материализуется в асимметрию");
+    assert(abs(forkRadiusSymmetry(frozen) - 1.0f) < 1e-6f,
         "порог билатеральности выше отклика замораживает симметрию");
-    assert(fPolarized < fOpen,
+    assert(forkRadiusSymmetry(polarized) < sOpen,
         "организменный градиент асимметрирует каждую пару организма");
 }
 
