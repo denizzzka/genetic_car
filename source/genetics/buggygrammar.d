@@ -282,9 +282,17 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
     result.nodes = result.nodes.dup;
     result.beams = result.beams.dup;
     result.anchors = result.anchors.dup;
-    assert(context.growthNode < result.nodes.length);
+    // Узлы контекста — индексы исходного массива; result.nodes на этом шаге
+    // ещё копия один в один, что и проверяет twinOf.
+    assert(!context.growthNode.isNull, "не задан узел роста");
     assert(context.twinOf.length == result.nodes.length);
-    assert(context.inertNode == size_t.max || context.inertNode < result.nodes.length);
+    const size_t growth = context.growthNode.get;
+    // Инертного узла может не быть: «ни на чём не держится» — законное
+    // состояние, в отличие от незаполненного узла роста.
+    const size_t inert = context.inertNode.get(size_t.max);
+    assert(growth < result.nodes.length, "узел роста вне каркаса");
+    assert(inert == size_t.max || inert < result.nodes.length,
+        "инертный узел вне каркаса");
 
     // Растущий каркас: узел вместе со своим twin. Узлы больше не дописываются
     // в result.nodes по ходу — итоговый список собирается из forks в конце.
@@ -307,7 +315,7 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
         return n;
     };
 
-    size_t last = context.growthNode;
+    size_t last = growth;
 
     float heading = ast.heading;
     auto turtleDelta = (float dx, float dy, float dz) {
@@ -411,7 +419,7 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
             }
             ++j;
 
-            const bool onInertNode = start == context.inertNode || end == context.inertNode;
+            const bool onInertNode = start == inert || end == inert;
             result.beams ~= addEvolvedBeam(start, end, radius, b.kind, onInertNode);
             if (seg.fork)
             {
@@ -423,8 +431,8 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
                     const size_t twinEnd = te == size_t.max ? end : te;
                     result.beams ~= addEvolvedBeam(twinStart, twinEnd,
                         radius * (1.0f + beamAsymmetry(ast.lrGradient, b)), b.kind,
-                        onInertNode || twinStart == context.inertNode
-                            || twinEnd == context.inertNode);
+                        onInertNode || twinStart == inert
+                            || twinEnd == inert);
                 }
             }
 

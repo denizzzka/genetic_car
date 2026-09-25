@@ -1,6 +1,7 @@
 module frame.frame;
 
 import std.math;
+import std.typecons : Nullable;
 import dlib.math.vector;
 import physics_world.wheel : defaultWheelRadius;
 
@@ -124,12 +125,17 @@ struct Frame
     }
 }
 
+/**
+ * Исходный каркас, к которому приращивает геном: узлы, пары twin и два
+ * якорных узла. `null` означает «узла нет», а нулевой индекс — узел 0: без
+ * этой разницы забытое присваивание выросло бы молча не оттуда.
+ */
 struct FrameContext
 {
     Frame frame;
-    size_t growthNode;
     size_t[] twinOf;
-    size_t inertNode = size_t.max;
+    Nullable!size_t growthNode;
+    Nullable!size_t inertNode;
 }
 
 /// Стартовая сила мотор-колёс основателя, Н·м: около калиброванного оптимума,
