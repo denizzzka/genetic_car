@@ -37,6 +37,13 @@ private Terminal!Tok marker(Tok tok)
     return new Terminal!Tok(tok);
 }
 
+/// Плоскость отражения twin-пары: точка на плоскости и единичная нормаль.
+private struct MirrorPlane
+{
+    vec3 point;
+    vec3 normal;
+}
+
 /**
  * Грамматика багги целиком.
  *
@@ -58,11 +65,12 @@ Grammar buggyGrammar()
     auto beamList_ = nt("beamList", null);
 
     // Раздвоение сегмента: пустая продукция — медианная одиночная структура
-    // («глаз по центру»), маркер `Tok.fork` — пара ветвей вокруг локальной
-    // оси (X стартового узла сегмента). Асимметрия пары задаётся не статикой
-    // всего сегмента, а парой активатор-ингибитор `nodal`/`lefty` на каждой
-    // балке — Twin-балка масштабируется в `1 + forkAsymmetry(nodal, lefty)`,
-    // геометрия остаётся зеркальной (как Nodal/Lefty у позвоночных).
+    // («глаз по центру»), маркер `Tok.fork` — пара ветвей в сагиттальной
+    // плоскости сегмента (её несёт turtle-заголовок, а не мировые оси).
+    // Асимметрия пары — не статика сегмента, а отклик активатор-ингибитор:
+    // локальные `nodal`/`lefty` плюс организменный градиент `lrGradient`,
+    // срезанные порогом билатеральности. Twin-балка масштабируется в
+    // `1 + beamAsymmetry(lrGradient, beam)`.
     auto segMode = nt("segMode", [
         new Production([]),
         new Production([marker(Tok.fork)]),
@@ -228,14 +236,18 @@ unittest
  * Построить геометрию каркаса из AST и готового контекста.
  *
  * Исполнитель «глупо» выполняет решения дерева: читает turtle-заголовок,
- * разрешает рефы, при раздвоенном сегменте рождает узлы парой вокруг оси
- * сегмента (X его стартового узла), масштабирует радиусы морфоген-градиентом
- * и дублирует балки/якоря в twin. Вся семантика — fork, ось, морфоген,
- * turtle — зафиксирована в AST.
+ * разрешает рефы, при раздвоенном сегменте рождает узлы парой, отражённой в
+ * сагиттальной плоскости сегмента, масштабирует радиусы морфоген-градиентом
+ * и дублирует балки/якоря в twin. Вся семантика — fork, плоскость, морфоген,
+ * turtle, LR-асимметрия — зафиксирована в AST.
  */
 Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
 {
     enum float mergeRadius = 0.15f;
+
+    /// Узел на расстоянии меньше этого от плоскости не порождает twin:
+    /// медианная структура («глаз по центру») остаётся одиночной.
+    enum float planeEps = 1e-4f;
 
     Frame result = context.frame;
     result.nodes = result.nodes.dup;
@@ -245,16 +257,16 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
     assert(context.twinOf.length == result.nodes.length);
     assert(context.inertNode == size_t.max || context.inertNode < result.nodes.length);
 
-    // Таблица пар: node -> его twin вокруг оси раздвоения сегмента.
+    // Таблица пар: node -> его twin в сагиттальной плоскости сегмента.
     size_t[] forkOf = context.twinOf.dup;
 
-    // Узел; при раздвоении сегмента — пара (узел, twin) вокруг оси.
-    auto addNode = (vec3 target, bool fork, float axis) {
+    // Узел; при раздвоении сегмента — пара (узел, twin) вокруг плоскости.
+    auto addNode = (vec3 target, bool fork, MirrorPlane plane) {
         result.nodes ~= Node(target);
         const n = result.nodes.length - 1;
-        if (fork && abs(target.x - axis) >= 1e-4f)
+        if (fork && abs(dot(target - plane.point, plane.normal)) >= planeEps)
         {
-            result.nodes ~= Node(vec3(2.0f * axis - target.x, target.y, target.z));
+            result.nodes ~= Node(mirrorInPlane(target, plane));
             const nm = result.nodes.length - 1;
             forkOf.length = result.nodes.length;
             forkOf[n] = nm;
@@ -289,8 +301,8 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
         // несколько отростков (пальцы из «запястья») без точных индексов.
         const segBase = last;
 
-        bool haveAxis = false;
-        float axis = 0.0f;
+        bool havePlane = false;
+        MirrorPlane plane;
 
         foreach (b; seg.beams)
         {
@@ -312,17 +324,10 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
                     break;
             }
 
-            if (seg.fork && !haveAxis)
+            if (seg.fork && !havePlane)
             {
-                // Наследование оси: если начало сегмента — член пары из
-                // предыдущего раздвоения, ось — середина пары (локальная
-                // плоскость симметрии структуры), а не «родин»X одной стороны.
-                if (forkOf[start] != start)
-                    axis = 0.5f * (result.nodes[start].pos.x
-                        + result.nodes[forkOf[start]].pos.x);
-                else
-                    axis = result.nodes[start].pos.x;
-                haveAxis = true;
+                plane = sagittalPlane(result.nodes, forkOf, start, heading);
+                havePlane = true;
             }
 
             size_t end;
@@ -332,7 +337,7 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
                 {
                     auto target = result.nodes[start].pos
                         + turtleDelta(b.end.delta.x, b.end.delta.y, b.end.delta.z);
-                    end = addNode(target, seg.fork, axis);
+                    end = addNode(target, seg.fork, plane);
                     last = end;
                     break;
                 }
@@ -359,7 +364,7 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
                     if (best != size_t.max)
                         end = best;
                     else
-                        end = addNode(target, seg.fork, axis);
+                        end = addNode(target, seg.fork, plane);
                     last = end;
                     break;
                 }
@@ -400,6 +405,34 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
     }
     result.motorPower = ast.motorPower;
     return Nullable!Frame(result);
+}
+
+/**
+ * Сагиттальная плоскость сегмента-сомита: точка на ней и нормаль.
+ *
+ * Сегмент, выросший из члена twin-пары, наследует плоскость этой пары —
+ * направление между её членами и есть нормаль, их середина лежит на
+ * плоскости. Медианный старт ничего не наследует: его плоскость несёт
+ * turtle-заголовок сегмента (боковая ось — нормаль), а не мировые оси.
+ */
+private MirrorPlane sagittalPlane(const Node[] nodes, const size_t[] forkOf,
+    size_t start, float heading)
+{
+    const vec3 from = nodes[start].pos;
+    if (forkOf[start] != start)
+    {
+        const vec3 to = nodes[forkOf[start]].pos;
+        const vec3 d = to - from;
+        if (d.lengthsqr > 0.0f)
+            return MirrorPlane((from + to) * 0.5f, d / d.length);
+    }
+    return MirrorPlane(from, vec3(-sin(heading), cos(heading), 0.0f));
+}
+
+/// Отражение точки в сагиттальной плоскости: `p − 2·((p − point)·normal)·normal`.
+private vec3 mirrorInPlane(const vec3 p, const MirrorPlane plane)
+{
+    return p - plane.normal * (2.0f * dot(p - plane.point, plane.normal));
 }
 
 private EphemeralBeam addEvolvedBeam(size_t a, size_t b, float radius,
@@ -1058,10 +1091,12 @@ unittest
 
 unittest
 {
-    // «Глаз циклопа»: в раздвоенном сегменте балка, растущая строго по оси
-    // (X == axis), остаётся одиночной и медианной — активатор Nodal не
-    // рождает twin из того, что уже на оси. Ось сегмента наследуется от
-    // точки старта: спина (refIdx 3) лежит на плоскости X == 0.
+    // «Глаз циклопа»: в раздвоенном сегменте балка, растущая строго в
+    // сагиттальной плоскости, остаётся одиночной и медианной — активатор
+    // Nodal не рождает twin из того, что уже лежит на плоскости. Плоскость
+    // несёт turtle-заголовок: при heading 0 боковая ось — мировой +Y, а
+    // «вперёд по заголовку» — мировой +X, поэтому одиночная балка растёт
+    // именно вдоль `right`, а не вдоль мировой forward.
     Terminal!Tok[] t;
     // Seed: начало координат (стартовая позиция не расходуется).
     t ~= dirCoords(origin, 1.0f);
@@ -1070,15 +1105,15 @@ unittest
     t ~= new Terminal!Tok(Tok.fork);
     t ~= new Terminal!Tok(Tok.refIdx, cast(int) 3);
     t ~= new Terminal!Tok(Tok.endNew);
-    // Балка растёт строго по оси (вперёд×1, вправо/вверх — 0): «глаз».
-    t ~= dirCoords(forward, 1.0f);
+    // Балка растёт по turtle-forward (вперёд×1, вправо/вверх — 0): «глаз».
+    t ~= dirCoords(right, 1.0f);
     t ~= new Terminal!Tok(Tok.radius, 0.04f);
     t ~= new Terminal!Tok(Tok.nodal, 0.2f);
     t ~= new Terminal!Tok(Tok.lefty, 0.0f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.0f);
     t ~= new Terminal!Tok(Tok.anchors);
-    t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.wheel);
+    t ~= new Terminal!Tok(Tok.anchorKind, AnchorKind.wheel);
     t ~= new Terminal!Tok(Tok.refIdx, cast(int) cockpitFrameNodeCount());
 
     auto f = toFrame(t);
@@ -1086,19 +1121,100 @@ unittest
     assert(f.get.nodes.length == cockpitFrameNodeCount() + 1,
         "глаз не рождает twin: нового узла ровно один");
     assert(f.get.beams.length == cockpitFrameBeamCount() + 1,
-        "глаз — одиночная балка на оси, без twin");
+        "глаз — одиночная балка в плоскости, без twin");
     assert(f.get.beams[cockpitFrameBeamCount()].a == 3
         && f.get.beams[cockpitFrameBeamCount()].b == cockpitFrameNodeCount(),
-        "балка-глаз растёт из спина вперёд");
+        "балка-глаз растёт из спина по turtle-forward");
     assert(cast(Beam) f.get.beams[cockpitFrameBeamCount()] !is null,
-        "глаз на оси не задевает ЦМ — обычная балка");
-    assert(abs(f.get.nodes[cockpitFrameNodeCount()].pos.x) < 1e-4f
-        && abs(f.get.nodes[cockpitFrameNodeCount()].pos.y + 1.205f) < 1e-4f,
-        "конец-глаз строго на оси X == 0");
+        "глаз на плоскости не задевает ЦМ — обычная балка");
+    // Дельта лежит в плоскости: боковая составляющая (мировая Y) нулевая,
+    // а по направлению роста (мировая X) — метр.
+    const vec3 d = f.get.nodes[cockpitFrameNodeCount()].pos - f.get.nodes[3].pos;
+    assert(abs(d.y) < 1e-4f && abs(d.x - 1.0f) < 1e-4f && abs(d.z) < 1e-4f,
+        "конец-глаз строго в сагиттальной плоскости сегмента");
     assert(f.get.anchors.length == 1
         && f.get.anchors[0].node == cockpitFrameNodeCount(),
         "якорь-глаз не дублируется twin'ом");
     assert(!isValidFrame(f.get).isNull, "каркас с глазом остаётся связным");
+}
+
+unittest
+{
+    // Сагиттальную плоскость несёт turtle-заголовок, а не мировые оси. При
+    // heading π/2 боковая ось — мировая −X, «вперёд по заголовку» — мировой
+    // +Y, и twin отражается по X. Отражение относительно мира (нормаль X при
+    // любом заголовке) дало бы здесь пару, симметричную по Y, — это разные
+    // плоскости, и только заголовок выбирает правильную.
+    Terminal!Tok[] t;
+    t ~= dirCoords(origin, 1.0f);
+    t ~= new Terminal!Tok(Tok.heading, 1.5707963f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.fork);
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 3);
+    t ~= new Terminal!Tok(Tok.endNew);
+    // Метр по turtle-forward и полметра по turtle-right.
+    t ~= dirCoords(vec3(1.0f, 0.5f, 0.0f), 1.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.anchors);
+
+    auto f = toFrame(t);
+    assert(!f.isNull);
+    assert(f.get.nodes.length == cockpitFrameNodeCount() + 2,
+        "балка с боковым уходом от плоскости рождает пару");
+    const vec3 from = f.get.nodes[3].pos;
+    const vec3 d1 = f.get.nodes[cockpitFrameNodeCount()].pos - from;
+    const vec3 d2 = f.get.nodes[cockpitFrameNodeCount() + 1].pos - from;
+    assert(abs(d1.x + 0.5f) < 1e-4f && abs(d1.y - 1.0f) < 1e-4f,
+        "основная ветвь: полметра по боковой оси заголовка и метр вперёд");
+    assert(abs(d2.x - 0.5f) < 1e-4f && abs(d2.y - 1.0f) < 1e-4f,
+        "twin отражает боковую составляющую заголовка, а не мировую ось");
+    assert(abs(d1.z - d2.z) < 1e-6f,
+        "вертикальная составляющая зеркали не касается");
+}
+
+unittest
+{
+    // Организменный LR-градиент достаёт балку с нулевым локальным nodal:
+    // пара получает радиальный сдвиг от полярности всего тела. Без градиента
+    // та же пара строго зеркальна.
+    Terminal!Tok[] t;
+    t ~= dirCoords(origin, 1.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.lrGradient, 0.1f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.fork);
+    t ~= new Terminal!Tok(Tok.refIdx, cast(int) 3);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= dirCoords(vec3(1.0f, 0.5f, 0.0f), 1.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.anchors);
+
+    auto polarized = toFrame(t);
+    assert(!polarized.isNull);
+    assert(abs(asBeam(polarized.get.beams[cockpitFrameBeamCount()]).radius
+            - 0.04f) < 1e-5f, "основная балка не асимметрична");
+    assert(abs(asBeam(polarized.get.beams[cockpitFrameBeamCount() + 1]).radius
+            - 0.044f) < 1e-5f,
+        "twin-балка асимметрична на организменный градиент");
+
+    // Тот же поток без градиента: пара строго зеркальна.
+    Terminal!Tok[] u;
+    foreach (tok; t)
+        if (tok.tok != Tok.lrGradient)
+            u ~= tok;
+    auto plain = toFrame(u);
+    assert(!plain.isNull);
+    assert(abs(asBeam(plain.get.beams[cockpitFrameBeamCount()]).radius
+            - asBeam(plain.get.beams[cockpitFrameBeamCount() + 1]).radius) < 1e-6f,
+        "без организменного градиента пара строго зеркальна");
 }
 
 unittest
