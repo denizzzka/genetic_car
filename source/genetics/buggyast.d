@@ -167,7 +167,7 @@ struct Ast
     float heading;
     float taper = 1.0f;
     float taperPow = 1.0f;
-    float motorPower;
+    float motorPower = 0.0f;
 
     /// Организменный LR-градиент: полярность лево/право всего тела.
     /// Знак — куда смещён «лево»-полюс, величина — сила градиента.
@@ -551,5 +551,6 @@ unittest
     assert(ast.get.lrGradient == 0.0f, "без токена организм не имеет полярности");
     assert(ast.get.segments[0].beams[0].threshold == 0.0f,
         "без токена порог не блокирует асимметрию");
+    assert(ast.get.motorPower == 0.0f, "без токена мотора нет");
     assert(beamAsymmetry(ast.get.lrGradient, ast.get.segments[0].beams[0]) > 0.0f);
 }
