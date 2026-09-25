@@ -123,7 +123,7 @@ float buggyFitness(const Frame f, const Ast ast)
     // Кабина неприкосновенна: корпуса не касается ни одна балка и ни одно
     // колесо. Землю она тоже не касается: её низ (узел 0) — узел каркаса,
     // узлы же ниже опорной плоскости отброшены гейтом выше.
-    if (frameCabinContact(f).length)
+    if (frameCabinContact(f) != RunOutcome.none)
         return 0.0f;
 
     // ---- Слоты морфологии ----
@@ -273,14 +273,14 @@ private bool wheelHitsCabin(const vec3 p, float r,
     return p.z + r > floorZ && p.z - r < hi.z;
 }
 
-/// Первое касание корпуса кабины в каркасе: пусто — никто её не трогает.
+/// Первое касание корпуса кабины в каркасе: none — никто её не трогает.
 /// Запретная зона — параллелепипед от узла 0 (ЦМ кабины, совмещён с началом
 /// координат меша) по AABB меша, пол по контуру днища (хребет). Эфемерные
 /// балки крепления корпуса зону не проверяют: они не входят в каркас.
-private string frameCabinContact(const Frame f)
+private RunOutcome frameCabinContact(const Frame f)
 {
     if (f.nodes.length == 0)
-        return "";
+        return RunOutcome.none;
     const cg = cockpitGeometry();
     const vec3 lo = f.nodes[0].pos + cg.minP;
     const vec3 hi = f.nodes[0].pos + cg.maxP;
@@ -291,15 +291,15 @@ private string frameCabinContact(const Frame f)
             continue;
         if (beamPiercesCabin(f.nodes[b.a].pos, f.nodes[b.b].pos,
             lo, hi, cg, f.nodes[0].pos))
-            return "балка каркаса проходит сквозь кабину";
+            return RunOutcome.cabinPierce;
     }
 
     foreach (a; f.anchors)
         if (wheelHitsCabin(f.nodes[a.node].pos, a.radius, lo, hi, cg,
             f.nodes[0].pos))
-            return "колесо заходит в кабину";
+            return RunOutcome.cabinWheel;
 
-    return "";
+    return RunOutcome.none;
 }
 
 enum double physicsDt = 1.0 / 60.0;
@@ -316,7 +316,7 @@ struct PhysicsResult
     double reachTime = 0.0;
     size_t wheels = 0;
     size_t beams = 0;
-    string why = "";
+    RunOutcome why = RunOutcome.none;
 }
 
 /// Счёт — доля полной дистанции × средняя скорость доезда (в долях номинала).
@@ -327,13 +327,13 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
 
     if (buggy.frame.anchors.length < 2)
     {
-        r.why = "объект с одним колесом";
+        r.why = RunOutcome.singleWheel;
         return r;
     }
 
     if (!canDrive(buggy.frame))
     {
-        r.why = "нет привода";
+        r.why = RunOutcome.noDrive;
         return r;
     }
 
@@ -347,7 +347,7 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
         cast(int)(physicsSettleSeconds / physicsDt));
 
     const settleFailure = runFailure(physics);
-    if (settleFailure.length)
+    if (settleFailure != RunOutcome.none)
     {
         r.why = settleFailure;
         return r;
@@ -357,7 +357,7 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
     // кабины и каркаса не меняется, поэтому геометрия корпуса проверяется
     // один раз; живым остаётся только касание земли (см. cabinGroundContact).
     const cabinWhy = frameCabinContact(buggy.frame);
-    if (cabinWhy.length)
+    if (cabinWhy != RunOutcome.none)
     {
         r.why = cabinWhy;
         return r;
@@ -380,7 +380,7 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
         physics.step(physicsDt, 1.0f);
 
         const stepFailure = runFailure(physics);
-        if (stepFailure.length)
+        if (stepFailure != RunOutcome.none)
         {
             r.why = stepFailure;
             break;
@@ -389,7 +389,7 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
         const cabinGround = physics.cabinTouchesGround();
         if (cabinGround)
         {
-            r.why = "кабина касается земли";
+            r.why = RunOutcome.cabinGround;
             break;
         }
 
@@ -412,7 +412,7 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
     // коснулась земли) по пройденной дистанции; развалившийся каркас — 0.
     if (!structuralFailure(r.why))
         r.score = finishScore(farthest, seconds, reachTime);
-    if (r.why.length != 0)
+    if (r.why != RunOutcome.none)
         return r;
 
     r.survived = true;
@@ -427,29 +427,16 @@ private float finishScore(double farthest, double seconds, double reachTime)
     return clamp(cast(float)(distanceFrac * speedRatio), 0.0f, physicsSpeedCap);
 }
 
-/// Разрушение каркаса: балки/колёса оборвались, ударились или ушли в землю.
-/// Такие заезды засчёту не подлежат — машина развалилась, а не остановилась.
-private bool structuralFailure(string why)
-{
-    return why == "не осталось колёс"
-        || why == "каркас разлетелся"
-        || why == "балка разлетелась"
-        || why == "колесо провалилось под землю"
-        || why == "балка каркаса касается земли"
-        || why == "балка каркаса касается колеса"
-        || why == "колёса каркаса соприкасаются";
-}
-
 unittest
 {
     // Интактные остановки засчитываются, развал каркаса — нет.
-    assert(structuralFailure("машина перевернулась") == false);
-    assert(structuralFailure("нет продвижения вперёд") == false);
-    assert(structuralFailure("кабина касается земли") == false);
-    assert(structuralFailure("") == false);
-    assert(structuralFailure("колёса каркаса соприкасаются"));
-    assert(structuralFailure("не осталось колёс"));
-    assert(structuralFailure("балка каркаса касается земли"));
+    assert(structuralFailure(RunOutcome.rolledOver) == false);
+    assert(structuralFailure(RunOutcome.stalled) == false);
+    assert(structuralFailure(RunOutcome.cabinGround) == false);
+    assert(structuralFailure(RunOutcome.none) == false);
+    assert(structuralFailure(RunOutcome.wheelWheel));
+    assert(structuralFailure(RunOutcome.noWheels));
+    assert(structuralFailure(RunOutcome.beamGround));
 }
 
 unittest
@@ -836,7 +823,7 @@ unittest
     Frame pierce = symmetricBuggyFrame();
     pierce.nodes ~= Node(vec3(0.0f, 0.0f, 0.8f));
     pierce.beams ~= new Beam(1, pierce.nodes.length - 1, 0.04f);
-    assert(frameCabinContact(pierce).length,
+    assert(frameCabinContact(pierce) == RunOutcome.cabinPierce,
         "балка сквозь корпус кабины не должна проходить");
     assert(buggyFitness(pierce) == 0.0f);
 
@@ -844,7 +831,7 @@ unittest
     Frame mount = symmetricBuggyFrame();
     mount.nodes ~= Node(vec3(0.7f, 0.3f, -0.695f));
     mount.beams ~= new Beam(1, mount.nodes.length - 1, 0.04f);
-    assert(frameCabinContact(mount).length == 0,
+    assert(frameCabinContact(mount) == RunOutcome.none,
         "балка в плоскости пола не считается касанием");
     assert(buggyFitness(mount) > 0.0f);
 
@@ -853,7 +840,7 @@ unittest
     const wi = wheelInside.nodes.length; // добавить якорь в кабине
     wheelInside.nodes ~= Node(vec3(0.1f, 0.2f, 0.5f));
     wheelInside.anchors ~= Anchor(wi, AnchorKind.wheel);
-    assert(frameCabinContact(wheelInside).length,
+    assert(frameCabinContact(wheelInside) == RunOutcome.cabinWheel,
         "колесо внутри кабины не должно проходить");
     assert(buggyFitness(wheelInside) == 0.0f);
 }

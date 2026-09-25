@@ -1207,16 +1207,16 @@ final class BuggyPhysics
 }
 
 /// Вердикт заезда
-string runFailure(BuggyPhysics physics)
+RunOutcome runFailure(BuggyPhysics physics)
 {
     // Застой по курсу: без набега вперёд с последней продвинутой точки
     // столько секунд подряд — это тоже сход с дистанции.
     if (physics.stallTime() > stallSeconds)
-        return "нет продвижения вперёд";
+        return RunOutcome.stalled;
 
     const wheels = physics.wheelStates();
     if (wheels.length == 0)
-        return "не осталось колёс";
+        return RunOutcome.noWheels;
 
     // Переворот — по наклону рамы, а не по высоте ступицы: подъём колеса на
     // крене, отрыве или бугре переворотом не является. Допускаем до
@@ -1225,38 +1225,38 @@ string runFailure(BuggyPhysics physics)
     const float rollDeg = atan2(up.x, up.z) * 180.0f / PI;
     const float pitchDeg = atan2(up.y, up.z) * 180.0f / PI;
     if (abs(rollDeg) > maxTiltDegrees || abs(pitchDeg) > maxTiltDegrees)
-        return "машина перевернулась";
+        return RunOutcome.rolledOver;
 
     foreach (s; wheels)
     {
         if (!isFinite(s.position.x) || !isFinite(s.position.y)
             || !isFinite(s.position.z))
-            return "каркас разлетелся";
+            return RunOutcome.frameBroke;
         // Локальная земля под колесом: 0 на плоскости, рельеф на поверхности.
         // Так колесо не «проваливается» на бугре и не «парит» над ложбиной.
         const float g = physics.groundHeightAt(s.position.xyz);
         if (s.position.z < g + physicsWheelBelow)
-            return "колесо провалилось под землю";
+            return RunOutcome.wheelUnderground;
     }
 
     foreach (s; physics.beamStates())
         if (!isFinite(s.position.x) || !isFinite(s.position.y)
             || !isFinite(s.position.z))
-            return "балка разлетелась";
+            return RunOutcome.frameBroke;
 
     switch (physics.beamFailure())
     {
         case BeamFailure.ground:
-            return "балка каркаса касается земли";
+            return RunOutcome.beamGround;
         case BeamFailure.wheel:
-            return "балка каркаса касается колеса";
+            return RunOutcome.beamWheel;
         case BeamFailure.wheelWheel:
-            return "колёса каркаса соприкасаются";
+            return RunOutcome.wheelWheel;
         case BeamFailure.none:
         default:
             break;
     }
-    return "";
+    return RunOutcome.none;
 }
 unittest
 {
@@ -1351,13 +1351,13 @@ unittest
     scope (exit) physics.dispose();
     physics.settle(dt, 30);
     assert(physics.stallTime() < stallSeconds
-        && runFailure(physics).length == 0,
+        && runFailure(physics) == RunOutcome.none,
         "усадка без хода — не сход");
 
     foreach (_; 0 .. cast(size_t)(stallSeconds / dt) + 10)
         physics.step(dt, 1.0f);
     assert(physics.stallTime() > stallSeconds,
         "стоячая машина копит время застоя");
-    assert(runFailure(physics) == "нет продвижения вперёд",
+    assert(runFailure(physics) == RunOutcome.stalled,
         "застой по курсу — это тоже сход с дистанции");
 }

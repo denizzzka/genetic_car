@@ -377,6 +377,64 @@ enum BeamFailure
     wheelWheel,
 }
 
+/// Причина обрыва заезда. Рядом с BeamFailure — тот же сорт вердикта,
+/// но по всей машине, а не только по каркасу. Значения — тексты для логов.
+enum RunOutcome : string
+{
+    none = "",
+    /// Застой по курсу: без набега вперёд слишком долго.
+    stalled = "нет продвижения вперёд",
+    /// Не осталось колёс на каркасе.
+    noWheels = "не осталось колёс",
+    /// Машина перевернулась (крен/тангаж за допустимый угол).
+    rolledOver = "машина перевернулась",
+    /// Каркас разлетелся — позиции частей ушли в NaN/бесконечность.
+    frameBroke = "каркас разлетелся",
+    /// Колесо ушло под землю.
+    wheelUnderground = "колесо провалилось под землю",
+    /// Балка каркаса касается земли.
+    beamGround = "балка каркаса касается земли",
+    /// Балка каркаса касается колеса.
+    beamWheel = "балка каркаса касается колеса",
+    /// Колёса каркаса соприкасаются.
+    wheelWheel = "колёса каркаса соприкасаются",
+    /// Объект с одним колесом — привода нет.
+    singleWheel = "объект с одним колесом",
+    /// Привод не тянет: мотор на пороге или без мотор-колеса.
+    noDrive = "нет привода",
+    /// Балка каркаса проходит сквозь кабину.
+    cabinPierce = "балка каркаса проходит сквозь кабину",
+    /// Колесо заходит в кабину.
+    cabinWheel = "колесо заходит в кабину",
+    /// Кабина коснулась земли в заезде.
+    cabinGround = "кабина касается земли",
+}
+
+/// Разрушение каркаса: балки/колёса оборвались, ударились или ушли в землю.
+/// Такие заезды засчёту не подлежат — машина развалилась, а не остановилась.
+bool structuralFailure(RunOutcome o)
+{
+    final switch (o)
+    {
+        case RunOutcome.stalled:
+        case RunOutcome.rolledOver:
+        case RunOutcome.singleWheel:
+        case RunOutcome.noDrive:
+        case RunOutcome.cabinPierce:
+        case RunOutcome.cabinWheel:
+        case RunOutcome.cabinGround:
+        case RunOutcome.none:
+            return false;
+        case RunOutcome.noWheels:
+        case RunOutcome.frameBroke:
+        case RunOutcome.wheelUnderground:
+        case RunOutcome.beamGround:
+        case RunOutcome.beamWheel:
+        case RunOutcome.wheelWheel:
+            return true;
+    }
+}
+
 /// Ньютоновская библиотека грузится один раз на процесс: bindbc resolve
 /// символов динамической библиотеки не потокобезопасен, а физические заезды
 /// идут на пуле воркеров. Гвард — ОТКРЫТЫЙ (не потоково-локальный) мьютекс.

@@ -143,7 +143,7 @@ private void logPhysicsIndividual(size_t idx, size_t generation, float finalFit,
             generation, idx, finalFit, run.score, run.distance, run.wheels, run.beams);
     else
         writefln("gen %d: #%d FAILED (%s) roll=%.1fm wheels=%d beams=%d",
-            generation, idx, run.why, run.distance, run.wheels, run.beams);
+            generation, idx, cast(string) run.why, run.distance, run.wheels, run.beams);
 }
 
 /**

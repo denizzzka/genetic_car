@@ -516,10 +516,10 @@ class BuggyScene: Scene
             physics.settle(physicsDt,
                 cast(int)(physicsSettleSeconds / physicsDt));
             const settleFailure = runFailure(physics);
-            if (settleFailure.length)
+            if (settleFailure != RunOutcome.none)
             {
                 writefln("live: заезд оборван после усадки (%s) — следующая машина",
-                    settleFailure);
+                    cast(string) settleFailure);
                 physics.dispose();
                 continue;
             }
@@ -612,11 +612,12 @@ class BuggyScene: Scene
         liveSimTime += physicsDt;
 
         const stepFailure = runFailure(livePhysics);
-        if (stepFailure.length)
+        if (stepFailure != RunOutcome.none)
         {
             liveFailed_ = true;
             liveFailTime = 0.0;
-            writefln("live: заезд оборван (%s) — машина заморожена, ждём N", stepFailure);
+            writefln("live: заезд оборван (%s) — машина заморожена, ждём N",
+                cast(string) stepFailure);
         }
         else if (livePhysics.cabinTouchesGround())
         {
