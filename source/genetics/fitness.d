@@ -609,10 +609,10 @@ float beamMassSymmetry(const Frame f)
     return total > 0.0f ? matched / total : 1.0f;
 }
 
-/// Радиальная симметрия fork-пар из AST: 1 при нулевом отклике
-/// активатор-ингибитор (`|forkAsymmetry(nodal, lefty)|`) на всех балках
-/// раздвоенных сегментов. На пустом AST (синтетические каркасы без генома) —
-/// нейтрально 1.
+/// Радиальная симметрия fork-пар из AST: 1 при нулевой материализованной
+/// асимметрии (`|beamAsymmetry|`, вместе с организменным градиентом и порогом
+/// билатеральности) на всех балках раздвоенных сегментов. На пустом AST
+/// (синтетические каркасы без генома) — нейтрально 1.
 float forkRadiusSymmetry(const Ast ast)
 {
     float sum = 0.0f;
@@ -621,7 +621,7 @@ float forkRadiusSymmetry(const Ast ast)
         if (s.fork)
             foreach (b; s.beams)
             {
-                sum += abs(forkAsymmetry(b.nodal, b.lefty));
+                sum += abs(beamAsymmetry(ast.lrGradient, b));
                 n += 1;
             }
     if (n == 0)
@@ -780,23 +780,58 @@ unittest
 unittest
 {
     // Nodal/Lefty из AST: тот же каркас, но AST сообщает о радиальном разбросе
-    // fork-пары — ненулевой |forkAsymmetry| снижает фитнес. Пустой AST нейтрален.
+    // fork-пары — ненулевой |beamAsymmetry| снижает фитнес. Пустой AST нейтрален.
     const base = buggyFitness(symmetricBuggyFrame());
     assert(base > 0.0f);
 
     Ast a0;
-    a0.segments ~= SegmentAst(true, 0.0f, []);
+    a0.segments ~= SegmentAst(true, []);
     Ast aD;
     // Ненулевой активатор без ингибитора при ровной паре рождает сдвиг twin.
-    aD.segments ~= SegmentAst(true, 0.0f, []);
+    aD.segments ~= SegmentAst(true, []);
     aD.segments[0].beams ~= BeamAst(StartRef(StartRefKind.last, 0),
         EndRef(EndRefKind.newNode, origin, 0),
-        0.04f, 0.1f, 0.0f, BeamKind.normal, 0.0f);
+        0.04f, 0.1f, 0.0f, 0.0f, BeamKind.normal, 0.0f);
 
     const f0 = buggyFitness(symmetricBuggyFrame(), a0);
     const fD = buggyFitness(symmetricBuggyFrame(), aD);
     assert(abs(f0 - base) < 1e-6f, "нулевой Nodal/Lefty не меняет фитнес");
-    assert(fD < f0, "ненулевой |forkAsymmetry| штрафует асимметрию fork-пары");
+    assert(fD < f0, "ненулевой |beamAsymmetry| штрафует асимметрию fork-пары");
+}
+
+unittest
+{
+    // Организменный LR-градиент штрафуется на всех парах сразу, а порог
+    // билатеральности способен от шума-зазора освободить каркас целиком.
+    BeamAst b;
+    b.nodal = 0.01f;
+    b.lefty = 0.0f;
+    b.threshold = 0.0f;
+
+    Ast open;
+    open.segments ~= SegmentAst(true, []);
+    open.segments[0].beams ~= b;
+
+    BeamAst frozenBeam = b;
+    frozenBeam.threshold = 1.0f;
+    Ast frozen;
+    frozen.segments ~= SegmentAst(true, []);
+    frozen.segments[0].beams ~= frozenBeam;
+
+    Ast polarized;
+    polarized.lrGradient = 0.1f;
+    polarized.segments ~= SegmentAst(true, []);
+    polarized.segments[0].beams ~= b;
+
+    const float fBase = buggyFitness(symmetricBuggyFrame());
+    const float fOpen = buggyFitness(symmetricBuggyFrame(), open);
+    const float fFrozen = buggyFitness(symmetricBuggyFrame(), frozen);
+    const float fPolarized = buggyFitness(symmetricBuggyFrame(), polarized);
+    assert(fOpen < fBase, "шум-зазор без порога материализуется в асимметрию");
+    assert(abs(fFrozen - fBase) < 1e-6f,
+        "порог билатеральности выше отклика замораживает симметрию");
+    assert(fPolarized < fOpen,
+        "организменный градиент асимметрирует каждую пару организма");
 }
 
 unittest

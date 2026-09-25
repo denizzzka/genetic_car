@@ -25,18 +25,25 @@ enum Tok
     /// пустой маркер — медианная одиночная структура («глаз по центру»).
     fork,
 
-    /// Nodal — активатор асимметрии twin-пары (float). Знак задаёт, в какую
-    /// сторону уводятся twin-балки, величина — силу сдвига. Маленькое |nodal|
-    /// почти не ломает симметрию; сильный активатор усиливается, но гасится
+    /// Nodal — локальный активатор асимметрии twin-пары (float). Знак задаёт,
+    /// в какую сторону уводятся twin-балки, величина — силу сдвига. Складывается
+    /// с организменным градиентом `lrGradient`, а подавляется локальным
     /// ингибитором `lefty` — как в LR-генезе позвоночных. Одиночные
     /// медианные балки (без twin) активатор не затрагивает совсем.
     nodal,
 
-    /// Lefty — ингибитор асимметрии (float, ≥ 0). Нелинейно гасит активатор:
-    /// чем сильнее `nodal`, тем больше подавление (`lefty·nodal²`) — так
-    /// асимметрия пары остаётся малой и самоограниченной, а не «разносит»
-    /// структуру. Ноль — активатор действует в полную силу.
+    /// Lefty — локальный ингибитор асимметрии (float, ≥ 0). Нелинейно гасит
+    /// суммарный активатор: чем сильнее `nodal + lrGradient`, тем больше
+    /// подавление (`lefty·act²`) — так асимметрия пары остаётся малой и
+    /// самоограниченной, а не «разносит» структуру. Ноль — активатор
+    /// действует в полную силу.
     lefty,
+
+    /// Множитель порога билатеральности (float, ≥ 0): эффективная асимметрия
+    /// ниже `bilateralThreshold · tok` не материализуется, twin-пара строится
+    /// строго зеркально. Эволюционируемый параметр развития: сильный порог
+    /// «замораживает» билатеральность, нулевой открывает асимметрию полностью.
+    bilateralThreshold,
 
     /// Начало балки: ссылка на последний созданный узел (маркер без значения).
     refLast,
@@ -103,6 +110,12 @@ enum Tok
     /// Задаёт момент, развиваемый ведущими колёсами; эволюция подбирает его
     /// под геометрию, чтобы машина ехала, а не опрокидывалась.
     motorPower,
+
+    /// Организменный LR-морфоген (float): знак задаёт полярность «лево/право»
+    /// всего тела, величина — силу градиента. Наследуется всеми сегментами —
+    /// сомиты сегментируют единый план строения, поэтому общий знак есть у
+    /// организма, а не у каждой балки. Входит в активатор вместе с `nodal`.
+    lrGradient,
 }
 
 enum StartRefKind { last, base, idx }
@@ -127,6 +140,10 @@ struct BeamAst
     float radius;
     float nodal;
     float lefty;
+
+    /// Локальный множитель порога билатеральности: ноль — асимметрия не
+    /// заблокирована (необязательный токен, ручные потоки его опускают).
+    float threshold = 0.0f;
     BeamKind kind;
     float turn;
 }
@@ -134,7 +151,6 @@ struct BeamAst
 struct SegmentAst
 {
     bool fork;
-    float axis;
     BeamAst[] beams;
 }
 
@@ -152,6 +168,10 @@ struct Ast
     float taper = 1.0f;
     float taperPow = 1.0f;
     float motorPower;
+
+    /// Организменный LR-градиент: полярность лево/право всего тела.
+    /// Знак — куда смещён «лево»-полюс, величина — сила градиента.
+    float lrGradient = 0.0f;
     SegmentAst[] segments;
     AnchorAst[] anchors;
 }
@@ -198,6 +218,14 @@ Nullable!Ast buildAst(const Terminal!Tok[] tokens)
     if (i < tokens.length && tokens[i].tok == Tok.motorPower)
     {
         ast.motorPower = tokens[i].f;
+        ++i;
+    }
+
+    // Организменный LR-градиент — необязательный: вручную собранные потоки
+    // описывают тело без полярности, и тогда организм строго двусторонний.
+    if (i < tokens.length && tokens[i].tok == Tok.lrGradient)
+    {
+        ast.lrGradient = tokens[i].f;
         ++i;
     }
 
@@ -285,6 +313,14 @@ Nullable!Ast buildAst(const Terminal!Tok[] tokens)
             b.lefty = tokens[i].f;
             ++i;
 
+            // Порог билатеральности — необязательный токен (ручные потоки его
+            // опускают, тогда мёртвая зона не блокирует асимметрию вовсе).
+            if (i < tokens.length && tokens[i].tok == Tok.bilateralThreshold)
+            {
+                b.threshold = tokens[i].f;
+                ++i;
+            }
+
             if (tokens[i].tok != Tok.beamKind)
                 return Nullable!Ast.init;
             b.kind = cast(BeamKind) tokens[i].i;
@@ -334,29 +370,99 @@ Nullable!Ast buildAst(const Terminal!Tok[] tokens)
 }
 
 /**
- * Эффективная асимметрия twin-пары от активатора Nodal и ингибитора Lefty.
- *
- * Ответная кривая активатор-ингибитор: `nodal` усиливает сдвиг, а `lefty`
- * гасит его квадратично (`lefty·nodal²`), поэтому при сильном активаторе
- * подавление растёт — асимметрия мала и самограничена, как в LR-генезе
- * позвоночных (билатеральность сохраняется, но допускает эволюцию).
- * Для медианных одиночных балок (без twin) активатор не применяется вовсе.
+ * Видовая мёртвая зона морфогенеза: асимметрия слабее этого порога не
+ * материализуется в геометрию — шум развития её всё равно съел бы.
+ * Это НЕ ген, а свойство самого механизма развития (как константа
+ * диссоциации рецептора, одинаковая у всех организмов вида); эволюция
+ * управляет им множителем `Tok.bilateralThreshold`.
  */
-float forkAsymmetry(float nodal, float lefty)
+enum float bilateralThreshold = 0.02f;
+
+/**
+ * Асимметрия с учётом организменного градиента и локального ингибитора.
+ *
+ * Ответная кривая активатор-ингибитор: локальный `nodal` складывается с
+ * организменным `lrGradient` в единый активатор, а `lefty` гасит именно
+ * сумму квадратично (`lefty·act²`) — при сильном активаторе подавление
+ * растёт, и асимметрия остаётся малой и самограниченной, как в LR-генезе
+ * позвоночных. Общий знак градиента даёт телу полярность «лево/право»,
+ * которой нет у отдельной балки. Для медианных одиночных балок (без twin)
+ * асимметрия не применяется вовсе.
+ */
+float organismAsymmetry(float lrGradient, float nodal, float lefty)
 {
-    return nodal / (1.0f + lefty * nodal * nodal);
+    const activator = nodal + lrGradient;
+    return activator / (1.0f + lefty * activator * activator);
+}
+
+/**
+ * Асимметрия, реально материализуемая в twin-паре: отклик
+ * активатор-ингибитор, срезанный порогом билатеральности. Пока отклик
+ * слабее порога, пара строится строго зеркально.
+ */
+float beamAsymmetry(float lrGradient, const BeamAst b)
+{
+    const float eff = organismAsymmetry(lrGradient, b.nodal, b.lefty);
+    return abs(eff) < bilateralThreshold * b.threshold ? 0.0f : eff;
 }
 
 unittest
 {
     // Nodal/Lefty: слабый активатор почти симметричен, сильный гасится.
-    assert(abs(forkAsymmetry(0.0f, 0.0f)) < 1e-7f, "нулевой nodal — точная симметрия");
-    const strong = forkAsymmetry(0.3f, 0.0f);
+    assert(abs(organismAsymmetry(0.0f, 0.0f, 0.0f)) < 1e-7f,
+        "нулевой nodal — точная симметрия");
+    const strong = organismAsymmetry(0.0f, 0.3f, 0.0f);
     assert(strong > 0.2f, "без ингибитора активатор действует в полную силу");
-    const damped = forkAsymmetry(0.3f, 1.0f);
+    const damped = organismAsymmetry(0.0f, 0.3f, 1.0f);
     assert(damped > 0.0f && damped < strong,
         "ингибитор гасит активатор нелинейно");
-    assert(forkAsymmetry(-0.1f, 0.0f) < 0.0f, "знак активатора переворачивает сдвиг");
+    assert(organismAsymmetry(0.0f, -0.1f, 0.0f) < 0.0f,
+        "знак активатора переворачивает сдвиг");
+}
+
+unittest
+{
+    // Организменный градиент: полярность тела — знак, а локальный nodal
+    // складывается с ним в общий активатор, который гасит lefty.
+    assert(abs(organismAsymmetry(0.1f, 0.0f, 0.0f)
+            - organismAsymmetry(0.0f, 0.1f, 0.0f)) < 1e-7f,
+        "организменный градиент без локального nodal — тот же активатор");
+    assert(organismAsymmetry(-0.1f, 0.0f, 0.0f) < 0.0f
+        && organismAsymmetry(0.1f, 0.0f, 0.0f) > 0.0f,
+        "организменный градиент задаёт полярность лево/право");
+    assert(abs(organismAsymmetry(0.2f, 0.0f, 1.0f)
+            - organismAsymmetry(0.0f, 0.2f, 1.0f)) < 1e-7f,
+        "ингибитор гасит суммарный активатор, а не локальную часть");
+}
+
+unittest
+{
+    // Порог билатеральности: отклик слабее порога не материализуется —
+    // пара строго зеркальна; выше порога сдвиг направленный.
+    BeamAst b;
+    b.nodal = 0.01f;
+    b.lefty = 0.0f;
+    b.threshold = 0.0f;
+    assert(beamAsymmetry(0.0f, b) > 0.0f,
+        "нулевой порог не блокирует асимметрию вовсе");
+
+    b.threshold = 1.0f;
+    assert(beamAsymmetry(0.0f, b) == 0.0f,
+        "отклик слабее видовой мёртвой зоны не материализуется");
+
+    b.threshold = organismAsymmetry(0.0f, b.nodal, b.lefty)
+        / (2.0f * bilateralThreshold);
+    assert(beamAsymmetry(0.0f, b) > 0.0f,
+        "порог ниже отклика пропускает направленный сдвиг");
+
+    // Организменный градиент проходит тот же порог: он тоже часть активатора.
+    b.threshold = 1.0f;
+    b.nodal = 0.0f;
+    b.lefty = 0.0f;
+    assert(beamAsymmetry(0.01f, b) == 0.0f,
+        "слабый организменный градиент тоже гасится мёртвой зоной");
+    assert(beamAsymmetry(0.2f, b) > 0.0f,
+        "сильный организменный градиент пробивает порог");
 }
 
 unittest
@@ -370,6 +476,7 @@ unittest
     t ~= new Terminal!Tok(Tok.taperPow, 2.0f);
     t ~= new Terminal!Tok(Tok.heading, 0.3f);
     t ~= new Terminal!Tok(Tok.motorPower, 77.0f);
+    t ~= new Terminal!Tok(Tok.lrGradient, -0.12f);
     t ~= new Terminal!Tok(Tok.segStart);
     t ~= new Terminal!Tok(Tok.fork);
     t ~= new Terminal!Tok(Tok.refBase);
@@ -380,6 +487,7 @@ unittest
     t ~= new Terminal!Tok(Tok.radius, 0.05f);
     t ~= new Terminal!Tok(Tok.nodal, 0.05f);
     t ~= new Terminal!Tok(Tok.lefty, 0.6f);
+    t ~= new Terminal!Tok(Tok.bilateralThreshold, 1.5f);
     t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
     t ~= new Terminal!Tok(Tok.turn, 0.7f);
     t ~= new Terminal!Tok(Tok.anchors);
@@ -393,6 +501,8 @@ unittest
     assert(ast.get.taper == 0.6f && ast.get.taperPow == 2.0f);
     assert(abs(ast.get.heading - 0.3f) < 1e-6f);
     assert(abs(ast.get.motorPower - 77.0f) < 1e-6f);
+    assert(abs(ast.get.lrGradient + 0.12f) < 1e-6f,
+        "организменный LR-градиент читается в AST");
 
     assert(ast.get.segments.length == 1);
     const seg = ast.get.segments[0];
@@ -403,6 +513,8 @@ unittest
     assert(abs(seg.beams[0].end.delta.x - 1.0f) < 1e-6f);
     assert(abs(seg.beams[0].nodal - 0.05f) < 1e-6f);
     assert(abs(seg.beams[0].lefty - 0.6f) < 1e-6f);
+    assert(abs(seg.beams[0].threshold - 1.5f) < 1e-6f,
+        "порог билатеральности читается в AST");
     assert(abs(seg.beams[0].turn - 0.7f) < 1e-6f);
 
     assert(ast.get.anchors.length == 1);
@@ -410,4 +522,34 @@ unittest
     assert(ast.get.anchors[0].idx == 3);
     assert(abs(ast.get.anchors[0].radius - 0.28f) < 1e-6f,
         "радиус колеса читается в AST из токена wheelRadius");
+}
+
+unittest
+{
+    // Минимальный поток: необязательные токены опущены — организм без
+    // полярности, порог билатеральности не блокирует асимметрию.
+    Terminal!Tok[] t;
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.fork);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= new Terminal!Tok(Tok.coord, 1.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.coord, 0.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.1f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+
+    auto ast = buildAst(t);
+    assert(!ast.isNull);
+    assert(ast.get.lrGradient == 0.0f, "без токена организм не имеет полярности");
+    assert(ast.get.segments[0].beams[0].threshold == 0.0f,
+        "без токена порог не блокирует асимметрию");
+    assert(beamAsymmetry(ast.get.lrGradient, ast.get.segments[0].beams[0]) > 0.0f);
 }

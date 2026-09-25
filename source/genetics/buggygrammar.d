@@ -375,7 +375,7 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
             result.beams ~= addEvolvedBeam(start, end, radius, b.kind, onInertNode);
             if (seg.fork && !(forkOf[start] == start && forkOf[end] == end))
                 result.beams ~= addEvolvedBeam(forkOf[start], forkOf[end],
-                    radius * (1.0f + forkAsymmetry(b.nodal, b.lefty)), b.kind,
+                    radius * (1.0f + beamAsymmetry(ast.lrGradient, b)), b.kind,
                     onInertNode || forkOf[start] == context.inertNode
                         || forkOf[end] == context.inertNode);
 
