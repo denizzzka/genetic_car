@@ -1399,32 +1399,39 @@ unittest
 
 unittest
 {
-    // Длины балок ограничены: минимум 5 см, максимум 3 метра.
-    Frame tooShort;
-    tooShort.nodes = [Node(origin), Node(vec3(0.04f, 0.0f, 0.0f))];
-    tooShort.beams = [new Beam(0, 1, 0.04f)];
-    tooShort.anchors = [Anchor(0, AnchorKind.wheel)];
-    assert(4.0f < 100.0f * minBeamLength, "балка короче 5 см");
-    assert(isValidFrame(tooShort).isNull, "балка короче 5 см — невалидный каркас");
+    // Отбраковка по длине балки проверяется вплотную к порогам, парой
+    // «чуть мимо — годно» на каждую границу. Пары отличаются от соседей
+    // только длиной, так что невалидность объясняется ею, а не иным
+    // правилом. Доли отступа взяты с запасом от точности float: 0.999 порога
+    // — это ~5e-5 м, на два порядка выше ulp, но на порядок ниже любого
+    // ослабления проверки, которое тест обязан поймать.
+    enum float justUnder = 0.999f;
+    enum float justOver = 1.001f;
+    const float radius = 0.02f;
 
-    // Ровно 5 см — на границе допустимого.
-    Frame exactMin;
-    exactMin.nodes = [Node(origin), Node(vec3(minBeamLength, 0.0f, 0.0f))];
-    exactMin.beams = [new Beam(0, 1, 0.04f)];
-    exactMin.anchors = [Anchor(0, AnchorKind.wheel), Anchor(1, AnchorKind.wheel)];
-    assert(!isValidFrame(exactMin).isNull, "балка ровно 5 см — на границе, валидна");
+    Frame belowMin;
+    belowMin.nodes = [Node(origin), Node(vec3(minBeamLength * justUnder, 0.0f, 0.0f))];
+    belowMin.beams = [new Beam(0, 1, radius)];
+    belowMin.anchors = [Anchor(0, AnchorKind.wheel)];
+    assert(isValidFrame(belowMin).isNull, "балка чуть короче минимума — невалидна");
 
-    Frame tooLong;
-    tooLong.nodes = [Node(origin), Node(vec3(3.5f, 0.0f, 0.0f))];
-    tooLong.beams = [new Beam(0, 1, 0.04f)];
-    tooLong.anchors = [Anchor(0, AnchorKind.wheel)];
-    assert(isValidFrame(tooLong).isNull, "балка длиннее 3 м — невалидный каркас");
+    Frame atMin;
+    atMin.nodes = [Node(origin), Node(vec3(minBeamLength, 0.0f, 0.0f))];
+    atMin.beams = [new Beam(0, 1, radius)];
+    atMin.anchors = [Anchor(0, AnchorKind.wheel)];
+    assert(!isValidFrame(atMin).isNull, "балка ровно на минимуме — валидна");
 
-    Frame exactMax;
-    exactMax.nodes = [Node(origin), Node(vec3(maxBeamLength, 0.0f, 0.0f))];
-    exactMax.beams = [new Beam(0, 1, 0.04f)];
-    exactMax.anchors = [Anchor(0, AnchorKind.wheel), Anchor(1, AnchorKind.wheel)];
-    assert(!isValidFrame(exactMax).isNull, "балка ровно 3 м — на границе, валидна");
+    Frame aboveMax;
+    aboveMax.nodes = [Node(origin), Node(vec3(maxBeamLength * justOver, 0.0f, 0.0f))];
+    aboveMax.beams = [new Beam(0, 1, radius)];
+    aboveMax.anchors = [Anchor(0, AnchorKind.wheel)];
+    assert(isValidFrame(aboveMax).isNull, "балка чуть длиннее максимума — невалидна");
+
+    Frame atMax;
+    atMax.nodes = [Node(origin), Node(vec3(maxBeamLength, 0.0f, 0.0f))];
+    atMax.beams = [new Beam(0, 1, radius)];
+    atMax.anchors = [Anchor(0, AnchorKind.wheel)];
+    assert(!isValidFrame(atMax).isNull, "балка ровно на максимуме — валидна");
 }
 
 unittest
