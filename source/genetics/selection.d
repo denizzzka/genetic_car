@@ -249,7 +249,6 @@ unittest
     // Физический слой в цикле отбора: оценка и эволюция с simulateSeconds
     // должны быть конечными и не разваливаться. Величина счёта зависит от
     // каркаса — здесь важно отсутствие NaN/разлёта по поколениям.
-    import std.stdio : writeln;
     import std.math : isFinite;
     auto gr = buggyGrammar();
     auto pop = seedPopulation(gr, EvolutionConfig.populationSize);
@@ -262,7 +261,6 @@ unittest
     auto e1 = evolve(gr, e0, 2, rnd, cfg);
     const float b = bestFitness(e1);
     const float m = meanFitness(e1);
-    writeln("PHYS gen2 best=", b, " mean=", m);
     assert(isFinite(b) && isFinite(m) && b >= 0.0f && m >= 0.0f,
         "физический цикл отбора конечен");
 }
