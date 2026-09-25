@@ -111,16 +111,23 @@ final class NewtonWorldPool
 /// Один глобальный пул на процесс: физику гоняют и воркеры TaskPool
 /// (до 75% ядер), и главный поток вьюера. Мир из пула живёт столько,
 /// сколько нужно; число миров — ровно степень параллелизма, не больше.
+/// Инициализируется под __gshared-локом: первый дозвавшийся поток строит пул.
+private __gshared Object poolLock_ = new Object();
 private __gshared NewtonWorldPool pool_;
 
 private NewtonWorldPool worldPool()
 {
-    if (pool_ is null)
+    if (pool_ !is null)
+        return pool_;
+    synchronized (poolLock_)
     {
-        const n = max(1, (cast(size_t) totalCPUs * 3) / 4);
-        pool_ = new NewtonWorldPool(n);
+        if (pool_ is null)
+        {
+            const n = max(1, (cast(size_t) totalCPUs * 3) / 4);
+            pool_ = new NewtonWorldPool(n);
+        }
+        return pool_;
     }
-    return pool_;
 }
 
 /// Взять мир для одного заезда. Парный вызов — `releaseWorld`.

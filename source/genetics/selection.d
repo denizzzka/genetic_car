@@ -61,17 +61,25 @@ Genotype[] seedPopulation(Grammar gr, size_t n,
 
 /// Пул Phobos для физических заездов поколения, не более 75% ядер.
 /// Демон-воркеры: на выходе их убирает статический деструктор Phobos.
+/// Инициализируется под __gshared-локом: впервые пул поднимается либо с
+/// главного потока, либо с jobThread вьюера — кто первый, тот и строит.
+private __gshared Object physicsPoolLock_ = new Object();
 private __gshared TaskPool physicsPool_;
 
 private TaskPool physicsPool()
 {
-    if (physicsPool_ is null)
+    if (physicsPool_ !is null)
+        return physicsPool_;
+    synchronized (physicsPoolLock_)
     {
-        const n = max(1, (cast(size_t) totalCPUs * 3) / 4);
-        physicsPool_ = new TaskPool(n);
-        physicsPool_.isDaemon = true;
+        if (physicsPool_ is null)
+        {
+            const n = max(1, (cast(size_t) totalCPUs * 3) / 4);
+            physicsPool_ = new TaskPool(n);
+            physicsPool_.isDaemon = true;
+        }
+        return physicsPool_;
     }
-    return physicsPool_;
 }
 
 struct PhysicsBatch
