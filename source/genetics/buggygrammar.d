@@ -442,7 +442,9 @@ Nullable!Frame frameFromAst(const Ast ast, FrameContext context)
 
     foreach (a; ast.anchors)
     {
-        auto n = cast(size_t) a.idx % forks.length;
+        // Якорь выбирается по модулю, а не ссылкой: ген даёт индекс шире, чем
+        // бывает узлов, и отказ по диапазону убивал бы большую часть особей.
+        const n = a.idx % forks.length;
         result.anchors ~= Anchor(n, a.kind, a.radius);
         if (forks[n].twin != n)
             result.anchors ~= Anchor(forks[n].twin, a.kind, a.radius);
@@ -651,6 +653,43 @@ version (unittest)
             new Terminal!Tok(Tok.coord, v.z),
         ];
     }
+}
+
+unittest
+{
+    // Якорь вне диапазона заворачивается по модулю, а не отвергает геном:
+    // ген `idx` шире, чем бывает узлов, и строгий отказ убивал бы большую
+    // часть особей ещё на синтаксисе. Балки при этом по-прежнему строги.
+    FrameContext context;
+    context.frame.nodes = [Node(origin), Node(vec3(0.0f, 1.0f, 0.0f))];
+    context.twinOf = [0, 1];
+    context.growthNode = 1;
+
+    Terminal!Tok[] t;
+    t ~= dirCoords(origin, 1.0f);
+    t ~= new Terminal!Tok(Tok.heading, 0.0f);
+    t ~= new Terminal!Tok(Tok.segStart);
+    t ~= new Terminal!Tok(Tok.refLast);
+    t ~= new Terminal!Tok(Tok.endNew);
+    t ~= dirCoords(forward, 1.0f);
+    t ~= new Terminal!Tok(Tok.radius, 0.04f);
+    t ~= new Terminal!Tok(Tok.nodal, 0.0f);
+    t ~= new Terminal!Tok(Tok.lefty, 0.0f);
+    t ~= new Terminal!Tok(Tok.beamKind, cast(int) BeamKind.normal);
+    t ~= new Terminal!Tok(Tok.turn, 0.0f);
+    t ~= new Terminal!Tok(Tok.anchors);
+    // Узлов вырастет три (0, 1, 2), якорь просим за узлом 8 — это 8 % 3 == 2.
+    t ~= new Terminal!Tok(Tok.anchorKind, cast(int) AnchorKind.wheel);
+    t ~= new Terminal!Tok(Tok.refIdx, 8);
+    t ~= new Terminal!Tok(Tok.wheelRadius, 0.2f);
+
+    auto ast = buildAst(t);
+    assert(!ast.isNull);
+    auto frame = frameFromAst(ast.get, context);
+    assert(!frame.isNull, "якорь вне диапазона не должен отвергать геном");
+    assert(frame.get.nodes.length == 3);
+    assert(frame.get.anchors.length == 1);
+    assert(frame.get.anchors[0].node == 2, "8 % 3 == 2: якорь заворачивается по модулю");
 }
 
 unittest
