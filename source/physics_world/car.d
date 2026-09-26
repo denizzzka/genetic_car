@@ -732,7 +732,25 @@ final class BuggyPhysics
         return false;
     }
 
-    // Debug-only хелперы обёрнуты в block-scoped `debug { }`: метка `debug:`
+    /// Каркас машины: строит слой эфемерных балок, который клавиша D
+    /// включает и в release, — поэтому доступ не под `debug`.
+    const(Frame) frame() @property
+    {
+        return buggy_.frame;
+    }
+
+    /// Положение точки каркаса `p` (координаты каркаса) в мире каркаса же:
+    /// точку жёстко несёт мастер, как тела балок и кабину. Для эфемерных
+    /// балок, у которых своего тела нет.
+    vec3 framePointWorld(const vec3 p)
+    {
+        if (master is null)
+            return p;
+        Quaternionf mTrue = master.rotation.conj;
+        return toCarPos(master.position.xyz + mTrue.rotate(toNewtonPos(p - masterLocal_)));
+    }
+
+    // Отладочные хелперы обёрнуты в block-scoped `debug { }`: метка `debug:`
     // в release выключала всю остальную часть класса до его конца.
     debug {
     /// Максимальная линейная скорость тел (мастер + колёса): быстрый признак
@@ -787,27 +805,10 @@ final class BuggyPhysics
         return s;
     }
 
-    /// Каркас машины — для рендера дебажного слоя эфемерных балок.
-    const(Frame) frame() @property
-    {
-        return buggy_.frame;
-    }
-
     /// Точка каркаса, где стоит мастер (координаты каркаса).
     vec3 masterLocal() @property
     {
         return masterLocal_;
-    }
-
-    /// Положение точки каркаса `p` (координаты каркаса) в мире каркаса же:
-    /// точку жёстко несёт мастер, как тела балок и кабину. Для эфемерных
-    /// балок, у которых своего тела нет.
-    vec3 framePointWorld(const vec3 p)
-    {
-        if (master is null)
-            return p;
-        Quaternionf mTrue = master.rotation.conj;
-        return toCarPos(master.position.xyz + mTrue.rotate(toNewtonPos(p - masterLocal_)));
     }
 
     /// Ожидаемые балки ровного монолитного каркаса: какой должна быть каждая
