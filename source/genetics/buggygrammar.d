@@ -108,6 +108,10 @@ Grammar buggyGrammar()
     auto lrGradient = new Sampler!Tok("lrGradient", Tok.lrGradient, -0.2f, 0.2f);
 
     auto idx = new Sampler!Tok("idx", Tok.refIdx, 64);
+    // Адрес якоря — отдельный ген: в общей с `idx` очереди кодонов адрес
+    // колеса зависел от того, сколько `startRef`/`endRef` прочитало раньше, и
+    // добавление балки увозило все колёса на узлы скелета.
+    auto anchorIdx = new Sampler!Tok("anchorIdx", Tok.refIdx, 64);
     // Направления turtle: дельта «вперёд» идёт по заголовку, «вправо» —
     // перпендикулярно от него, «вверх» — вертикально. Три токена всё так же
     // `Tok.coord`, но гены называются по смыслу, а не по осям X/Y/Z.
@@ -167,7 +171,7 @@ Grammar buggyGrammar()
     auto wheelRadius = new Sampler!Tok("wheelRadius", Tok.wheelRadius, 0.05f, 0.375f);
 
     auto anchor = nt("anchor", [
-        new Production([anchorKind, idx, wheelRadius]),
+        new Production([anchorKind, anchorIdx, wheelRadius]),
     ]);
 
     auto anchorList_ = listNt("anchorList", anchor);
@@ -187,7 +191,7 @@ Grammar buggyGrammar()
         segmentList_, segment, segMode, nodal, lefty, bilateral,
         beamList_, beam, startRef,
         idx, endRef, forward, right, up, radius, beamKind,
-        anchorMarker, anchorList_, anchor, anchorKind, wheelRadius,
+        anchorMarker, anchorList_, anchor, anchorKind, anchorIdx, wheelRadius,
     ];
     // Нетерминал без продукций не разворачивается: молчащийся ген вместо
     // ошибки сборки. У самплеров продукций нет by design.
@@ -216,7 +220,7 @@ float[] mutationWeights(const Grammar gr)
 private float geneMutWeight(const NonTerminal sym)
 {
     // Значения-индексы узлов: флип почти всегда ссылка на несуществующий узел.
-    if (sym.name == "idx")
+    if (sym.name == "idx" || sym.name == "anchorIdx")
         return 0.0f;
     // Списки элементов: точечная правка переключает «продолжить/конец»,
     // обрывая или раздувая цепочку — для этого есть инделы.
@@ -250,6 +254,11 @@ unittest
     };
 
     assert(w[idOf("idx")] == 0.0f, "idx не мишень точечной мутации");
+    assert(w[idOf("anchorIdx")] == 0.0f, "anchorIdx не мишень точечной мутации");
+    // Адрес якоря не делит очередь кодонов с адресами балок: иначе число
+    // колёс зависело бы от числа балок.
+    assert(idOf("anchorIdx") != idOf("idx"),
+        "у якорей должен быть свой ген адреса, отдельный от адресов балок");
     assert(w[idOf("forward")] == 1.0f, "геометрия — обычная мишень");
     // Единственная продукция: правило выведено из грамматики, а не из списка
     // имён, поэтому новый gene с одной продукцией обнулится сам.
@@ -737,6 +746,54 @@ unittest
     assert(frame.get.nodes.length == 3);
     assert(frame.get.anchors.length == 1);
     assert(frame.get.anchors[0].node == 2, "8 % 3 == 2: якорь заворачивается по модулю");
+}
+
+unittest
+{
+    // Адрес якоря не должен зависеть от числа балок. Общая с `idx` очередь
+    // кодонов сдвигала якоря на каждый `startRef`, и добавление балки
+    // увозило все колёса с выросших концов на узлы скелета — при фитнесе,
+    // который для скелетных узлов всегда нулевой.
+    import std.conv : to;
+    import genetics.initial_data : startGenome;
+
+    auto gr = buggyGrammar();
+    auto symId = (string name) {
+        foreach (sym; gr.symbols)
+            if (sym.name == name)
+                return sym.id;
+        assert(false);
+    };
+
+    size_t[] previous;
+    foreach (nBeams; 2 .. 5)
+    {
+        auto g = startGenome(gr);
+        uint[] list;
+        foreach (i; 0 .. nBeams)
+            list ~= (i + 1 == nBeams) ? 1u : 0u;
+        g.genes[symId("beamList")] = list;
+
+        auto may = develop(gr, g);
+        assert(!may.isNull, "каркас должен развиваться при " ~ nBeams.to!string
+            ~ " балках");
+        const f = may.get.frame;
+        assert(f.nodes.length == cockpitFrameNodeCount() + nBeams,
+            "каждая балка добавляет узел");
+
+        size_t[] got;
+        foreach (a; f.anchors)
+            got ~= a.node;
+        assert(got.length == 2, "два якоря — два колеса");
+        foreach (i, n; got)
+            assert(n == cockpitFrameNodeCount() + i,
+                "колесо " ~ i.to!string ~ " сидит на своём выросшем конце при "
+                ~ nBeams.to!string ~ " балках");
+        if (previous.length > 0)
+            assert(got == previous,
+                "рост числа балок не перевозит колёса на другие узлы");
+        previous = got;
+    }
 }
 
 unittest

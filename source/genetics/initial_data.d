@@ -98,8 +98,11 @@ Genotype startGenome(const Grammar gr)
     set("anchorList", [0u, 1u]);
     set("anchor", [0u, 0u]);
     set("anchorKind", [1u, 1u]);
-    // idx: старты балок (8, 9), затем якоря на их концах (12, 13).
+    // idx: адреса балок (8, 9). Значения 12 и 13 адресуют балки 3 и 4 при
+    // круговом чтении гена — на этом держится рост колёсной базы наружу.
     set("idx", [8u, 9u, 12u, 13u]);
+    // Адреса якорей — в своём гене, от количества балок не зависят.
+    set("anchorIdx", [12u, 13u]);
     // Радиус колёс: оба якоря стартуют с `defaultWheelRadius`.
     set("wheelRadius", [u(defaultWheelRadius, 0.05f, 0.375f),
         u(defaultWheelRadius, 0.05f, 0.375f)]);
