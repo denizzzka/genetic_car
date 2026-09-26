@@ -10,9 +10,12 @@
 - Never duplicate identifiers, default values, ranges, or type info already visible in the signature or declaration.
 - Prefer self-documenting code (clear names, small functions) over explanatory comments.
 - If a comment is needed, explain WHY, not WHAT.
-- The colon in imports should be placed on the left side: "import std.algorithm: min, max, sort, map;"
 
 ## Editing Existing Comments
 
 - Do not leave partially translated or mixed-language comments behind.
 - If the comment becomes unnecessary after refactoring, delete it instead of rewriting.
+
+## D language-specific code features
+- Use whenever possible: templates, ranges, compile-time evaluation, conditional compilation
+- The colon in imports should be placed on the left side: "import std.algorithm: min, max, sort, map;"
