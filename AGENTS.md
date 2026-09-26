@@ -20,3 +20,4 @@
 - Use whenever possible: templates, ranges, compile-time evaluation, conditional compilation.
 - The colon in imports should be placed on the left side: "import std.algorithm: min, max, sort, map;".
 - Don't forget that floating-point types are initialized to NaN by default.
+- Write idiomatically.
