@@ -17,5 +17,6 @@
 - If the comment becomes unnecessary after refactoring, delete it instead of rewriting.
 
 ## D language-specific code features
-- Use whenever possible: templates, ranges, compile-time evaluation, conditional compilation
-- The colon in imports should be placed on the left side: "import std.algorithm: min, max, sort, map;"
+- Use whenever possible: templates, ranges, compile-time evaluation, conditional compilation.
+- The colon in imports should be placed on the left side: "import std.algorithm: min, max, sort, map;".
+- Don't forget that floating-point types are initialized to NaN by default.
