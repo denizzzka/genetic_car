@@ -69,6 +69,13 @@ Genotype[] seedPopulation(Grammar gr, size_t n,
 /// главного потока, либо с jobThread вьюера — кто первый, тот и строит.
 private __gshared Object physicsPoolLock_ = new Object();
 private __gshared TaskPool physicsPool_;
+private __gshared size_t physicsPoolSize_;
+
+/// Задать размер пула физики; действует до первого physicsPool().
+void setPhysicsPoolSize(size_t n)
+{
+    physicsPoolSize_ = n;
+}
 
 private TaskPool physicsPool()
 {
@@ -78,7 +85,8 @@ private TaskPool physicsPool()
     {
         if (physicsPool_ is null)
         {
-            const n = max(1, (cast(size_t) totalCPUs * 3) / 4);
+            const n = physicsPoolSize_ > 0 ? physicsPoolSize_
+                : max(1, (cast(size_t) totalCPUs * 3) / 4);
             physicsPool_ = new TaskPool(n);
             physicsPool_.isDaemon = true;
         }
