@@ -294,10 +294,7 @@ class BuggyScene: Scene
         {
             if (fakeCarMode_)
             {
-                // Виртуальная багги: фокус живёт в базuce каркаса (X = forward,
-                // Y = right); в мир dagon/Newton — (fakeFocus_.x, 0, -fakeFocus_.y).
-                freeview.setTargetSmooth(-Vector3f(fakeFocus_.x, 0.0f,
-                    -fakeFocus_.y));
+                freeview.setTargetSmooth(-Vector3f(fakeFocus_));
             }
             else if (livePhysics !is null)
                 freeview.setTargetSmooth(-Vector3f(livePhysics.worldFocus));
@@ -837,8 +834,7 @@ class BuggyScene: Scene
         }
 
         // Кабина: меш уже в координатах каркаса, центр меша (0,0,0 OBJ) — ЦМ,
-// совмещён с узлом 0. Поворот тождественный — прежняя компенсация toCarRot
-// больше не нужна; сдвига на −seed, как в старой схеме, нет.
+        // совмещён с узлом 0; сдвига на −seed, как в старой схеме, нет.
         auto eCab = addEntity(galleryRoot);
         eCab.drawable = meshCockpit;
         eCab.material = matCockpit;
