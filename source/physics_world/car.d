@@ -10,11 +10,7 @@ import dlib.math.matrix;
 import dlib.math.transformation;
 import dlib.core.ownership;
 
-import dagon.core.event;
-import dagon.ext.newton;
 
-// Имена dlib.math.transformation (up/forward/right — шаблоны) конфликтуют с
-// базисом каркаса; нужные оси каркаса переименовываем локально.
 // Имена dlib.math.transformation (up/forward/right — шаблоны) конфликтуют с
 // базисом каркаса; нужные оси каркаса переименовываем локально. Остальной
 // frame.frame импортируется поимённо.
@@ -22,6 +18,7 @@ import frame.frame : origin, frameUp = up, frameForward = forward,
     frameRight = right, frameBackward = backward,
     Frame, Node, Beam, Anchor, AnchorKind, BeamKind,
     asBeam, isConnected, initialMotorPower;
+import physics_world.engine;
 import physics_world.physics;
 import physics_world.terrain;
 import physics_world.terrainworld;
@@ -220,7 +217,7 @@ unittest
     physics.settle(dt, 120);
 
     auto w = physics.wheelBodies[0];
-    const vec3 axle = w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
+    const vec3 axle = w.worldRotation.rotate(Vector3f(0.0f, 1.0f, 0.0f));
     w.angularVelocity = axle * 200.0f;
 
     foreach (i; 0 .. 10)
@@ -248,79 +245,31 @@ bool canDrive(const Frame f)
     return false;
 }
 
-/// Роль тела в заезде: колбэки Newton прыгают по ней на нужную обработку.
-private enum BodyKind
-{
-    none,
-    ground,
-    master,
-    wheel,
-    beam,
-}
-
-/// Наше расширение обёртки Newton: таскает обратную ссылку на BuggyPhysics,
-/// чтобы статические колбэки мира знали, какому заезду принадлежит тело.
-final class NewtonCarBody: NewtonRigidBody
-{
-    BuggyPhysics owner;
-    BodyKind kind;
-    size_t index;
-
-    this(NewtonRigidBodyType bodyType, NewtonCollisionShape shape, float mass,
-        NewtonPhysicsWorld world, Owner owner)
-    {
-        super(bodyType, shape, mass, world, owner);
-    }
-}
-
-/// Контакты тел из группы sensor (балки) между собой глушатся
-/// (AABB-overlap выключен): узлы каркаса в точке — это не столкновение.
-extern(C) int sensorNoOverlap(const NewtonJoint* contact, dFloat timestep, int threadIndex)
-{
-    return 0;
-}
-
-/// Контакты обычных тел (default×default) не трогаем — они решаются,
-/// — но подсматриваем: два колеса каркаса соприкасаются — провал заезда.
-extern(C) void contactDefaultDefault(const NewtonJoint* joint, dFloat timestep, int threadIndex)
-{
-    NewtonBody* b0 = NewtonJointGetBody0(joint);
-    NewtonBody* b1 = NewtonJointGetBody1(joint);
-    auto nb0 = cast(NewtonCarBody)NewtonBodyGetUserData(b0);
-    auto nb1 = cast(NewtonCarBody)NewtonBodyGetUserData(b1);
-    if (nb0 !is null && nb1 !is null
-        && nb0.kind == BodyKind.wheel && nb1.kind == BodyKind.wheel
-        && nb0.owner !is null)
-        nb0.owner.markWheelWheel();
-}
-
 /**
  * Физическая модель машины.
  *
- * Внутри мир Newton живёт в своих координатах: X вправо, Y вверх (земля —
- * плоскость XZ на y == 0, см. `carToNewtonQuat`). Наружу (тесты, вьюер,
- * фитнес) через `toCarPos`/`toCarRot` всё отдаётся в координатах каркаса
- * (car-local): X вправо, Y вперёд, Z вверх.
+ * Наружу (тесты, вьюер, фитнес) модель говорит только в координатах каркаса
+ * (car-local): X вправо, Y вперёд, Z вверх. Оси движка — забота бэкенда.
  *
  * Создаётся независимо от `Buggy`, только когда нужен заезд: мир с землёй,
- * у каждой балки каркаса — отдельное кинестатическое тело в sensor-группе
- * (контакты регистрируются, но не решаются), у якорей — динамические колёса.
+ * у каждой балки каркаса — отдельное кинестатическое тело-балка (контакты
+ * регистрируются, но не решаются), у якорей — динамические колёса.
  * Жёсткость каркаса держит «мастер» — тело с массой и инерцией всей рамы
  * (коллизии у него выключены): к нему колёса приварены осями (револьте-
- * шарнир WheelAxleJoint)
+ * шарнир)
  * и из него на каждом шаге пересчитываются трансформы тел балок, так что узлы
  * не разбалтываются и каркас катится как монолит. Задевание балки земли или
- * чужого колеса ловится в sensor-колбэке и жёстко отбраковывает заезд.
+ * чужого колеса ловится в контактах и жёстко отбраковывает заезд.
  * Привод — мотор-колёса: на ведущие колёса подаётся момент `Frame.motorPower`
  * (наследуемый ген) вокруг их оси, закрутка толкает машину по курсу (-Y).
  */
 final class BuggyPhysics
 {
-    private NewtonPhysicsWorld world;
+    private PhysWorld world;
 
     /// Тело земли: статичный body с плоским heightfield, верх на y == 0.
     /// В terrain-режиме (terrain_ != null) земли нет — её ведёт terrainWorld_.
-    private NewtonCarBody ground;
+    private PhysBody ground;
 
     /// Общая процедурная поверхность (shared-кэш фитнес-пула и вьюера).
     /// При null заезд идёт по прежней плоскости y == 0.
@@ -329,11 +278,11 @@ final class BuggyPhysics
     // мировом объекте: земля — содержимое мира, а «плоская/рельефная» земля —
     // свойство мира. Это уберёт тереновый параметр из обоих конструкторов и
     // ветвления в groundHeightAt/runFailure/beamUnderground, заодно снесёт
-    // порядок сноса окна из dispose(). Но NewtonPhysicsWorld — код dagon
+    // порядок сноса окна из dispose(). Но мир — код бэкенда
     // (внешняя зависимость), поэтому мир надо унаследовать (он не final,
     // как и dlib Owner) — например class BuggyWorld : NewtonPhysicsWorld с
     // setTerrain/reset/groundHeightAt. Решающий нюанс — пул: миры
-    // переиспользуются без NewtonDestroy, поэтому снести окно и обнулить
+    // переиспользуются без уничтожения мира, поэтому снести окно и обнулить
     // террейн обязан release() (worldpool) перед NewtonDestroyAllBodies,
     // иначе после рельефного заезда следующий «плоский» получит рельеф.
     private TerrainSurface terrain_;
@@ -344,7 +293,7 @@ final class BuggyPhysics
     /// «Мастер» каркаса: единый центр масс и инерции рамы. Он же везёт
     /// тела балок — их трансформы жёстко пересчитываются из мастера каждый
     /// шаг, рама идеально монолитна, а коллизии мастера выключены.
-    private NewtonCarBody master;
+    private PhysBody master;
 
     /// Локальные смещение и ориентация каждой балки в мастер-теле.
     private Vector3f[] beamLocal;
@@ -359,7 +308,7 @@ final class BuggyPhysics
     private vec3 masterLocal_ = origin;
 
     /// Кинестатические тела балок каркаса: по одному на каждую `Frame.beams`.
-    private NewtonCarBody[] beamBodies;
+    private PhysBody[] beamBodies;
 
     /// Длина каждой балки — для геометрической проверки «под землёй».
     private float[] beamLen;
@@ -368,7 +317,7 @@ final class BuggyPhysics
     private size_t[] beamNodeA, beamNodeB;
 
     /// Тела колёс по индексам `Frame.anchors`.
-    private NewtonCarBody[] wheelBodies;
+    private PhysBody[] wheelBodies;
 
     /// Узел якоря каждого колеса (своя ступица не считается задеванием).
     private size_t[] wheelNodes;
@@ -386,14 +335,14 @@ final class BuggyPhysics
     /// Тело рулевой балки (носовой рычаг от узла `steerNodeIndex`) и её
     /// шарнир. Мир шарнира принадлежит телу, поэтому понятие владения не
     /// расширяем: рычаг живёт в том же мире, что и мастер.
-    private NewtonCarBody steer;
-    private SteerJoint steerJoint_;
+    private PhysBody steer;
+    private PhysSteerJoint steerJoint_;
 
     /// Индекс рулевой балки и узел её свободного конца (колесо там — к рычагу).
     private size_t steerBeamIdx = size_t.max;
     private size_t steerFarNode = size_t.max;
 
-    /// Поворот рычага при сборке (Newton, истинный): локальные пивоты колёс
+    /// Поворот рычага при сборке (car, истинный): локальные пивоты колёс
     /// рычага отсчитываются от него.
     private Quaternionf steerBuildQuat;
 
@@ -418,44 +367,36 @@ final class BuggyPhysics
 
     /// Мир принадлежит нам, и `dispose` должен его уничтожить через `Delete`.
     /// Миры из пула (см. physics_world.worldpool) — чужие: `dispose` их не
-    /// трогает, пул возвращает мир в оборот без `NewtonDestroy`.
+    /// трогает, пул возвращает мир в оборот без уничтожения.
     private bool ownsWorld_;
 
     /// Свой мир: создаётся локально и забирается с собой (тесты/вьюер).
     this(const Buggy buggy, TerrainSurface terrain = null)
     {
-        ensureNewtonLoaded();
-        this(buggy, New!PhysicsWorld(cast(EventManager)null, cast(Owner)null),
-            terrain);
+        this(buggy, createPhysWorld(), terrain);
         ownsWorld_ = true;
     }
 
-    this(const Buggy buggy, NewtonPhysicsWorld pooledWorld,
+    this(const Buggy buggy, PhysWorld pooledWorld,
         TerrainSurface terrain = null)
     {
-        ensureNewtonLoaded();
         buggy_ = buggy;
         terrain_ = terrain;
-
-        // Конструктор NewtonPhysicsWorld просит EventManager, но хранит его
-        // только для проформы: симуляции он не касается. Передаём null.
         world = pooledWorld;
         ownsWorld_ = false;
-        world.threadsCount = 0;
+        world.useCallingThread();
 
-        // Сцепление и упругость между колёсами (default×default) — прежние:
-        // контакт колёс — провал заезда, пару решать не нужно. Сцепление
-        // колёс о грунт задаёт мир (PhysicsWorld) на паре default×soil.
-        NewtonMaterialSetDefaultFriction(world.newtonWorld,
-            world.defaultGroupId, world.defaultGroupId, wheelWheelFriction, wheelWheelFriction);
-        NewtonMaterialSetDefaultElasticity(world.newtonWorld,
-            world.defaultGroupId, world.defaultGroupId, wheelWheelElasticity);
-        // Контакт двух обычных тел не меняем, но смотрим (провал wheelWheel).
-        NewtonMaterialSetCollisionCallback(world.newtonWorld,
-            world.defaultGroupId, world.defaultGroupId, null, &contactDefaultDefault);
+        // Контакт колёс — провал заезда, но тела всё равно должны разойтись
+        // честно: пару решаем и долаживаем.
+        world.setInteraction(Interaction(BodyRole.wheel, BodyRole.wheel,
+            ContactResponse.resolveAndReport, wheelWheelFriction,
+            wheelWheelFriction, wheelWheelElasticity));
+        world.setInteraction(Interaction(BodyRole.wheel, BodyRole.ground,
+            ContactResponse.resolve, soilFrictionStatic, soilFrictionKinetic,
+            soilElasticity));
         // Балки сами с собой не контачат: стыки узлов — не провал.
-        NewtonMaterialSetCollisionCallback(world.newtonWorld,
-            world.sensorGroupId, world.sensorGroupId, &sensorNoOverlap, null);
+        world.setInteraction(Interaction(BodyRole.beam, BodyRole.beam,
+            ContactResponse.ignore));
 
         // Каркас в Buggy уже разложен конструктором (center + на землю).
         buildGround();
@@ -472,7 +413,7 @@ final class BuggyPhysics
     void dispose()
     {
         // Тайлы поверхности сносятся ДО того, как мир покинет пул
-        // (NewtonDestroyAllBodies) или будет уничтожен: иначе двойное
+        // (clearScene) или будет уничтожен: иначе двойное
         // освобождение ground/boulder-тел.
         if (terrainWorld_ !is null)
         {
@@ -481,10 +422,10 @@ final class BuggyPhysics
         }
         if (world !is null)
         {
-            // Свой мир уничтожаем целиком (NewtonDestroy). Чужой (из пула)
+            // Свой мир уничтожаем целиком. Чужой (из пула)
             // только отсоединяем: пул сам вернёт его с пустыми телами.
             if (ownsWorld_)
-                Delete(world);
+                world.dispose();
             world = null;
         }
         ground = null;
@@ -521,12 +462,13 @@ final class BuggyPhysics
         applyDrive(throttle);
         applyWheelSpinGovernor(dt);
         applySteer();
-        world.update(dt);
+        world.step(dt);
         syncBodies();
+        updateContacts();
         updateBeamPuppets();
         updateStall(dt);
         if (terrainWorld_ !is null && master !is null)
-            terrainWorld_.updateAround(toCarPos(master.position.xyz));
+            terrainWorld_.updateAround(master.worldPosition);
     }
 
     /// Момент полного газа на каждое мотор-колесо, разложенный по `throttle`.
@@ -557,7 +499,7 @@ final class BuggyPhysics
                 if (abs(t) > cap)
                     t = copysign(cap, t);
                 const vec3 dir = wheelDriveSign[i]
-                    * w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
+                    * w.worldRotation.rotate(Vector3f(0.0f, 1.0f, 0.0f));
                 w.addTorque(dir * t);
             }
     }
@@ -584,10 +526,10 @@ final class BuggyPhysics
         foreach (i, w; wheelBodies)
             if (w !is null)
             {
-                const vec3 axle = w.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
+                const vec3 axle = w.worldRotation.rotate(Vector3f(0.0f, 1.0f, 0.0f));
                 const float spin = dot(axle, w.angularVelocity);
                 const float r = i < fr.anchors.length ? fr.anchors[i].radius : wheelRadius;
-                const float groundSpeed = abs(w.velocity.z);
+                const float groundSpeed = abs(w.velocity.y);
                 const float allowedSurface = min(
                     max(groundSpeed * (1.0f + wheelSlipRatio),
                         wheelLaunchSurfaceSpeed),
@@ -607,16 +549,18 @@ final class BuggyPhysics
 
     /// Курсовой руль: отклонение курса мастера от целевого направления переводится
     /// в команду угла балки. Целевой курс — направление вперёд рамки на старте
-    /// (+Z мира Newton).
+    /// (car −Y).
     private void applySteer()
     {
         if (steerJoint_ is null || steer is null || master is null)
             return;
-        // Курс — направление «+Z» мира Newton: каркас собирается единым
+        // Курс — направление «−Y» каркаса: каркас собирается единым
         // поворотом, поэтому его мировая ориентация = мировая мастера.
-        Quaternionf mTrue = master.rotation.conj;
-        const vec3 front = mTrue.rotate(Vector3f(0.0f, 0.0f, 1.0f));
-        const float yawErr = atan2(front.x, front.z);
+        // Курс рамы в car-координатах — её −Y, поэтому ошибка рыскания
+        // считается по нему, а не по +Y.
+        const vec3 heading = master.worldRotation.rotate(
+            Vector3f(0.0f, -1.0f, 0.0f));
+        const float yawErr = atan2(heading.x, -heading.y);
         const float cmdRaw = autoSteer ? steerGain * yawErr
             : steerJoint_.targetYaw;
         steerJoint_.targetYaw = clamp(cmdRaw, -steerLimitRad, steerLimitRad);
@@ -630,7 +574,7 @@ final class BuggyPhysics
         if (master is null)
             return;
         // По курсу — минус Y каркаса, как в fitness-метрике «продвижение вниз».
-        const float fwd = toCarPos(master.position.xyz).y;
+        const float fwd = master.worldPosition.y;
         if (fwd < forwardMinY_ - stallProgressEps)
         {
             forwardMinY_ = fwd;
@@ -651,16 +595,16 @@ final class BuggyPhysics
             step(dt, 0.0f);
     }
 
-    /// Прочитать свежие позы тел из Newton после шага: обёртка хранит копии
+    /// Прочитать свежие позы тел из движка после шага: обёртка хранит копии
     /// position/rotation, и без этого вызова они не обновятся.
     private void syncBodies()
     {
         if (master is null)
             return;
-        master.update(0.0);
+        master.syncPose();
         foreach (w; wheelBodies)
             if (w !is null)
-                w.update(0.0);
+                w.syncPose();
     }
 
     BodyState[] beamStates()
@@ -670,8 +614,8 @@ final class BuggyPhysics
             if (b !is null)
             {
                 BodyState s;
-                s.position = toCarPos(b.position.xyz);
-                s.orientation = toCarRot(b.rotation);
+                s.position = b.worldPosition;
+                s.orientation = b.worldRotation;
                 res ~= s;
             }
         return res;
@@ -684,8 +628,8 @@ final class BuggyPhysics
             if (w !is null)
             {
                 BodyState s;
-                s.position = toCarPos(w.position.xyz);
-                s.orientation = toCarRot(w.rotation);
+                s.position = w.worldPosition;
+                s.orientation = w.worldRotation;
                 res ~= s;
             }
         return res;
@@ -701,14 +645,11 @@ final class BuggyPhysics
         // Кабина жёстко едет за мастером: поворот и перенос — истинное вращение
         // мастера (как у балок в updateBeamPuppets). Оффсет задан в координатах
         // каркаса: в пространство мастера его приводит тот же перевод, что и
-        // всю геометрию (toNewtonPos). Ориентация наружу уходит в координатах
-        // каркаса, как у балок (иначе при развороте машины кабина «плывёт»
-        // относительно рамы): истинный поворот мастера, спряжённый carToNewton.
-        Quaternionf mTrue = master.rotation.conj;
-        Quaternionf qcn = carToNewtonQuat;
-        s.position = toCarPos(master.position.xyz
-            + mTrue.rotate(toNewtonPos(cockpitLocal_)));
-        s.orientation = qcn.conj * mTrue * qcn;
+        // всю геометрию. Ориентация наружу уходит в координатах каркаса, как у
+        // балок (иначе при развороте машины кабина «плывёт» относительно рамы).
+        s.position = master.worldPosition
+            + master.worldRotation.rotate(cockpitLocal_);
+        s.orientation = master.worldRotation;
         return s;
     }
 
@@ -746,8 +687,8 @@ final class BuggyPhysics
     {
         if (master is null)
             return p;
-        Quaternionf mTrue = master.rotation.conj;
-        return toCarPos(master.position.xyz + mTrue.rotate(toNewtonPos(p - masterLocal_)));
+        return master.worldPosition
+            + master.worldRotation.rotate(p - masterLocal_);
     }
 
     // Отладочные хелперы обёрнуты в block-scoped `debug { }`: метка `debug:`
@@ -800,8 +741,8 @@ final class BuggyPhysics
         BodyState s;
         if (master is null)
             return s;
-        s.position = toCarPos(master.position.xyz);
-        s.orientation = toCarRot(master.rotation);
+        s.position = master.worldPosition;
+        s.orientation = master.worldRotation;
         return s;
     }
 
@@ -828,7 +769,7 @@ final class BuggyPhysics
         if (master is null)
             return res;
         const Frame fr = buggy_.frame;
-        Quaternionf mt = toCarRot(master.rotation); // истинное вращение мастера
+        Quaternionf mt = master.worldRotation;
         foreach (i, b; buggy_.frame.beams)
         {
             const vec3 a = fr.nodes[b.a].pos;
@@ -837,7 +778,7 @@ final class BuggyPhysics
             if (d.length < 1e-5f)
                 continue;
             BeamTarget t;
-            t.mid = toCarPos(master.position.xyz) + mt.rotate(beamLocal[i]);
+            t.mid = master.worldPosition + mt.rotate(beamLocal[i]);
             t.dir = mt.rotate(d);
             t.len = d.length;
             res ~= t;
@@ -857,20 +798,7 @@ final class BuggyPhysics
             return;
         }
 
-        // Земля-heightfield в координатах мира Newton: плоскость XZ на y == 0,
-        // вверх оси — +Y (см. carToNewtonQuat). Грань прежнего бокса лежала на
-        // z == 0 координат каркаса, что в Newton совпадает с y == 0.
-        // Перенос поля (центрирование) — трансформацией ТЕЛА, а не коллизии:
-        // матрица на heightfield внутри shape даёт NaN AABB.
-        auto shape = New!GroundHeightfield(120.0f, 8, world);
-        auto body = New!NewtonCarBody(NewtonRigidBodyType.Static, shape,
-            0.0f, world, world);
-        body.dynamic = false;
-        body.kind = BodyKind.ground;
-        body.groupId = soilGroupIdOf(world);
-        body.setTransformation(translationMatrix(vec3(-shape.halfExtent, 0.0f, -shape.halfExtent)));
-        body.update(0.0);
-        ground = body;
+        ground = world.createFlatGround(120.0f, 8, 0.0f);
     }
 
     private void buildFrame()
@@ -942,27 +870,14 @@ final class BuggyPhysics
             if (len < 1e-5f)
                 continue;
 
-            auto body = New!NewtonCarBody(NewtonRigidBodyType.Kinematic,
-                makeAxisYCylinder(beam.radius, beam.radius, len, world),
-                0.0f, world, world);
             // Ось цилиндра (локальный Y) — вдоль балки.
-            body.dynamic = true;
-            body.kind = BodyKind.beam;
-            body.index = i;
-            body.groupId = world.sensorGroupId;
-            body.sensor = true;
-            body.collidable = true;
             const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), dir / len);
-            body.setTransformation(newtonBodyMatrix((a + c) * 0.5f, q));
-            body.update(0.0);
-
-            // Сенсорный колбэк — наша обратная связь: каждая балка знает
-            // свой индекс и сообщает заезду о задевании.
-            immutable beamIdx = i;
-            body.sensorCallback = (NewtonRigidBody, NewtonRigidBody other)
-            {
-                onBeamContact(beamIdx, other);
-            };
+            auto body = world.createBody(BodyRole.beam, BodyMotion.kinematicBody,
+                world.cylinderShape(beam.radius, beam.radius, len), 0.0f);
+            body.tag = i;
+            body.collidable = true;
+            body.worldTransform((a + c) * 0.5f, q);
+            body.syncPose();
 
             beamBodies[i] = body;
             beamLen[i] = len;
@@ -1012,14 +927,10 @@ final class BuggyPhysics
         const vec3 comTotal = (sumM + comCabin * cockpitMass) / totalMassC;
         masterLocal_ = comTotal;
 
-        master = New!NewtonCarBody(NewtonRigidBodyType.Dynamic,
-            New!NewtonBoxShape(Vector3f(0.05f, 0.05f, 0.05f), world),
-            0.0f, world, world);
-        master.dynamic = true;
-        master.kind = BodyKind.master;
-        master.autoSleep = false;
+        master = world.createBody(BodyRole.master, BodyMotion.dynamicBody,
+            world.boxShape(Vector3f(0.05f, 0.05f, 0.05f)), 0.0f);
         master.collidable = false; // коллизии считают балки и колёса
-        master.gravity = gravity;
+        master.gravity = gravityAccel;
         master.linearDamping = bodyDamping;
         master.angularDamping = Vector3f(bodyDamping, bodyDamping, bodyDamping);
 
@@ -1060,11 +971,12 @@ final class BuggyPhysics
         const float IzzCabin = cockpitInertia.z
             + Mc * (dCabin.x * dCabin.x + dCabin.y * dCabin.y);
 
-        master.setMassMatrix(totalMassC,
-            IxxFrame + IxxCabin, IyyFrame + IyyCabin, IzzFrame + IzzCabin);
+        master.mass = totalMassC;
+        master.inertia = Vector3f(IxxFrame + IxxCabin, IyyFrame + IyyCabin,
+            IzzFrame + IzzCabin);
 
-        master.setTransformation(translationMatrix(toNewtonPos(comTotal)));
-        master.update(0.0);
+        master.setWorldPosition(comTotal);
+        master.syncPose();
 
         // Положение кабины относительно мастера (в координатах каркаса):
         // для live-рендера кабина жёстко приделана к мастеру.
@@ -1080,34 +992,29 @@ final class BuggyPhysics
             const vec3 c = frame.nodes[beam.b].pos;
             const vec3 dir = c - a;
             const float len = dir.length;
-            const Quaternionf qBeam = rotationBetween(Vector3f(0, 1, 0), dir / len);
-            Quaternionf qArm = toNewtonRot(qBeam);
+            Quaternionf qBeam = rotationBetween(Vector3f(0, 1, 0), dir / len);
+            Quaternionf qArm = qBeam;
             const vec3 mid = (a + c) * 0.5f;
 
-            steer = New!NewtonCarBody(NewtonRigidBodyType.Dynamic,
-                makeAxisYCylinder(beam.radius, beam.radius, len, world),
-                0.0f, world, world);
-            steer.dynamic = true;
-            steer.kind = BodyKind.master;
-            steer.autoSleep = false;
+            steer = world.createBody(BodyRole.master, BodyMotion.dynamicBody,
+                world.cylinderShape(beam.radius, beam.radius, len), 0.0f);
             steer.collidable = false; // везёт шарнир и носовое колесо
-            steer.gravity = gravity;
+            steer.gravity = gravityAccel;
             steer.linearDamping = bodyDamping;
             steer.angularDamping = Vector3f(bodyDamping, bodyDamping, bodyDamping);
             const float perp = steerMass * len * len / 12.0f;
             const float axial = 0.5f * steerMass * beam.radius * beam.radius;
-            steer.setMassMatrix(steerMass, perp, axial, perp);
-            steer.setTransformation(newtonBodyMatrix(mid, qBeam));
-            steer.update(0.0);
+            steer.mass = steerMass;
+            steer.inertia = Vector3f(perp, axial, perp);
+            steer.worldTransform(mid, qBeam);
+            steer.syncPose();
 
-            steerBuildQuat = qArm;
-            const vec3 pivotNewton = toNewtonPos(frame.nodes[steerNodeIndex].pos);
-            const vec3 pivotSteerLocal = qArm.conj.rotate(
-                pivotNewton - steer.position.xyz);
-            const vec3 pivotMasterLocal = pivotNewton - master.position.xyz;
-            const vec3 armUpLocal = qArm.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
-            steerJoint_ = New!SteerJoint(steer, master,
-                pivotSteerLocal, pivotMasterLocal, armUpLocal);
+                const vec3 pivot = frame.nodes[steerNodeIndex].pos;
+            steerJoint_ = world.newSteerJoint(steer, master,
+                qBeam.conj.rotate(pivot - steer.worldPosition),
+                pivot - master.worldPosition,
+                qBeam.conj.rotate(Vector3f(0.0f, 0.0f, 1.0f)),
+                steerLimitRad, steerErrorCapRad);
         }
 
         // Локальные преобразования балок в мастере.
@@ -1115,9 +1022,9 @@ final class BuggyPhysics
         {
             if (beamBodies[i] is null)
                 continue;
-            beamLocal[i] = master.rotation.conj.rotate(
-                beamBodies[i].position.xyz - master.position.xyz);
-            beamLocalQuat[i] = master.rotation * beamBodies[i].rotation.conj;
+            beamLocal[i] = master.worldRotation.conj.rotate(
+                beamBodies[i].worldPosition - master.worldPosition);
+            beamLocalQuat[i] = master.worldRotation.conj * beamBodies[i].worldRotation;
         }
     }
 
@@ -1129,10 +1036,9 @@ final class BuggyPhysics
         if (master is null)
             return;
         // Кэшированное dagon'ом вращение любого тела — инверсия истинного:
-        // dlib's fromMatrix читает матрицу Newton во встречной конвенции, и
-        // readback по правилу из toMatrix4x4 обращается. Везде дальше истинное
-        // вращение получаем через `.conj`.
-        Quaternionf mTrue = master.rotation.conj;
+        // Истинное вращение мастера в car-координатах: всё дальше читается
+        // именно оно.
+        Quaternionf mTrue = master.worldRotation;
         foreach (i, b; beamBodies)
         {
             if (b is null)
@@ -1141,27 +1047,41 @@ final class BuggyPhysics
             // поворот тот же, поэтому трансформ тела балки — просто рычага.
             if (steer !is null && i == steerBeamIdx)
             {
-                Quaternionf sTrue = steer.rotation.conj;
-                b.setTransformation(translationMatrix(steer.position.xyz)
-                    * sTrue.toMatrix4x4);
-                b.update(0.0);
+                b.worldTransform(steer.worldPosition, steer.worldRotation);
+                b.syncPose();
                 b.velocity = steer.velocity;
                 b.angularVelocity = steer.angularVelocity;
                 continue;
             }
             const vec3 r = mTrue.rotate(beamLocal[i]);
-            const vec3 pos = master.position.xyz + r;
+            const vec3 pos = master.worldPosition + r;
             const Quaternionf q = mTrue * beamLocalQuat[i];
-            b.setTransformation(translationMatrix(pos) * q.toMatrix4x4);
-            b.update(0.0);
+            b.worldTransform(pos, q);
+            b.syncPose();
             b.velocity = master.velocity + cross(master.angularVelocity, r);
             b.angularVelocity = master.angularVelocity;
         }
     }
 
-    /// Сенсорный колбэк балки: задело колесо (не своё) — провал.
-    /// Землю тут игнорируем — её ловит геометрическая beamUnderground().
-    private void onBeamContact(size_t beamIdx, NewtonRigidBody other)
+    /// Разбор контактов за шаг: балка задела не своё колесо либо два колеса
+    /// соприкоснулись — провал. Землю тут игнорируем, её ловит геометрическая
+    /// beamUnderground().
+    private void updateContacts()
+    {
+        foreach (pair; world.contacts())
+        {
+            if (pair.a.role == BodyRole.beam && pair.b.role == BodyRole.wheel)
+                onBeamContact(pair.a.tag, pair.b);
+            else if (pair.b.role == BodyRole.beam && pair.a.role == BodyRole.wheel)
+                onBeamContact(pair.b.tag, pair.a);
+            else if (pair.a.role == BodyRole.wheel && pair.b.role == BodyRole.wheel
+                && beamFail_ == BeamFailure.none)
+                beamFail_ = BeamFailure.wheelWheel;
+        }
+    }
+
+    /// Сенсорный контакт балки: задело колесо (не своё) — провал.
+    private void onBeamContact(size_t beamIdx, const PhysBody other)
     {
         foreach (wi, w; wheelBodies)
             if (w is other)
@@ -1170,13 +1090,6 @@ final class BuggyPhysics
                     beamFail_ = BeamFailure.wheel;
                 return;
             }
-    }
-
-    /// См. contactDefaultDefault: два колеса соприкасаются.
-    private void markWheelWheel()
-    {
-        if (beamFail_ == BeamFailure.none)
-            beamFail_ = BeamFailure.wheelWheel;
     }
 
     /**
@@ -1202,8 +1115,8 @@ final class BuggyPhysics
     /// Геометрическая проверка «рама под землёй»: низшая точка поверхности
     /// любой балки ниже локальной земли (плоскость y == 0 или рельеф процедурной
     /// поверхности, см. groundHeightAt) минус `beamGroundEps`. Не зависит от
-    /// контактов Newton — ловит и глухое погружение, и проскакивание между
-    /// шагами проверки. Высота здесь — координата Y мира Newton.
+    /// контактов движка — ловит и глухое погружение, и проскакивание между
+    /// шагами проверки. Высота здесь — координата Z каркаса.
     private bool beamUnderground()
     {
         if (master is null)
@@ -1213,9 +1126,8 @@ final class BuggyPhysics
         {
             if (b is null)
                 continue;
-            const vec3 dir = b.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
-            const vec3 lowWorld = b.position.xyz - dir * (beamLen[i] * 0.5f);
-            const vec3 lowCar = toCarPos(lowWorld);
+            const vec3 dir = b.worldRotation.rotate(Vector3f(0.0f, 1.0f, 0.0f));
+            const vec3 lowCar = b.worldPosition - dir * (beamLen[i] * 0.5f);
             const float ground = groundHeightAt(lowCar);
             if (lowCar.z - asBeam(fr.beams[i]).radius < ground - beamGroundEps)
                 return true;
@@ -1239,17 +1151,17 @@ final class BuggyPhysics
     {
         if (master is null)
             return origin;
-        const vec3 p = toCarPos(master.position.xyz);
+        const vec3 p = master.worldPosition;
         return p - frameUp * p.z;
     }
 
-    /// Мир-позиция мастера (центр массы каркаса) в координатах Dagon/Newton —
+    /// Мир-позиция мастера (центр массы каркаса) в координатах каркаса —
     /// точка, за которой следует камера живого заезда.
     Vector3f worldFocus() @property
     {
         if (master is null)
             return Vector3f(0.0f, 0.0f, 0.0f);
-        return master.position.xyz;
+        return master.worldPosition;
     }
 
     /// Направление «вверх» рамы в координатах каркаса: на старте — строго +Z.
@@ -1258,8 +1170,22 @@ final class BuggyPhysics
     {
         if (master is null)
             return Vector3f(0.0f, 0.0f, 1.0f);
-        const vec3 upNewton = master.rotation.conj.rotate(Vector3f(0.0f, 1.0f, 0.0f));
-        return toCarPos(upNewton);
+        // Рама стоит над колёсами: вектор «компоновка − ступицы» и есть её
+        // «верх» в координатах каркаса. Не зависит от осей фантомного тела.
+        vec3 hub;
+        size_t n;
+        foreach (w; wheelBodies)
+        {
+            if (w is null)
+                continue;
+            hub += w.worldPosition;
+            ++n;
+        }
+        if (n == 0)
+            return master.worldPosition;
+        hub /= cast(float) n;
+        const vec3 up = master.worldPosition - hub;
+        return up.length > 0.0f ? up.normalized : Vector3f(0.0f, 0.0f, 1.0f);
     }
 
     /// Накопленное время симуляции без продвижения вперёд по курсу (-Y
@@ -1276,7 +1202,7 @@ final class BuggyPhysics
     }
 
     /// Тело мастера для тестов (возмущения) и вьюера.
-    NewtonCarBody masterBody() @property
+    PhysBody masterBody() @property
     {
         return master;
     }
@@ -1289,7 +1215,7 @@ final class BuggyPhysics
     }
 
     /// Шарнир руля: тест крутит `targetYaw` вручную.
-    SteerJoint steerJoint() @property
+    PhysSteerJoint steerJoint() @property
     {
         return steerJoint_;
     }
@@ -1321,16 +1247,12 @@ final class BuggyPhysics
 
             float mass = cast(float)(wheelDensity * PI
                 * (r * r - ir * ir) * w);
-            auto wheel = New!NewtonCarBody(NewtonRigidBodyType.Dynamic,
-                makeAxisYCylinder(r, r, w, world),
-                mass, world, world);
-            wheel.dynamic = true;
-            wheel.kind = BodyKind.wheel;
-            wheel.index = i;
-            wheel.autoSleep = false;
-            wheel.gravity = gravity;
+            auto wheel = world.createBody(BodyRole.wheel, BodyMotion.dynamicBody,
+                world.cylinderShape(r, r, w), mass);
+            wheel.tag = i;
+            wheel.gravity = gravityAccel;
             // Линейное — лёгкий выкат (Crr гасит зацепление, не «воздух»);
-            // угловое: ось спина (локальный Y цилиндра, см. makeAxisYCylinder) —
+            // угловое: ось спина (локальный Y цилиндра, см. `cylinderShape`) —
             // сопротивление качению по грунту, перпендикулярные оси — прежнее
             // общее демпфирование.
             wheel.linearDamping = tireLinearDamping;
@@ -1341,15 +1263,16 @@ final class BuggyPhysics
             const float h2 = w * w;
             const float perp = (3.0f * (r2 + ri2) + h2) / 12.0f * mass;
             const float axial = 0.5f * (r2 + ri2) * mass;
-            wheel.setMassMatrix(mass, perp, axial, perp);
+            wheel.mass = mass;
+            wheel.inertia = Vector3f(perp, axial, perp);
             wheelAxialMom[i] = axial;
 
             // Axle across the course: the disc plane faces forward, so the
             // wheel rolls straight instead of scrubbing sideways on launch.
             const vec3 axleDir = wheelAxle(frameForward, frameUp, nodePos);
             const Quaternionf q = rotationBetween(Vector3f(0, 1, 0), axleDir);
-            wheel.setTransformation(newtonBodyMatrix(nodePos, q));
-            wheel.update(0.0);
+            wheel.worldTransform(nodePos, q);
+            wheel.syncPose();
 
             // Колесо держится на оси, закреплённой одним концом: револьте-
             // шарнир в точке узла якоря оставляет свободным только спин
@@ -1358,21 +1281,17 @@ final class BuggyPhysics
             // свободны, колесо болтается вокруг пивота) ось не «гуляет».
             if (master !is null)
             {
-                const vec3 pivotNewton = toNewtonPos(nodePos);
                 // Колесо на свободном конце рулевой балки катится с рычагом:
                 // его ось живёт в осях рычага и поворачивается вместе с ним.
-                NewtonRigidBody parent = master;
-                vec3 pivotParentLocal = pivotNewton - master.position.xyz;
+                PhysBody parent = master;
+                vec3 pivotParentLocal = nodePos - master.worldPosition;
                 if (steer !is null && a.node == steerFarNode)
                 {
                     parent = steer;
                     pivotParentLocal = steerBuildQuat.conj.rotate(
-                        pivotNewton - steer.position.xyz);
+                        nodePos - steer.worldPosition);
                 }
-                // Шарнир владеет миром (`NewtonConstraint: Owner`, `super(world)`),
-                // поэтому удалять его вручную не нужно: `Delete(world)` (свой мир)
-                // снесёт его сам, а чужой мир из пула переживёт заезд.
-                New!WheelAxleJoint(wheel, parent, pivotParentLocal);
+                world.newAxleJoint(wheel, parent, pivotParentLocal);
             }
 
             wheelBodies[i] = wheel;
@@ -1666,9 +1585,9 @@ unittest
         foreach (_; 0 .. 360)
         {
             physics.step(dt, 1.0f);
-            Quaternionf mTrue = physics.masterBody.rotation.conj;
-            const vec3 front = mTrue.rotate(Vector3f(0.0f, 0.0f, 1.0f));
-            const float err = atan2(front.x, front.z);
+            const vec3 heading = physics.masterBody.worldRotation.rotate(
+                Vector3f(0.0f, -1.0f, 0.0f));
+            const float err = atan2(heading.x, -heading.y);
             maxYawErr = max(maxYawErr, abs(err));
             lastYawErr = err;
         }

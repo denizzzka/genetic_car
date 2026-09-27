@@ -1,77 +1,27 @@
 module physics_world.terrainworld;
 
-import std.math;
-
 import dlib.core.memory;
-import dlib.core.ownership;
 import dlib.math.vector;
-import dlib.math.matrix;
-import dlib.math.transformation;
-
-import dagon.ext.newton;
 
 // Имена dlib.math.transformation (up/forward/right — шаблоны) конфликтуют с
 // базисом каркаса; нужные оси каркаса переименовываем локально.
 import frame.frame : origin, frameForward = forward, frameRight = right;
 
-import physics_world.physics;
+import physics_world.engine;
 import physics_world.terrain;
-
-/// Heightfield-коллизия: ОДНА сплошная поверхность на всё окно из
-/// (windowRadius·2+1)² тайлов. Внутренних швов нет — соседние тайлы сшиваются
-/// в один буфер высот 1:1 (они и так аналитически бесшовны), поэтому колесо
-/// не «зацепляется» на стыках отдельных тел. Буфер копируется в локальную
-/// память: Newton 3.14 НЕ копирует высоты (хранит указатели), поэтому массив
-/// живёт всё время жизни коллизии — освобождение в деструкторе.
-final class TerrainWindowHeightfield : NewtonCollisionShape
-{
-    private float[] elevations_;
-    private ubyte[] attributes_;
-
-    /// `elevations` — высоты окна в порядке heightfield Newton по сетке
-    /// (tilesPerSide·cells+1)², `cells` ячеек на тайл по обеим осям, `cell` —
-    /// размер ячейки. Сетка сэмплирована на общих для соседних тайлов точках,
-    /// поэтому граница между тайлами — одна и та же строка буфера.
-    this(const float[] elevations, uint cells, uint tilesPerSide,
-        float cell, NewtonPhysicsWorld world)
-    {
-        super(world);
-
-        const uint spanCells = tilesPerSide * cells;
-        const size_t n = (spanCells + 1) * (spanCells + 1);
-        elevations_ = New!(float[])(n);
-        attributes_ = New!(ubyte[])(n);
-        elevations_[] = elevations[];
-        attributes_[] = 0;
-
-        newtonCollision = NewtonCreateHeightFieldCollision(world.newtonWorld,
-            cast(int) spanCells + 1, cast(int) spanCells + 1, 1, // gridsDiagonals
-            0, // elevationdatType: float
-            elevations_.ptr, cast(char*) attributes_.ptr,
-            1.0f, // verticalScale
-            cell, cell, 0);
-        NewtonCollisionSetUserData(newtonCollision, cast(void*) this);
-    }
-
-    ~this()
-    {
-        Delete(elevations_);
-        Delete(attributes_);
-    }
-}
 
 /**
  * Физическое окно земли вокруг машины.
  *
- * Держит в мире Newton сплошную поверхность из (windowRadius·2+1)² тайлов
- * вокруг фокуса (точка на плоскости каркаса forward×right), сшитую в один
+ * Держит в мире сплошную поверхность из (windowRadius·2+1)² тайлов вокруг
+ * фокуса (точка на плоскости каркаса forward×right), сшитую в один
  * heightfield — у выезда за окно тело пересобирается из общего shared-кэша
  * тайлов с новым центром. Каждому инстансу BuggyPhysics — собственный
  * TerrainWorld (у каждого заезда свой мир), кэш высот общий.
  */
 final class TerrainWorld
 {
-    private NewtonPhysicsWorld world_;
+    private PhysWorld world_;
     private TerrainSurface terrain_;
     private TerrainConfig cfg_;
 
@@ -79,12 +29,11 @@ final class TerrainWorld
     private int windowRadius_ = 1;
 
     /// Единственное ground-тело окна и его центр (номер центрального тайла).
-    private TerrainWindowHeightfield groundShape_;
-    private NewtonRigidBody ground_;
+    private PhysBody ground_;
     private int groundTx_ = int.max;
     private int groundTy_ = int.max;
 
-    this(NewtonPhysicsWorld world, TerrainSurface terrain, const TerrainConfig cfg)
+    this(PhysWorld world, TerrainSurface terrain, const TerrainConfig cfg)
     {
         world_ = world;
         terrain_ = terrain;
@@ -105,18 +54,14 @@ final class TerrainWorld
         }
     }
 
-    /// Снести всё окно: обязательно вызвать до того, как мир уйдёт в пул
-    /// (NewtonDestroyAllBodies) или будет уничтожен, — иначе двойное
-    /// освобождение тел.
+    /// Снести всё окно: обязательно вызвать до того, как мир очистят
+    /// (`clearScene`) или уничтожат, — иначе двойное освобождение тел.
     void dispose()
     {
         if (ground_ !is null)
         {
-            NewtonDestroyBody(ground_.newtonBody);
-            world_.deleteOwnedObject(ground_);
-            world_.deleteOwnedObject(groundShape_);
+            world_.destroyBody(ground_);
             ground_ = null;
-            groundShape_ = null;
         }
     }
 
@@ -129,11 +74,8 @@ final class TerrainWorld
     {
         if (ground_ !is null)
         {
-            NewtonDestroyBody(ground_.newtonBody);
-            world_.deleteOwnedObject(ground_);
-            world_.deleteOwnedObject(groundShape_);
+            world_.destroyBody(ground_);
             ground_ = null;
-            groundShape_ = null;
         }
 
         const int R = windowRadius_;
@@ -160,18 +102,10 @@ final class TerrainWorld
             }
 
         const float cell = cfg_.tileSize / cast(float) cells;
-        groundShape_ = New!TerrainWindowHeightfield(elev, cells, tilesPerSide,
-            cell, world_);
-        Delete(elev);
-
-        ground_ = New!NewtonRigidBody(NewtonRigidBodyType.Static, groundShape_,
-            0.0f, world_, world_);
-        ground_.dynamic = false;
-        ground_.groupId = soilGroupIdOf(world_);
         const vec3 corner = origin
             + frameForward * (cast(float) tx0 * cfg_.tileSize - gridHalfShift(cfg_))
             + frameRight * (cast(float) ty0 * cfg_.tileSize - gridHalfShift(cfg_));
-        ground_.setTransformation(translationMatrix(toNewtonPos(corner)));
-        ground_.update(0.0);
+        ground_ = world_.createHeightfieldGround(elev, grid, cell, corner);
+        Delete(elev);
     }
 }

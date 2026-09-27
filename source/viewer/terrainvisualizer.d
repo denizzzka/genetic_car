@@ -27,8 +27,8 @@ struct VFTile
  *
  * Строит меши тайлов из общего shared-кэша (physics_world.terrain) вокруг
  * фокуса (живой машины или origin), по мере езды подвозит новые тайлы и
- * убирает уехавшие. Вершины меша — уже в абсолютных координатах мира dagon
- * (= Newton), поэтому сущности тайлов стоят в origin.
+ * убирает уехавшие. Вершины меша — уже в абсолютных координатах мира
+ * (car-координаты, как у всех тел), поэтому сущности тайлов стоят в origin.
  */
 final class TerrainVisualizer
 {
@@ -175,10 +175,10 @@ final class TerrainVisualizer
         tiles_ = null;
     }
 
-    /// Меш тайла (tx, ty). Вершины — в абсолютных координатах мира dagon
-    /// (= Newton): точка угла тайла из точечной формулы `corner` переводится
-    /// toNewtonPos, высота поднимается по `up` (в Newton это +Y). Индексы —
-    /// пара треугольников на ячейку, обход против часовой стрелки сверху.
+    /// Меш тайла (tx, ty). Вершины — в абсолютных координатах мира: точка
+    /// угла тайла из точечной формулы `corner`, высота поднимается по `up`.
+    /// Индексы — пара треугольников на ячейку, обход против часовой стрелки
+    /// сверху.
     private Mesh buildTileMesh(const TerrainTileData tile, const TerrainConfig cfg,
         int tx, int ty, float tileSize)
     {
@@ -209,8 +209,8 @@ final class TerrainVisualizer
                 const vec3 p = corner
                     + frameForward * (cast(float) kx * cell)
                     + frameRight * (cast(float) ky * cell);
-                // Точка угла тайла на плоскости, затем высота вверх (Newton +Y).
-                const vec3 v = toNewtonPos(p) + vec3(0.0f, h, 0.0f);
+                // Точка угла тайла на плоскости, затем высота вверх (car +Z).
+                const vec3 v = p + vec3(0.0f, 0.0f, h);
                 mesh.vertices[i] = v;
 
                 // Нормаль центральными разностями по сетке высот: вдоль
@@ -225,7 +225,7 @@ final class TerrainVisualizer
                     : tile.heights[kx * W + ky + 1];
                 const float gu = (hFw - hBk) / (2.0f * cell);
                 const float gv = (hRt - hLf) / (2.0f * cell);
-                mesh.normals[i] = Vector3f(-gu, 1.0f, gv).normalized;
+                mesh.normals[i] = Vector3f(-gu, -gv, 1.0f).normalized;
 
                 mesh.texcoords[i] = Vector2f(
                     cast(float) kx / cast(float)(W - 1),

@@ -5,14 +5,7 @@ import std.algorithm : max;
 import core.sync.mutex : Mutex;
 import core.sync.condition : Condition;
 
-import dlib.core.memory;
-import dlib.core.ownership;
-import dlib.math.vector;
-
-import dagon.core.event;
-import dagon.ext.newton;
-
-import physics_world.physics;
+import physics_world.engine;
 
 /**
  * Пул физических миров Newton для генетического драйвера.
@@ -41,13 +34,13 @@ import physics_world.physics;
  * мира при `NewtonDestroy`), пул можно убрать и вернуться к простому
  * create/step/dispose на каждого индивида: `BuggyPhysics` сам создаёт мир.
  */
-final class NewtonWorldPool
+final class PhysWorldPool
 {
     private Mutex lock_;
     private Condition cond_;
 
     /// Свободные миры, готовые к выгрузке следующего заезда.
-    private NewtonPhysicsWorld[] free_;
+    private PhysWorld[] free_;
     /// Сколько миров создано всего (никогда не превышает `capacity_`).
     private size_t total_;
     private immutable size_t capacity_;
@@ -61,13 +54,13 @@ final class NewtonWorldPool
 
     /// Взять мир из пула (блокирует, если все миры заняты и пул полон).
     /// Мир приходит ПУСТЫМ (без тел): модель строится заново.
-    NewtonPhysicsWorld acquire()
+    PhysWorld acquire()
     {
         synchronized (lock_)
         {
             while (free_.length == 0 && total_ >= capacity_)
                 cond_.wait();
-            NewtonPhysicsWorld w;
+            PhysWorld w;
             if (free_.length)
             {
                 w = free_[$ - 1];
@@ -86,24 +79,22 @@ final class NewtonWorldPool
     /// Вернуть мир в пул: уничтожить все тела заезда, но НЕ сам мир.
     /// Группы материалов и колбэки мира живут — следующая модель
     /// переиспользует `sensorGroupId`/`defaultGroupId` как есть.
-    void release(NewtonPhysicsWorld w)
+    void release(PhysWorld w)
     {
         synchronized (lock_)
         {
-            NewtonDestroyAllBodies(w.newtonWorld);
+            // Только тела: группы материалов и колбэки остаются, следующий
+            // заезд переиспользует их как есть.
+            w.clearScene();
             free_ ~= w;
             cond_.notifyAll();
         }
     }
 
-    private static NewtonPhysicsWorld createWorld()
+    private static PhysWorld createWorld()
     {
-        ensureNewtonLoaded();
-        // PhysicsWorld — мир с подписанной группой материала грунта: сцепление
-        // колёс о грунт настраивается один раз при рождении мира и живёт в нём
-        // всё время жизни пула (release() сносит только тела, не материалы).
-        auto w = New!PhysicsWorld(cast(EventManager)null, cast(Owner)null);
-        w.threadsCount = 0;
+        auto w = createPhysWorld();
+        w.useCallingThread();
         return w;
     }
 }
@@ -113,9 +104,9 @@ final class NewtonWorldPool
 /// сколько нужно; число миров — ровно степень параллелизма, не больше.
 /// Инициализируется под __gshared-локом: первый дозвавшийся поток строит пул.
 private __gshared Object poolLock_ = new Object();
-private __gshared NewtonWorldPool pool_;
+private __gshared PhysWorldPool pool_;
 
-private NewtonWorldPool worldPool()
+private PhysWorldPool worldPool()
 {
     if (pool_ !is null)
         return pool_;
@@ -124,20 +115,20 @@ private NewtonWorldPool worldPool()
         if (pool_ is null)
         {
             const n = max(1, (cast(size_t) totalCPUs * 3) / 4);
-            pool_ = new NewtonWorldPool(n);
+            pool_ = new PhysWorldPool(n);
         }
         return pool_;
     }
 }
 
 /// Взять мир для одного заезда. Парный вызов — `releaseWorld`.
-NewtonPhysicsWorld acquireWorld()
+PhysWorld acquireWorld()
 {
     return worldPool().acquire();
 }
 
 /// Вернуть мир после заезда (очищенный от тел, без `NewtonDestroy`).
-void releaseWorld(NewtonPhysicsWorld w)
+void releaseWorld(PhysWorld w)
 {
     worldPool().release(w);
 }

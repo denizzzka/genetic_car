@@ -53,8 +53,6 @@ private HeadlessOptions parseHeadless(string[] args)
 
 private void runHeadless(const HeadlessOptions opt)
 {
-    ensureNewtonLoaded();
-
     EvolutionConfig cfg = EvolutionConfig.init;
     cfg.simulateSeconds = opt.simulateSeconds;
 
@@ -88,11 +86,6 @@ void main(string[] args)
         runHeadless(parseHeadless(args));
         return;
     }
-
-    // Грузим libnewton.so до старта и до физических воркеров: bindbc
-    // резолвит символы один раз на процесс, повторно — защита в
-    // BuggyPhysics (ensureNewtonLoaded).
-    ensureNewtonLoaded();
 
     MyGame game = New!MyGame(1280, 720, false, "Genetic Car - Frame Viewer", args);
     game.run();

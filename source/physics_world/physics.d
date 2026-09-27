@@ -1,21 +1,12 @@
 module physics_world.physics;
 
-import std.math;
 import std.algorithm : min;
-import std.exception : enforce;
+import std.math : abs, PI;
 
-import dlib.core.memory;
-import dlib.core.ownership;
 import dlib.math.vector;
-import dlib.math.matrix;
 import dlib.math.quaternion;
-import dlib.math.transformation;
 
-import dagon.core.event;
-import dagon.ext.newton;
-
-import frame.frame : Frame, Node, EphemeralBeam, Beam, Anchor, AnchorKind, origin,
-    right, up, forward;
+import frame.frame : Frame, Node, EphemeralBeam, Beam, Anchor, AnchorKind, origin;
 
 /// Радиус колеса по умолчанию, м. Совпадает с внешним радиусом визуального
 /// тора и коллизионного цилиндра. Генетический радиус каждого колеса
@@ -86,6 +77,10 @@ enum float stallProgressEps = 0.1f;
 /// Высота броска на старт: низ самого низкого колеса ставится на эту высоту
 /// над землёй, дальше физика сама роняет багги на поверхность.
 enum float dropHeight = 0.15f;
+
+/// Модуль ускорения свободного падения, м/с². Направление «вниз» знает
+/// движок: у каркаса вверх — Z, у Newton — Y, и ось у каждого движка своя.
+enum float gravityAccel = 9.80665f;
 
 /// Раскладка каркаса «на старт»: центрирует горизонтально (средняя X/Y узлов —
 /// в ноль) и сажает низом самого низкого колеса на `dropHeight` над землёй —
@@ -182,119 +177,6 @@ enum float tireRollDamping = 0.2f;
 /// листовую балку — каркас остаётся монолитом.
 enum size_t steerNodeIndex = 1;
 
-/// Контакты балок (sensor) с грунтом разбираются как у dagon для sensor×default:
-/// все точки снимаются, чтобы кинестатическая балка не толкалась землёй.
-/// Сигнала на провал не нужно — раму под землёй ловит геометрическая
-/// beamUnderground().
-extern(C) void physicsSensorGroundContacts(
-    const NewtonJoint* contactJoint, dFloat timestep, int threadIndex)
-{
-    void* next;
-    for (void* c = NewtonContactJointGetFirstContact(contactJoint); c; c = next)
-    {
-        next = NewtonContactJointGetNextContact(contactJoint, c);
-        NewtonContactJointRemoveContact(contactJoint, c);
-    }
-}
-
-/// Мир Newton с подписанной группой материала грунта. Грунт (почва/глина)
-/// получает собственную группу, чтобы сцепление покрышек бралось только с
-/// него (пара default×soil), а пара колесо×колесо (default×default) и всё
-/// прочее осталось как в dagon из коробки.
-final class PhysicsWorld : NewtonPhysicsWorld
-{
-    /// Материальная группа грунта: в ней живут тела земли (плоскость и
-    /// террейн). Колёса катятся по ней с offroad-сцеплением.
-    int soilGroupId;
-
-    this(EventManager eventManager, Owner o)
-    {
-        super(eventManager, o);
-        soilGroupId = createGroupId();
-
-        // Сцепление и упругость — только пара «покрышка × грунт».
-        NewtonMaterialSetDefaultFriction(newtonWorld, defaultGroupId, soilGroupId,
-            soilFrictionStatic, soilFrictionKinetic);
-        NewtonMaterialSetDefaultElasticity(newtonWorld, defaultGroupId, soilGroupId,
-            soilElasticity);
-        // Балки (sensor) по грунту — разбор контактов без толкания.
-        NewtonMaterialSetCollisionCallback(newtonWorld, sensorGroupId, soilGroupId,
-            null, &physicsSensorGroundContacts);
-    }
-}
-
-/// Группа материала грунта мира (см. `PhysicsWorld`). Все миры приложения
-/// создаются как `PhysicsWorld` (пул и одиночные заезды), поэтому каст безопасен.
-int soilGroupIdOf(const NewtonPhysicsWorld world)
-{
-    auto pw = cast(PhysicsWorld) world;
-    assert(pw !is null, "мир обязан создаваться как PhysicsWorld");
-    return pw.soilGroupId;
-}
-
-/// Ориентация физического мира: Newton держит «вверх» вдоль своей Y (земля —
-/// плоскость XZ, у heightfield'а ось высоты — Y), а у каркаса и вьюера
-/// «вверх» — Z. Мир Newton — это геометрия каркаса, повёрнутая вокруг X на
-/// −90°: (x, y, z)каркас → (x, z, −y)newton. Все положения и ориентации тел,
-/// уходящие в Newton и возвращающиеся из него, проходят через переводы ниже.
-/// Значение выведено из образов осей базиса (`carToNewtonBasis`): литерал —
-/// потому что LDC сворачивает `fromMatrix` в NaN на этапе компиляции.
-immutable Quaternionf carToNewtonQuat =
-    Quaternionf(-0.70710678f, 0.0f, 0.0f, 0.70710678f);
-
-/// Собирает поворот каркас→Newton из матрицы образов осей базиса. Образы осей
-/// проверяет юнит-тест: right→правый X, up→верхний Y, forward→курс Z.
-private Quaternionf carToNewtonBasis()
-{
-    Matrix4x4f fromBasis = Matrix4x4f([
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, -1.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 0.0f, 1.0f]);
-    return Quaternionf.fromMatrix(fromBasis);
-}
-
-/// Точка из координат каркаса в координаты мира Newton.
-vec3 toNewtonPos(const vec3 carPos)
-{
-    return vec3(carPos.x, carPos.z, -carPos.y);
-}
-
-/// Точка из координат мира Newton в координаты каркаса.
-vec3 toCarPos(const vec3 newtonPos)
-{
-    return vec3(newtonPos.x, -newtonPos.z, newtonPos.y);
-}
-
-/// Ориентация из координат каркаса в ориентацию тела мира Newton.
-Quaternionf toNewtonRot(const Quaternionf carRot)
-{
-    // Операции dlib над кватернионами не помечены const — работаем на копии.
-    Quaternionf r = carToNewtonQuat;
-    return r * carRot;
-}
-
-/// Кэшированное dagon'ом вращение тела из мира Newton в истинную ориентацию
-/// координат каркаса. `body.rotation` — инверсия истинного поворота (см.
-/// updateBeamPuppets), поэтому сначала восстанавливаем его `.conj`, затем
-/// вычитаем поворот мира — наружу снова уходит геометрия каркаса.
-Quaternionf toCarRot(const Quaternionf cachedNewtonRot)
-{
-    Quaternionf r = carToNewtonQuat;
-    Quaternionf c = cachedNewtonRot;
-    return r.conj * c.conj;
-}
-
-/// Матрица тела в мире Newton из положения и ориентации координат каркаса.
-Matrix4x4f newtonBodyMatrix(const vec3 carPos, const Quaternionf carRot)
-{
-    return translationMatrix(toNewtonPos(carPos)) * toNewtonRot(carRot).toMatrix4x4;
-}
-
-/// Ускорение свободного падения мира Newton: вниз вдоль −Y (согласуется
-/// с поворотом мира из carToNewtonQuat).
-immutable Vector3f gravity = Vector3f(0.0f, -9.80665f, 0.0f);
-
 /// Транспортное состояние тела: позиция и ориентация в координатах машины.
 /// Совпадает с трансформацией Dagon-сущности под carRoot:
 /// `entity.position = state.position; entity.rotation = state.orientation;`
@@ -302,71 +184,6 @@ struct BodyState
 {
     Vector3f position;
     Quaternionf orientation;
-}
-
-/// Цилиндр Newton создаётся с осью вдоль ЛОКАЛЬНОЙ X, тогда как весь
-/// остальной код (и визуальный меш) считает ось цилиндра локальной Y —
-/// ось вращения колеса, продольная ось балки. Разворачиваем форму на
-/// +90° вокруг Z, чтобы физическая ось легла вдоль локального Y и совпала
-/// с мешем: поворот вокруг Z отображает X в Y.
-NewtonCylinderShape makeAxisYCylinder(float radius1, float radius2, float height,
-    NewtonPhysicsWorld world)
-{
-    auto shape = New!NewtonCylinderShape(radius1, radius2, height, world);
-    shape.setTransformation(rotationQuaternion(Vector3f(0, 0, 1), 0.5f * PI)
-        .toMatrix4x4);
-    return shape;
-}
-
-/// Плоская земля-heightfield для мира Newton: ровная плоскость XZ на y == 0,
-/// простирающаяся примерно на `halfExtent` в сторону origin (точный охват
-/// задаётся трансформацией тела в buildGround).
-///
-/// По измерениям Newton 3.14 строит по `size−1` клеток на сторону при аргументе
-/// `size` (поле от body-начала на (size−1)·cell), хотя буферы высот и атрибутов
-/// ожидает размера size². Поэтому создаём прямоугольник `cells+1 × cells+1`, а
-/// из ровной плоскости разница в одну клетку ничего не меняет.
-final class GroundHeightfield : NewtonCollisionShape
-{
-    // Newton 3.14 НЕ копирует height-данные: коллизия хранит указатели на
-    // них, поэтому массивы живут всё время жизни коллизии (освобождение —
-    // в деструкторе).
-    private float[] elevations_;
-    private ubyte[] attributes_;
-
-    /// Требуемый полуразмер поля; для вычисления переноса в buildGround.
-    float halfExtent;
-
-    this(float halfExtent, uint cells, NewtonPhysicsWorld world)
-    {
-        super(world);
-        this.halfExtent = halfExtent;
-
-        const uint size = cells + 1;
-        elevations_ = New!(float[])(size * size);
-        foreach (ref h; elevations_)
-            h = 0.0f;
-
-        attributes_ = New!(ubyte[])(size * size);
-        foreach (ref a; attributes_)
-            a = 0;
-
-        const float cell = 2.0f * halfExtent / cast(float)cells;
-        newtonCollision = NewtonCreateHeightFieldCollision(world.newtonWorld,
-            cast(int)size, cast(int)size, 1, // gridsDiagonals
-            0, // elevationdatType: float
-            elevations_.ptr, cast(char*)attributes_.ptr,
-            1.0f, // verticalScale
-            cell, cell, // horizontalScale по X и Z
-            0); // shapeId
-        NewtonCollisionSetUserData(newtonCollision, cast(void*)this);
-    }
-
-    ~this()
-    {
-        Delete(elevations_);
-        Delete(attributes_);
-    }
 }
 
 /// Причина обрыва заезда из-за каркаса: балка или колесо задели внешний объект.
@@ -440,32 +257,6 @@ bool structuralFailure(RunOutcome o)
     }
 }
 
-/// Ньютоновская библиотека грузится один раз на процесс: bindbc resolve
-/// символов динамической библиотеки не потокобезопасен, а физические заезды
-/// идут на пуле воркеров. Гвард — ОТКРЫТЫЙ (не потоково-локальный) мьютекс.
-private __gshared bool newtonLoaded_;
-private __gshared Object newtonLoadLock_ = new Object();
-
-/// Гарантировать загрузку libnewton.so перед созданием любого мира.
-void ensureNewtonLoaded()
-{
-    if (newtonLoaded_)
-        return;
-    synchronized (newtonLoadLock_)
-    {
-        if (!newtonLoaded_)
-        {
-            auto sup = loadNewton();
-            enforce(sup == NewtonSupport.newton314,
-                "Не загрузилась libnewton.so. В каталоге сборки должны лежать "
-                ~ "libnewton.so, libdgCore.so, libdgPhysics.so, libdgNewtonAvx.so "
-                ~ "(копируются из dagon:newton); при ручном запуске добавь их "
-                ~ "в LD_LIBRARY_PATH.");
-            newtonLoaded_ = true;
-        }
-    }
-}
-
 unittest
 {
     // Раскладка на старт учитывает генетический радиус каждого колеса: низ
@@ -503,36 +294,4 @@ unittest
         minZ = min(minZ, g.nodes[a.node].pos.z);
     assert(abs(offOld.z - (wheelRadius + dropHeight - minZ)) < 1e-5f,
         "радиус по умолчанию сохраняет прежнюю раскладку");
-}
-
-unittest
-{
-    // Поворот каркас→Newton задаёт образы осей базиса: right остаётся правым,
-    // up становится up Newton, forward — курсом Newton. Литерал хранится
-    // отдельно (см. `carToNewtonQuat`) — сверяем его через базис.
-    Quaternionf q = carToNewtonBasis();
-    const vec3 rx = q.rotate(right);
-    const vec3 ry = q.rotate(up);
-    const vec3 rz = q.rotate(forward);
-    assert(abs(rx.x - 1.0f) < 1e-5f && abs(rx.y) < 1e-5f && abs(rx.z) < 1e-5f,
-        "right каркаса остаётся правым в Newton");
-    assert(abs(ry.x) < 1e-5f && abs(ry.y - 1.0f) < 1e-5f && abs(ry.z) < 1e-5f,
-        "up каркаса становится up Newton");
-    assert(abs(rz.x) < 1e-5f && abs(rz.y) < 1e-5f && abs(rz.z - 1.0f) < 1e-5f,
-        "forward каркаса становится курсом Newton");
-}
-
-unittest
-{
-    // Группа материала грунта — отдельная подписанная группа, а не магическое
-    // число: не совпадает со стандартными default/sensor/kinematic мира.
-    ensureNewtonLoaded();
-    auto w = New!PhysicsWorld(cast(EventManager)null, cast(Owner)null);
-    scope (exit) Delete(w);
-    assert(w.soilGroupId == soilGroupIdOf(w),
-        "доступ к группе грунта через хелпер совпадает с полем");
-    assert(w.soilGroupId > 0 && w.soilGroupId != w.defaultGroupId
-        && w.soilGroupId != w.sensorGroupId
-        && w.soilGroupId != w.kinematicGroupId,
-        "грунт живёт в отдельной группе материалов");
 }

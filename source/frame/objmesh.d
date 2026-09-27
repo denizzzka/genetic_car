@@ -10,10 +10,9 @@
  * На выходе `ObjModel`:
  *  - рендер — `model.mesh` (dagon `Mesh`, данные готовы, VAO готовит вьюер),
  *    сущность вешается под carRoot;
- *  - физика — меш сам является `TriangleSet`, его напрямую потребляет
- *    `newBoundaryBody(model, world)`: статическое дерево-коллизия Newton,
- *    развёрнутое тем же поворотом «каркас → мир», что и остальные тела мира,
- *    поэтому ловит машину ровно там, где её видит рендер.
+ *  - физика — `newBoundaryBody(model, world)` строит из меша статическое
+ *    дерево-коллизию в координатах каркаса, поэтому граница ловит машину
+ *    ровно там, где её видит рендер.
  *
  * Координаты файла читаются в базисе каркаса машины (right = +X, forward = −Y,
  * up = +Z) и переводятся в метры через `ObjLoadOptions.scale` (исходник в мм).
@@ -35,10 +34,10 @@ import dlib.math.vector;
 
 import dagon.resource.obj;
 import dagon.graphics.mesh;
-import dagon.ext.newton;
 
 import frame.frame : origin, up, right, forward;
-import physics_world.physics : ensureNewtonLoaded, newtonBodyMatrix, PhysicsWorld;
+import physics_world.engine : PhysWorld, PhysBody, BodyRole, BodyMotion,
+    createPhysWorld;
 
 /// Параметры интерпретации OBJ-файла.
 struct ObjLoadOptions
@@ -114,26 +113,27 @@ private ObjModel buildObjModel(ubyte[] data, string filename,
     return model;
 }
 
-/// Tree-коллизия Newton из меша каркаса. Вершины остаются в координатах
-/// каркаса — ориентацию в мир несёт тело.
-NewtonMeshShape newtonTreeShape(Mesh mesh, NewtonPhysicsWorld world)
+/// Статическое тело-граница в мире: та же геометрия, что у `model.mesh`,
+/// и стоит в origin (точка старта машины).
+PhysBody newBoundaryBody(ObjModel model, PhysWorld world)
 {
-    ensureNewtonLoaded();
-    return New!NewtonMeshShape(mesh, world);
-}
-
-/// Статическое тело-граница в мире Newton: та же геометрия, что у
-/// `model.mesh`, развёрнутая поворотом «каркас → мир» и стоящая в origin
-/// (точка старта машины). Коллизия ловит машину ровно там, где рендер меша
-/// под carRoot.
-NewtonRigidBody newBoundaryBody(ObjModel model, NewtonPhysicsWorld world)
-{
-    auto shape = newtonTreeShape(model.mesh, world);
-    auto body = New!NewtonRigidBody(NewtonRigidBodyType.Static, shape, 0.0f,
-        world, world);
-    body.dynamic = false;
-    body.setTransformation(newtonBodyMatrix(origin, Quaternionf.identity));
-    body.update(0.0);
+    float[] vertices;
+    float[] normals;
+    uint[] indices;
+    foreach (triangle; model.mesh)
+    {
+        foreach (i, p; triangle.v)
+        {
+            vertices ~= [p.x, p.y, p.z];
+            normals ~= [triangle.n[i].x, triangle.n[i].y, triangle.n[i].z];
+            indices ~= cast(uint)(vertices.length / 3 - 1);
+        }
+    }
+    auto shape = world.triangleMeshShape(vertices, normals, indices);
+    auto body = world.createBody(BodyRole.obstacle, BodyMotion.staticBody,
+        shape, 0.0f);
+    body.setWorldPosition(origin);
+    body.syncPose();
     return body;
 }
 
@@ -243,20 +243,16 @@ unittest
 
 unittest
 {
-    import dagon.core.event : EventManager;
-    import dlib.core.ownership : Owner;
-
     if (!exists("assets/driver_seat_boundary.obj"))
         return;
 
-    ensureNewtonLoaded();
     auto model = loadObjMesh("assets/driver_seat_boundary.obj");
     scope (exit) Delete(model.asset);
 
-    auto world = New!PhysicsWorld(cast(EventManager) null, cast(Owner) null);
-    scope (exit) Delete(world);
+    auto world = createPhysWorld();
+    scope (exit) world.dispose();
 
     auto body = newBoundaryBody(model, world);
-    assert(body.newtonBody !is null, "граница создала тело в Newton");
-    assert(body.dynamic == false, "граница статична");
+    assert(body.role == BodyRole.obstacle, "граница — препятствие");
+    assert(body.worldPosition == Vector3f(origin), "граница стоит в origin");
 }
