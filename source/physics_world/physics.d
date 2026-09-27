@@ -6,7 +6,8 @@ import std.math : abs, PI;
 import dlib.math.vector;
 import dlib.math.quaternion;
 
-import frame.frame : Frame, Node, EphemeralBeam, Beam, Anchor, AnchorKind, origin;
+import frame.frame : Frame, Node, EphemeralBeam, Beam, Anchor, AnchorKind,
+    origin, frameBackward = backward, heightOf;
 
 /// Радиус колеса по умолчанию, м. Совпадает с внешним радиусом визуального
 /// тора и коллизионного цилиндра. Генетический радиус каждого колеса
@@ -97,7 +98,7 @@ vec3 placeOffset(const Frame f)
 
     float minBottom = float.max;
     foreach (a; f.anchors)
-        minBottom = min(minBottom, f.nodes[a.node].pos.z - a.radius);
+        minBottom = min(minBottom, heightOf(f.nodes[a.node].pos) - a.radius);
     const float dz = (minBottom < float.max) ? dropHeight - minBottom : 0.0f;
 
     return vec3(-c.x, -c.y, dz);
@@ -263,7 +264,7 @@ unittest
     // определяется самым нижним ободом (центр минус радиус), а не позицией
     // центра — большое колесо поднимает раму выше.
     Frame f;
-    f.nodes = [Node(origin), Node(vec3(0.0f, 1.0f, 0.0f))];
+    f.nodes = [Node(origin), Node(frameBackward)];
     f.beams = [new Beam(0, 1, 0.05f)];
     // Большое колесо (радиус 0.75 м) у узла 0, маленькое (0.05 м) у узла 1.
     f.anchors = [
@@ -273,11 +274,11 @@ unittest
 
     const off = placeOffset(f);
     // Нижний обод большого колеса: 0 - 0.75 = -0.75; подъём — на dropHeight.
-    assert(abs(off.z - (dropHeight + 0.75f)) < 1e-5f,
+    assert(abs(heightOf(off) - (dropHeight + 0.75f)) < 1e-5f,
         "раскладка садит низ большого колеса на dropHeight");
-    assert(abs((f.nodes[0].pos.z + off.z) - 0.75f - dropHeight) < 1e-5f,
+    assert(abs((heightOf(f.nodes[0].pos) + heightOf(off)) - 0.75f - dropHeight) < 1e-5f,
         "нижняя точка большого колеса оказывается над землёй ровно на dropHeight");
-    assert(abs((f.nodes[1].pos.z + off.z) - 0.05f - dropHeight) > 0.5f,
+    assert(abs((heightOf(f.nodes[1].pos) + heightOf(off)) - 0.05f - dropHeight) > 0.5f,
         "маленькое колесо парит над землёй — оно не задаёт плоскость старта");
 
     // Сравнение с прежним поведением: колёса одного базового радиуса.
@@ -291,7 +292,7 @@ unittest
     const offOld = placeOffset(g);
     float minZ = float.max;
     foreach (a; g.anchors)
-        minZ = min(minZ, g.nodes[a.node].pos.z);
-    assert(abs(offOld.z - (wheelRadius + dropHeight - minZ)) < 1e-5f,
+        minZ = min(minZ, heightOf(g.nodes[a.node].pos));
+    assert(abs(heightOf(offOld) - (wheelRadius + dropHeight - minZ)) < 1e-5f,
         "радиус по умолчанию сохраняет прежнюю раскладку");
 }

@@ -16,6 +16,7 @@ import frame.cockpit : loadCockpit;
 import frame.objmesh : ObjModel;
 import genetics;
 import physics_world;
+import viewer.scene : carToScenePos;
 import viewer.terrainvisualizer;
 
 class BuggyScene: Scene
@@ -294,10 +295,10 @@ class BuggyScene: Scene
         {
             if (fakeCarMode_)
             {
-                freeview.setTargetSmooth(-Vector3f(fakeFocus_));
+                freeview.setTargetSmooth(-carToScenePos(fakeFocus_));
             }
             else if (livePhysics !is null)
-                freeview.setTargetSmooth(-Vector3f(livePhysics.worldFocus));
+                freeview.setTargetSmooth(-carToScenePos(livePhysics.worldFocus));
         }
 
         // R — всегда вручную: новое 0-е поколение. Вне фоновой эволюции.
@@ -363,9 +364,7 @@ class BuggyScene: Scene
         {
             if (fakeCarMode_)
             {
-                // Диагональ вперёд-влево в базисе каркаса: forward + right·(-1)
-                // (сдвиг чисто по плоскости, высота не меняется).
-                // Диагональ вперёд-влево в базисе каркаса (forward·(-1) по Y,
+                // Диагональ вперёд-влево в базисе каркаса: forward·(-1) по Y,
                 // right·(-1) по X): сдвиг чисто по плоскости, высота плоская.
                 fakeFocus_ = fakeFocus_
                     + vec3(0.0f, -fakeCarSpeed_ * t.delta, 0.0f)
@@ -540,7 +539,7 @@ class BuggyScene: Scene
             // позиции — за это время машина уезжает по экрану в одну сторону,
             // а террайн (окно уже перецентрировано) выглядит «едущим » в другую.
             if (freeview !is null)
-                freeview.setTarget(-Vector3f(livePhysics.worldFocus));
+                freeview.setTarget(-carToScenePos(livePhysics.worldFocus));
 
             // По одному цилиндру на каждую физическую балку каркаса: порядок
             // совпадает с BeamState[] из beamStates() (по Frame.beams).

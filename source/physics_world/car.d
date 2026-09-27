@@ -17,7 +17,8 @@ import dlib.core.ownership;
 import frame.frame : origin, frameUp = up, frameForward = forward,
     frameRight = right, frameBackward = backward,
     Frame, Node, Beam, Anchor, AnchorKind, BeamKind,
-    asBeam, isConnected, initialMotorPower;
+    asBeam, isConnected, initialMotorPower,
+    heightOf, alongCourse, acrossCourse, courseYaw;
 import physics_world.engine;
 import physics_world.physics;
 import physics_world.terrain;
@@ -101,8 +102,8 @@ unittest
         assert(isFinite(s.position.x) && isFinite(s.position.y) && isFinite(s.position.z),
             "позиция колеса не конечна — машина разлетелась");
         const float g = physics.groundHeightAt(s.position.xyz);
-        assert(s.position.z > g + physicsWheelBelow, "колесо провалилось под землю");
-        assert(s.position.z <= g + wheelRadius + 0.25f, "колесо парит над землёй");
+        assert(heightOf(s.position) > g + physicsWheelBelow, "колесо провалилось под землю");
+        assert(heightOf(s.position) <= g + wheelRadius + 0.25f, "колесо парит над землёй");
     }
     foreach (s; physics.beamStates())
     {
@@ -169,8 +170,8 @@ unittest
         assert(isFinite(s.position.x) && isFinite(s.position.y) && isFinite(s.position.z),
             "позиция колеса не конечна — машина разлетелась");
         const float g = physics.groundHeightAt(s.position.xyz);
-        assert(s.position.z > g + physicsWheelBelow, "колесо провалилось под землю");
-        assert(s.position.z <= g + wheelRadius + 0.25f, "колесо парит над землёй");
+        assert(heightOf(s.position) > g + physicsWheelBelow, "колесо провалилось под землю");
+        assert(heightOf(s.position) <= g + wheelRadius + 0.25f, "колесо парит над землёй");
     }
 
     // Отрицательный момент должен развернуть машину: движение по backward.
@@ -360,7 +361,7 @@ final class BuggyPhysics
 
     /// Самая дальняя достигнутая точка по курсу (car-координата Y мастера);
     /// новый рекорд набега сбрасывает `stallTime_`.
-    private float forwardMinY_ = float.max;
+    private float forwardBest_ = -float.max;
 
     /// Машина-основа
     private const Buggy buggy_;
@@ -529,7 +530,7 @@ final class BuggyPhysics
                 const vec3 axle = w.worldRotation.rotate(Vector3f(0.0f, 1.0f, 0.0f));
                 const float spin = dot(axle, w.angularVelocity);
                 const float r = i < fr.anchors.length ? fr.anchors[i].radius : wheelRadius;
-                const float groundSpeed = abs(w.velocity.y);
+                const float groundSpeed = abs(alongCourse(w.velocity));
                 const float allowedSurface = min(
                     max(groundSpeed * (1.0f + wheelSlipRatio),
                         wheelLaunchSurfaceSpeed),
@@ -560,7 +561,7 @@ final class BuggyPhysics
         // считается по нему, а не по +Y.
         const vec3 heading = master.worldRotation.rotate(
             Vector3f(0.0f, -1.0f, 0.0f));
-        const float yawErr = atan2(heading.x, -heading.y);
+        const float yawErr = courseYaw(heading);
         const float cmdRaw = autoSteer ? steerGain * yawErr
             : steerJoint_.targetYaw;
         steerJoint_.targetYaw = clamp(cmdRaw, -steerLimitRad, steerLimitRad);
@@ -573,16 +574,15 @@ final class BuggyPhysics
     {
         if (master is null)
             return;
-        // По курсу — минус Y каркаса, как в fitness-метрике «продвижение вниз».
-        const float fwd = master.worldPosition.y;
-        if (fwd < forwardMinY_ - stallProgressEps)
+        const float fwd = alongCourse(master.worldPosition);
+        if (fwd > forwardBest_ + stallProgressEps)
         {
-            forwardMinY_ = fwd;
+            forwardBest_ = fwd;
             stallTime_ = 0.0;
         }
         else
         {
-            forwardMinY_ = min(forwardMinY_, fwd);
+            forwardBest_ = max(forwardBest_, fwd);
             stallTime_ += dt;
         }
     }
@@ -667,7 +667,7 @@ final class BuggyPhysics
         foreach (offset; cg.floorCorners)
         {
             const vec3 p = s.position.xyz + s.orientation.rotate(offset);
-            if (groundHeightAt(p) - p.z > 0.0f)
+            if (groundHeightAt(p) - heightOf(p) > 0.0f)
                 return true;
         }
         return false;
@@ -946,34 +946,37 @@ final class BuggyPhysics
             maxP.y = max(maxP.y, p.y);
             maxP.z = max(maxP.z, p.z);
         }
-        vec3 dims = maxP - minP;
-        dims.x = max(dims.x, 0.05f);
-        dims.y = max(dims.y, 0.05f);
-        dims.z = max(dims.z, 0.05f);
+        // Габариты рамы по осям каркаса: поперёк курса (ширина), вдоль курса
+        // (длина) и вверх (высота).
+        const vec3 box = maxP - minP;
+        const float width = max(box.x, 0.05f);
+        const float length = max(box.y, 0.05f);
+        const float height = max(box.z, 0.05f);
 
         // Инерция рамы как монолита о её ЦМ (AABB-аппроксимация), сдвинутая
         // параллельной осевой теоремой к общему ЦМ: I = I_own + m*D².
+        // Имена моментов — по оси вращения, а не по индексу компоненты.
         const vec3 dFrame = com - comTotal;
         const vec3 dCabin = comCabin - comTotal;
-        const float IxxFrame = (dims.y * dims.y + dims.z * dims.z) / 3.0f
+        const float iWidthFrame = (length * length + height * height) / 3.0f
             * totalMass + totalMass * (dFrame.y * dFrame.y + dFrame.z * dFrame.z);
-        const float IyyFrame = (dims.x * dims.x + dims.z * dims.z) / 3.0f
+        const float iLengthFrame = (width * width + height * height) / 3.0f
             * totalMass + totalMass * (dFrame.x * dFrame.x + dFrame.z * dFrame.z);
-        const float IzzFrame = (dims.x * dims.x + dims.y * dims.y) / 3.0f
+        const float iHeightFrame = (width * width + length * length) / 3.0f
             * totalMass + totalMass * (dFrame.x * dFrame.x + dFrame.y * dFrame.y);
 
         // Кабина: собственный тензор (16.7, 16.7, 8.5) + перенос её ЦМ.
         const float Mc = cockpitMass;
-        const float IxxCabin = cockpitInertia.x
+        const float iWidthCabin = cockpitInertia.x
             + Mc * (dCabin.y * dCabin.y + dCabin.z * dCabin.z);
-        const float IyyCabin = cockpitInertia.y
+        const float iLengthCabin = cockpitInertia.y
             + Mc * (dCabin.x * dCabin.x + dCabin.z * dCabin.z);
-        const float IzzCabin = cockpitInertia.z
+        const float iHeightCabin = cockpitInertia.z
             + Mc * (dCabin.x * dCabin.x + dCabin.y * dCabin.y);
 
         master.mass = totalMassC;
-        master.inertia = Vector3f(IxxFrame + IxxCabin, IyyFrame + IyyCabin,
-            IzzFrame + IzzCabin);
+        master.inertia = Vector3f(iWidthFrame + iWidthCabin,
+            iLengthFrame + iLengthCabin, iHeightFrame + iHeightCabin);
 
         master.setWorldPosition(comTotal);
         master.syncPose();
@@ -1129,7 +1132,7 @@ final class BuggyPhysics
             const vec3 dir = b.worldRotation.rotate(Vector3f(0.0f, 1.0f, 0.0f));
             const vec3 lowCar = b.worldPosition - dir * (beamLen[i] * 0.5f);
             const float ground = groundHeightAt(lowCar);
-            if (lowCar.z - asBeam(fr.beams[i]).radius < ground - beamGroundEps)
+            if (heightOf(lowCar) - asBeam(fr.beams[i]).radius < ground - beamGroundEps)
                 return true;
         }
         return false;
@@ -1152,7 +1155,7 @@ final class BuggyPhysics
         if (master is null)
             return origin;
         const vec3 p = master.worldPosition;
-        return p - frameUp * p.z;
+        return p - frameUp * heightOf(p);
     }
 
     /// Мир-позиция мастера (центр массы каркаса) в координатах каркаса —
@@ -1320,9 +1323,9 @@ RunOutcome runFailure(BuggyPhysics physics)
     // крене, отрыве или бугре переворотом не является. Допускаем до
     // `maxTiltDegrees` крена (вбок) и тангажа (вперёд/назад).
     const vec3 up = physics.bodyUp();
-    const float rollDeg = atan2(up.x, up.z) * 180.0f / PI;
-    const float pitchDeg = atan2(up.y, up.z) * 180.0f / PI;
-    if (abs(rollDeg) > maxTiltDegrees || abs(pitchDeg) > maxTiltDegrees)
+    const float rollDeg = abs(atan2(acrossCourse(up), heightOf(up))) * 180.0f / PI;
+    const float pitchDeg = abs(atan2(alongCourse(up), heightOf(up))) * 180.0f / PI;
+    if (rollDeg > maxTiltDegrees || pitchDeg > maxTiltDegrees)
         return RunOutcome.rolledOver;
 
     foreach (s; wheels)
@@ -1333,7 +1336,7 @@ RunOutcome runFailure(BuggyPhysics physics)
         // Локальная земля под колесом: 0 на плоскости, рельеф на поверхности.
         // Так колесо не «проваливается» на бугре и не «парит» над ложбиной.
         const float g = physics.groundHeightAt(s.position.xyz);
-        if (s.position.z < g + physicsWheelBelow)
+        if (heightOf(s.position) < g + physicsWheelBelow)
             return RunOutcome.wheelUnderground;
     }
 
@@ -1467,7 +1470,7 @@ unittest
     auto physics = new BuggyPhysics(new Buggy(placedFrame(uprightStubFrame())));
     scope (exit) physics.dispose();
     physics.settle(dt, 60);
-    assert(physics.bodyUp.z > uprightZ,
+    assert(heightOf(physics.bodyUp) > uprightZ,
         "усевшаяся машина стоит вертикально");
 
     // Кладём раму набок жёстким разворотом: крен переваливает за предел, и
@@ -1607,7 +1610,7 @@ unittest
             physics.step(dt, 1.0f);
             const vec3 heading = physics.masterBody.worldRotation.rotate(
                 Vector3f(0.0f, -1.0f, 0.0f));
-            const float err = atan2(heading.x, -heading.y);
+            const float err = courseYaw(heading);
             maxYawErr = max(maxYawErr, abs(err));
             lastYawErr = err;
         }

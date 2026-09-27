@@ -21,6 +21,19 @@ immutable vec3 down     = vec3( 0.0f,  0.0f, -1.0f);
 /// Начало координат каркаса (нулевой вектор).
 immutable vec3 origin = vec3(0.0f, 0.0f, 0.0f);
 
+/// Проекции на оси каркаса — обратная операция к базису выше. Нужны, потому
+/// что `y` — это назад, а не курс: положительное значение `alongCourse`
+/// означает ход вперёд, и читать `p.y` вместо него нельзя.
+float heightOf(const vec3 p) { return p.z; }
+float alongCourse(const vec3 p) { return -p.y; }
+float acrossCourse(const vec3 p) { return p.x; }
+
+/// Рыскание по направлению курса: положительное значение — вправо.
+float courseYaw(const vec3 heading)
+{
+    return atan2(acrossCourse(heading), alongCourse(heading));
+}
+
 /// Тип якоря (колеса).
 /// Колёса сделаны отдельными Anchor, а не общими "шарнирами", потому что
 /// более общие шарниры не позволяют применять оптимизации в физическом

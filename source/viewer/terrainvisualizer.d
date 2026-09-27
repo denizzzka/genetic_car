@@ -8,6 +8,7 @@ import dlib.math.vector;
 import dagon;
 
 import frame.frame : origin, frameForward = forward, frameRight = right;
+import viewer.scene : carToScenePos;
 import physics_world;
 
 /// Меш и сущность одного визуального тайла поверхности. Меши живут вне GC
@@ -209,8 +210,10 @@ final class TerrainVisualizer
                 const vec3 p = corner
                     + frameForward * (cast(float) kx * cell)
                     + frameRight * (cast(float) ky * cell);
-                // Точка угла тайла на плоскости, затем высота вверх (car +Z).
-                const vec3 v = p + vec3(0.0f, 0.0f, h);
+                // Сетка считается в координатах каркаса, а сущность тайла
+                // висит в корне сцены — переводим вершину и поднимаем по
+                // вертикали сцены (+Y).
+                const vec3 v = carToScenePos(p) + Vector3f(0.0f, h, 0.0f);
                 mesh.vertices[i] = v;
 
                 // Нормаль центральными разностями по сетке высот: вдоль
@@ -225,7 +228,10 @@ final class TerrainVisualizer
                     : tile.heights[kx * W + ky + 1];
                 const float gu = (hFw - hBk) / (2.0f * cell);
                 const float gv = (hRt - hLf) / (2.0f * cell);
-                mesh.normals[i] = Vector3f(-gu, -gv, 1.0f).normalized;
+                // Градиент вдоль курса даёт компоненту по Y каркаса, вдоль
+                // поперечной — по X: в базисе каркаса ось курса это -Y.
+                mesh.normals[i] = carToScenePos(
+                    Vector3f(-gv, gu, 1.0f)).normalized;
 
                 mesh.texcoords[i] = Vector2f(
                     cast(float) kx / cast(float)(W - 1),
