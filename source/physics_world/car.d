@@ -1172,7 +1172,7 @@ final class BuggyPhysics
             return Vector3f(0.0f, 0.0f, 1.0f);
         // Рама стоит над колёсами: вектор «компоновка − ступицы» и есть её
         // «верх» в координатах каркаса. Не зависит от осей фантомного тела.
-        vec3 hub;
+        vec3 hub = Vector3f(0.0f, 0.0f, 0.0f);
         size_t n;
         foreach (w; wheelBodies)
         {
@@ -1439,13 +1439,9 @@ unittest
 {
     // Застой по курсу — сход: без привода машина стоит на месте, и после
     // `stallSeconds` симуляционных секунд runFailure объявляет сход.
-    Frame f;
-    f.nodes = [Node(origin), Node(frameRight), Node(frameRight * 2.0f)];
-    f.beams = [new Beam(0, 1, 0.04f), new Beam(1, 2, 0.04f)];
-    f.anchors = [Anchor(0, AnchorKind.wheel), Anchor(2, AnchorKind.wheel)];
     const double dt = 1.0 / 60.0;
 
-    auto physics = new BuggyPhysics(new Buggy(placedFrame(f)));
+    auto physics = new BuggyPhysics(new Buggy(placedFrame(uprightStubFrame())));
     scope (exit) physics.dispose();
     physics.settle(dt, 30);
     assert(physics.stallTime() < stallSeconds
@@ -1458,6 +1454,30 @@ unittest
         "стоячая машина копит время застоя");
     assert(runFailure(physics) == RunOutcome.stalled,
         "застой по курсу — это тоже сход с дистанции");
+}
+
+unittest
+{
+    // Переворот ловится по наклону рамы. `bodyUp` — вектор «рама над
+    // колёсами», а не ось фантомного тела: у того тела локальные оси не
+    // совпадают с базисом каркаса, и мерить крен по нему бессмысленно.
+    const double dt = 1.0 / 60.0;
+    const float uprightZ = cos(maxTiltDegrees * PI / 180.0f);
+
+    auto physics = new BuggyPhysics(new Buggy(placedFrame(uprightStubFrame())));
+    scope (exit) physics.dispose();
+    physics.settle(dt, 60);
+    assert(physics.bodyUp.z > uprightZ,
+        "усевшаяся машина стоит вертикально");
+
+    // Кладём раму набок жёстким разворотом: крен переваливает за предел, и
+    // вердикт обязан стать переворотом — хотя ступицы всё ещё ниже рамы.
+    Quaternionf tilt = rotationBetween(frameUp, frameRight);
+    physics.masterBody.worldTransform(
+        tilt.rotate(physics.masterBody.worldPosition),
+        tilt * physics.masterBody.worldRotation);
+    assert(runFailure(physics) == RunOutcome.rolledOver,
+        "перевёрнутая рама — сход с дистанции, а не ровная езда");
 }
 
 unittest
@@ -1606,5 +1626,36 @@ unittest
             physics.step(dt, 1.0f);
         assert(runFailure(physics).length == 0,
             "обычный заезд не должен ломаться из-за руля");
+    }
+}
+
+version(unittest)
+{
+    /// Минимальный правдоподобный каркас: четыре колеса и стойка рамы над
+    /// плоскостью ступиц. Двухколёсная «палка» для проверок не годится:
+    /// `placedFrame` не находит у неё курс, и рама встаёт на бок.
+    private Frame uprightStubFrame()
+    {
+        Frame fr;
+        size_t node(vec3 p)
+        {
+            fr.nodes ~= Node(p);
+            return fr.nodes.length - 1;
+        }
+
+        const top = node(frameUp * 0.8f);
+        const frontLeft = node(vec3(0.6f, 0.7f, 0.3f));
+        const frontRight = node(vec3(-0.6f, 0.7f, 0.3f));
+        const rearLeft = node(vec3(0.6f, -0.7f, 0.3f));
+        const rearRight = node(vec3(-0.6f, -0.7f, 0.3f));
+        fr.beams ~= new Beam(frontLeft, frontRight, 0.045f);
+        fr.beams ~= new Beam(rearLeft, rearRight, 0.05f);
+        foreach (wheel; [frontLeft, frontRight, rearLeft, rearRight])
+            fr.beams ~= new Beam(top, wheel, 0.045f);
+        fr.anchors ~= Anchor(frontLeft, AnchorKind.wheel);
+        fr.anchors ~= Anchor(frontRight, AnchorKind.wheel);
+        fr.anchors ~= Anchor(rearLeft, AnchorKind.motorWheel);
+        fr.anchors ~= Anchor(rearRight, AnchorKind.motorWheel);
+        return fr;
     }
 }
