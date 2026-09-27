@@ -647,9 +647,9 @@ final class BuggyPhysics
         // каркаса: в пространство мастера его приводит тот же перевод, что и
         // всю геометрию. Ориентация наружу уходит в координатах каркаса, как у
         // балок (иначе при развороте машины кабина «плывёт» относительно рамы).
-        s.position = master.worldPosition
-            + master.worldRotation.rotate(cockpitLocal_);
-        s.orientation = master.worldRotation;
+        Quaternionf frameRot = master.worldFrameRotation;
+        s.position = master.worldPosition + frameRot.rotate(cockpitLocal_);
+        s.orientation = frameRot;
         return s;
     }
 
@@ -1173,11 +1173,11 @@ final class BuggyPhysics
     {
         if (master is null)
             return Vector3f(0.0f, 0.0f, 1.0f);
-        // Вертикаль рамы: локальная ось фантомного тела, переведённая его
-        // мировым поворотом. Локальные оси master не совпадают с базисом
-        // каркаса, поэтому за вертикаль берётся не frameUp.
-        Quaternionf worldRot = master.worldRotation;
-        return worldRot.rotate(frameBackward);
+        // Вертикаль рамы: её собственная ось в базисе каркаса, повёрнутая
+        // мировым поворотом мастера. Именно выровненный по каркасу поворот:
+        // у фантомного тела локальные оси развёрнуты относительно каркаса.
+        Quaternionf worldRot = master.worldFrameRotation;
+        return worldRot.rotate(frameUp);
     }
 
     /// Накопленное время симуляции без продвижения вперёд по курсу (-Y

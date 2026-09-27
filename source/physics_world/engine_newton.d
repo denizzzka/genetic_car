@@ -418,6 +418,14 @@ final class NewtonPhysBody : PhysBody
     override Vector3f worldPosition() @property { return toCarPos(body_.position.xyz); }
     override Quaternionf worldRotation() @property { return toCarRot(body_.rotation); }
 
+    override Quaternionf worldFrameRotation() @property
+    {
+        // `toCarRot` оставляет в повороте постоянный разворот осей фантома;
+        // домножаем на базис каркаса, и у неповёрнутого тела выходит тождество.
+        Quaternionf r = carToNewtonQuat;
+        return toCarRot(body_.rotation) * r;
+    }
+
     override void worldRotation(Quaternionf carRot) @property
     {
         // Вокруг текущего центра масс: иначе тело уедет из-под привязанных

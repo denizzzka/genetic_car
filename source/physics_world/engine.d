@@ -85,6 +85,11 @@ interface PhysBody
 
     Vector3f worldPosition() @property;
     Quaternionf worldRotation() @property;
+
+    /// Мировой поворот тела в базисе каркаса. Отличается от `worldRotation`
+    /// постоянной поправкой: у фантомного тела локальные оси развёрнуты
+    /// относительно каркаса, и без неё поворот уезжает на фиксированный угол.
+    Quaternionf worldFrameRotation() @property;
     /// Поворот вокруг текущего центра масс: геттеры обязаны видеть результат
     /// сразу, без шага симуляции.
     void worldRotation(Quaternionf carRot) @property;
