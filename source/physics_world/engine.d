@@ -85,6 +85,9 @@ interface PhysBody
 
     Vector3f worldPosition() @property;
     Quaternionf worldRotation() @property;
+    /// Поворот вокруг текущего центра масс: геттеры обязаны видеть результат
+    /// сразу, без шага симуляции.
+    void worldRotation(Quaternionf carRot) @property;
     void worldTransform(const vec3 carPos, const Quaternionf carRot) @property;
     /// Поставить тело в точку, не трогая ориентацию: у земли она не важна,
     /// а поворот «в единичную» в координатах каркаса — уже поворот в осях

@@ -418,14 +418,26 @@ final class NewtonPhysBody : PhysBody
     override Vector3f worldPosition() @property { return toCarPos(body_.position.xyz); }
     override Quaternionf worldRotation() @property { return toCarRot(body_.rotation); }
 
+    override void worldRotation(Quaternionf carRot) @property
+    {
+        // Вокруг текущего центра масс: иначе тело уедет из-под привязанных
+        // к нему колёс.
+        body_.setTransformation(
+            translationMatrix(toNewtonPos(body_.worldCenterOfMass))
+            * toNewtonRot(carRot).toMatrix4x4);
+        body_.update(0.0);
+    }
+
     override void worldTransform(const vec3 carPos, const Quaternionf carRot) @property
     {
         body_.setTransformation(carBodyMatrix(carPos, carRot));
+        body_.update(0.0);
     }
 
     override void setWorldPosition(const vec3 carPos)
     {
         body_.setTransformation(translationMatrix(toNewtonPos(carPos)));
+        body_.update(0.0);
     }
 
     override Vector3f velocity() @property { return toCarDir(body_.velocity); }
