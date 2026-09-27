@@ -5,7 +5,7 @@ import dagon.core.keycodes;
 import dagon.core.time;
 import core.thread : Thread;
 import core.atomic : atomicStore, atomicLoad;
-import std.algorithm : min, map, reduce;
+import std.algorithm : min, map, reduce, sort;
 import std.range : evenChunks;
 import std.array : array;
 import std.random;
@@ -127,6 +127,9 @@ class BuggyScene: Scene
 
     private Buggy[] liveBatch;
     private size_t liveBatchIdx;
+    /// Кандидаты текущей партии по убыванию фитнеса: перебор в порядке
+    /// needPhysics доходит до пригодной машины через десятки усадок.
+    private size_t[] liveOrder;
 
     // Гонка поколений: строится на главном потоке, физика считается в фоне.
     private Individual[] cur;
@@ -437,6 +440,10 @@ class BuggyScene: Scene
         setLiveCabinVisible(!debugSkeleton_);
     }
 
+    /// Сколько усадок успевает сделать живой просмотр за кадр: дальше окно
+    /// рискует не отрисовать следующий кадр.
+    enum size_t liveSettlePerFrame = 3;
+
     /// Показ/скрытие кабины живого заезда — кабина последняя в liveCar.
     private void setLiveCabinVisible(const bool on)
     {
@@ -471,6 +478,7 @@ class BuggyScene: Scene
         // по N) берёт машины уже нового поколения.
         liveBatch = null;
         liveBatchIdx = 0;
+        liveOrder = null;
         atomicStore(jobDone, false);
         jobThread = new Thread({
             runPhysics(batch, runCfg, jobGen);
@@ -484,6 +492,7 @@ class BuggyScene: Scene
     {
         liveBatch = null;
         liveBatchIdx = 0;
+        liveOrder = null;
     }
 
     private bool showNextLiveBuggy()
@@ -499,13 +508,23 @@ class BuggyScene: Scene
                     return false;
                 liveBatch = next;
                 liveBatchIdx = 0;
+                liveOrder = new size_t[next.length];
+                foreach (k; 0 .. next.length)
+                    liveOrder[k] = k;
+                liveOrder.sort!((a, b) => batch.res[batch.physIdx[b]].fitness
+                    > batch.res[batch.physIdx[a]].fitness);
             }
 
-            foreach (attempt; liveBatchIdx .. liveBatch.length)
+            // Усадка занимает около секунды, и она считается на главном потоке:
+            // без ограничения окно молчит, пока переберётся вся партия.
+            size_t tried;
+            foreach (attempt; liveOrder[liveBatchIdx .. $])
             {
-            Frame frame = liveBatch[attempt].frame;
-            if (frame.anchors.length < 2 || !canDrive(frame))
-                continue;
+                if (tried++ >= liveSettlePerFrame)
+                    return false;
+                Frame frame = liveBatch[attempt].frame;
+                if (frame.anchors.length < 2 || !canDrive(frame))
+                    continue;
 
             // Живой заезд — по той же процедурной поверхности, что и фитнес.
             auto physics = new BuggyPhysics(new Buggy(placedFrame(frame)),
@@ -583,7 +602,7 @@ class BuggyScene: Scene
             return true;
         }
 
-        liveBatchIdx = liveBatch.length;
+        liveBatchIdx = liveOrder.length;
         }
     }
 
