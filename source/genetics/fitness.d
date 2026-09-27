@@ -320,7 +320,6 @@ private RunOutcome frameCabinContact(const Frame f)
 
 enum double physicsDt = 1.0 / 60.0;
 enum double physicsSimSeconds = 120.0; ///< окно заезда, 2 минуты
-enum double physicsSettleSeconds = 1.0;
 enum float physicsNominalSpeed = 4.0f;    ///< м/с фитнеса — дистанция-норма
 enum float physicsSpeedCap = 2.0f;        ///< потолок бонуса за скорость доезда
 
@@ -359,15 +358,8 @@ PhysicsResult physicsFitness(const Buggy buggy, double seconds)
     auto physics = new BuggyPhysics(buggy, world, sharedTerrain());
     scope (exit) physics.dispose();
 
-    physics.settle(physicsDt,
-        cast(int)(physicsSettleSeconds / physicsDt));
-
-    const settleFailure = runFailure(physics);
-    if (settleFailure != RunOutcome.none)
-    {
-        r.why = settleFailure;
-        return r;
-    }
+    // Усадки-ворота нет: падение с dropHeight — часть заезда, и державшаяся
+    // полсекунды машина получает свою малую дистанцию, а не ноль.
 
     // Кабина неприкосновенна и в заезде: рама — монолит, взаимоположение
     // кабины и каркаса не меняется, поэтому геометрия корпуса проверяется

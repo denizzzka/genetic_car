@@ -440,10 +440,6 @@ class BuggyScene: Scene
         setLiveCabinVisible(!debugSkeleton_);
     }
 
-    /// Сколько усадок успевает сделать живой просмотр за кадр: дальше окно
-    /// рискует не отрисовать следующий кадр.
-    enum size_t liveSettlePerFrame = 3;
-
     /// Показ/скрытие кабины живого заезда — кабина последняя в liveCar.
     private void setLiveCabinVisible(const bool on)
     {
@@ -501,7 +497,7 @@ class BuggyScene: Scene
         // берём свежей из batch.needPhysics и начинаем заново.
         while (true)
         {
-            if (liveBatch is null || liveBatchIdx >= liveBatch.length)
+            if (liveBatch is null || liveBatchIdx >= liveOrder.length)
             {
                 auto next = batch.needPhysics;
                 if (next is liveBatch || next.length == 0)
@@ -515,94 +511,84 @@ class BuggyScene: Scene
                     > batch.res[batch.physIdx[a]].fitness);
             }
 
-            // Усадка занимает около секунды, и она считается на главном потоке:
-            // без ограничения окно молчит, пока переберётся вся партия.
-            size_t tried;
             foreach (attempt; liveOrder[liveBatchIdx .. $])
             {
-                if (tried++ >= liveSettlePerFrame)
-                    return false;
                 Frame frame = liveBatch[attempt].frame;
                 if (frame.anchors.length < 2 || !canDrive(frame))
                     continue;
+                spawnLiveBuggy(frame);
+                liveBatchIdx = attempt + 1;
+                return true;
+            }
 
-            // Живой заезд — по той же процедурной поверхности, что и фитнес.
-            auto physics = new BuggyPhysics(new Buggy(placedFrame(frame)),
-                sharedTerrain());
-            physics.settle(physicsDt,
-                cast(int)(physicsSettleSeconds / physicsDt));
-            const settleFailure = runFailure(physics);
-            if (settleFailure != RunOutcome.none)
-            {
-                writefln("live: заезд оборван после усадки (%s) — следующая машина",
-                    cast(string) settleFailure);
-                physics.dispose();
+            liveBatchIdx = liveOrder.length;
+        }
+    }
+
+    /// Ставит машину на старт и запускает живой заезд. Падение с `dropHeight`
+    /// входит в заезд, поэтому заведомо неустойчивая машина видна целиком:
+    /// сколько она простояла, столько и ехала.
+    private void spawnLiveBuggy(const Frame frame)
+    {
+        auto physics = new BuggyPhysics(new Buggy(placedFrame(frame)),
+            sharedTerrain());
+
+        if (livePhysics !is null)
+        {
+            livePhysics.dispose();
+            livePhysics = null;
+        }
+        removeLiveEntities();
+
+        livePhysics = physics;
+        liveSimTime = 0.0;
+        liveFailed_ = false;
+        liveFailTime = 0.0;
+
+        // Мгновенно садим камеру на нового багги: при старте заезда и при
+        // каждом N smoothTarget догонял бы цель несколько секунд с прежней
+        // позиции — за это время машина уезжает по экрану в одну сторону,
+        // а террайн (окно уже перецентрировано) выглядит «едущим » в другую.
+        if (freeview !is null)
+            freeview.setTarget(-carToScenePos(livePhysics.worldFocus));
+
+        // По одному цилиндру на каждую физическую балку каркаса: порядок
+        // совпадает с BeamState[] из beamStates() (по Frame.beams).
+        foreach (b; frame.beams)
+        {
+            const beam = cast(Beam) b;
+            if (beam is null)
                 continue;
-            }
-
-            if (livePhysics !is null)
-            {
-                livePhysics.dispose();
-                livePhysics = null;
-            }
-            removeLiveEntities();
-
-            liveBatchIdx = attempt + 1;
-            livePhysics = physics;
-            liveSimTime = 0.0;
-            liveFailed_ = false;
-            liveFailTime = 0.0;
-
-            // Мгновенно садим камеру на нового багги: при старте заезда и при
-            // каждом N smoothTarget догонял бы цель несколько секунд с прежней
-            // позиции — за это время машина уезжает по экрану в одну сторону,
-            // а террайн (окно уже перецентрировано) выглядит «едущим » в другую.
-            if (freeview !is null)
-                freeview.setTarget(-carToScenePos(livePhysics.worldFocus));
-
-            // По одному цилиндру на каждую физическую балку каркаса: порядок
-            // совпадает с BeamState[] из beamStates() (по Frame.beams).
-            foreach (b; frame.beams)
-            {
-                const beam = cast(Beam) b;
-                if (beam is null)
-                    continue;
-                const float len =
-                    (frame.nodes[b.b].pos - frame.nodes[b.a].pos).length;
-                auto e = addEntity(carRoot);
-                e.drawable = meshBeam;
-                e.material = matBeam;
-                e.scaling = Vector3f(beam.radius, len, beam.radius);
-                liveCar ~= e;
-            }
-
-            foreach (a; frame.anchors)
-            {
-                auto e = addEntity(carRoot);
-                e.drawable = meshWheel;
-                e.material = a.kind == AnchorKind.motorWheel ? matDriveWheel : matWheel;
-                // Масштаб под генетический радиус колеса, как и в витрине.
-                const float s = a.radius / wheelRadius;
-                e.scaling = Vector3f(s, s, s);
-                liveCar ~= e;
-            }
-
-            // Кабина: живёт в конце liveCar после всех балок и колёс; позицию
-            // и ориентацию на каждом шаге даёт мастер-тело (cockpitState).
-            auto eCab = addEntity(carRoot);
-            eCab.drawable = meshCockpit;
-            eCab.material = matCockpit;
-            liveCabIdx_ = liveCar.length;
-            liveCar ~= eCab;
-            if (debugSkeleton_)
-            {
-                eCab.visible = false;
-                buildLiveEphemeral();
-            }
-            return true;
+            const float len = (frame.nodes[b.b].pos - frame.nodes[b.a].pos).length;
+            auto e = addEntity(carRoot);
+            e.drawable = meshBeam;
+            e.material = matBeam;
+            e.scaling = Vector3f(beam.radius, len, beam.radius);
+            liveCar ~= e;
         }
 
-        liveBatchIdx = liveOrder.length;
+        foreach (a; frame.anchors)
+        {
+            auto e = addEntity(carRoot);
+            e.drawable = meshWheel;
+            e.material = a.kind == AnchorKind.motorWheel ? matDriveWheel : matWheel;
+            // Масштаб под генетический радиус колеса, как и в витрине.
+            const float s = a.radius / wheelRadius;
+            e.scaling = Vector3f(s, s, s);
+            liveCar ~= e;
+        }
+
+        // Кабина: живёт в конце liveCar после всех балок и колёс; позицию
+        // и ориентацию на каждом шаге даёт мастер-тело (cockpitState).
+        auto eCab = addEntity(carRoot);
+        eCab.drawable = meshCockpit;
+        eCab.material = matCockpit;
+        liveCabIdx_ = liveCar.length;
+        liveCar ~= eCab;
+        if (debugSkeleton_)
+        {
+            eCab.visible = false;
+            buildLiveEphemeral();
         }
     }
 
