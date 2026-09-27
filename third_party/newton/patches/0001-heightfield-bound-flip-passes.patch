@@ -1,0 +1,62 @@
+From c7d9f77afdaa9d7af6b2901012b4972ecdf0db9f Mon Sep 17 00:00:00 2001
+From: Denis Feklushkin <feklushkin.denis@gmail.com>
+Date: Sun, 27 Sep 2026 10:45:40 +0300
+Subject: [PATCH] HeightField: bound the flip passes by the region the first
+ pass filled
+
+GetCollidingFaces fills data->m_indices in a first pass that stops at
+DG_MAX_COLLIDING_FACES, then walks the same grid again to flip faces across
+the diagonals. The second walk tested only "index1 < maxIndex", which bounds
+the cell it starts at but not the neighbouring cell that it also reads and
+rewrites through "edgeMap + stepBase". When a convex covers more cells than
+the first pass had room for, the trailing cells are read from a region the
+first pass never wrote, so a leftover face index is used as an index into
+data->m_vertex and the code reads a vertex at a wild offset.
+
+Observed as a reproducible SIGSEGV inside GetCollidingFaces: the vertex
+pointer in the faulting instruction was a valid elevation buffer while the
+index register held a negative pointer-sized value, so the buffer was intact
+and only the index was garbage.
+
+Bound both flip loops by maxFlipIndex, the last cell whose two-cell span lies
+entirely inside the region the first pass filled.
+---
+ newton-3.14/sdk/dgPhysics/dgCollisionHeightField.cpp | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/newton-3.14/sdk/dgPhysics/dgCollisionHeightField.cpp b/newton-3.14/sdk/dgPhysics/dgCollisionHeightField.cpp
+index 806bc19..37bab2d 100644
+--- a/newton-3.14/sdk/dgPhysics/dgCollisionHeightField.cpp
++++ b/newton-3.14/sdk/dgPhysics/dgCollisionHeightField.cpp
+@@ -1064,12 +1064,18 @@ void dgCollisionHeightField::GetCollidingFaces (dgPolygonMeshDesc* const data) c
+ 
+ 		const int maxIndex = index;
+ 		dgInt32 stepBase = (x1 - x0) * (2 * 9);
++		// The first pass above stops at DG_MAX_COLLIDING_FACES, so cells beyond
++		// that point in data->m_indices were never written. Both passes below
++		// read and rewrite the neighbouring cell at edgeMap + stepBase, so the
++		// whole two-cell span has to be inside the region the first pass filled.
++		// Without this the leftovers of an earlier query are read as vertex indices.
++		const int maxFlipIndex = maxIndex - stepBase - (2 * 9);
+ 		for (dgInt32 z = z0; z < z1; z ++) {
+ 			const dgInt32 diagBase = m_width * z;
+ 			const dgInt32 triangleIndexBase = (z - z0) * stepBase;
+ 			for (dgInt32 x = x0; x < (x1 - 1); x ++) {
+ 				dgInt32 index1 = (x - x0) * (2 * 9) + triangleIndexBase;
+-				if (index1 < maxIndex) {
++				if (index1 <= maxFlipIndex) {
+ 					const dgInt32 code = (m_diagonals[diagBase + x] << 1) + m_diagonals[diagBase + x + 1];
+ 					const dgInt32* const edgeMap = &m_horizontalEdgeMap[code][0];
+ 				
+@@ -1100,7 +1106,7 @@ void dgCollisionHeightField::GetCollidingFaces (dgPolygonMeshDesc* const data) c
+ 			const dgInt32 triangleIndexBase = (x - x0) * (2 * 9);
+ 			for (dgInt32 z = z0; z < (z1 - 1); z ++) {	
+ 				dgInt32 index1 = (z - z0) * stepBase + triangleIndexBase;
+-				if (index1 < maxIndex) {
++				if (index1 <= maxFlipIndex) {
+ 					const dgInt32 diagBase = m_width * z;
+ 					const dgInt32 code = (m_diagonals[diagBase + x] << 1) + m_diagonals[diagBase + m_width + x];
+ 					const dgInt32* const edgeMap = &m_verticalEdgeMap[code][0];
+-- 
+2.53.0
+

@@ -23,3 +23,6 @@ libdgCore.so
 libdgNewtonAvx.so
 libdgPhysics.so
 libnewton.so
+
+# Кэш вендоренной сборки Ньютона (third_party/newton/build.sh)
+third_party/newton/.cache/
