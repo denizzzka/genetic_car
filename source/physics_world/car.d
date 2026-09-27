@@ -1173,22 +1173,11 @@ final class BuggyPhysics
     {
         if (master is null)
             return Vector3f(0.0f, 0.0f, 1.0f);
-        // Рама стоит над колёсами: вектор «компоновка − ступицы» и есть её
-        // «верх» в координатах каркаса. Не зависит от осей фантомного тела.
-        vec3 hub = Vector3f(0.0f, 0.0f, 0.0f);
-        size_t n;
-        foreach (w; wheelBodies)
-        {
-            if (w is null)
-                continue;
-            hub += w.worldPosition;
-            ++n;
-        }
-        if (n == 0)
-            return master.worldPosition;
-        hub /= cast(float) n;
-        const vec3 up = master.worldPosition - hub;
-        return up.length > 0.0f ? up.normalized : Vector3f(0.0f, 0.0f, 1.0f);
+        // Вертикаль рамы: локальная ось фантомного тела, переведённая его
+        // мировым поворотом. Локальные оси master не совпадают с базисом
+        // каркаса, поэтому за вертикаль берётся не frameUp.
+        Quaternionf worldRot = master.worldRotation;
+        return worldRot.rotate(frameBackward);
     }
 
     /// Накопленное время симуляции без продвижения вперёд по курсу (-Y
