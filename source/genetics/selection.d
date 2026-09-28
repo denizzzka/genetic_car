@@ -4,7 +4,7 @@ import std.algorithm : max;
 import std.range : iota;
 import std.random;
 import std.stdio : writefln;
-import std.parallelism : TaskPool, totalCPUs;
+import std.parallelism : TaskPool;
 
 import genetics.sge;
 import genetics.buggygrammar;
@@ -86,8 +86,10 @@ private TaskPool physicsPool()
     {
         if (physicsPool_ is null)
         {
-            const n = physicsPoolSize_ > 0 ? physicsPoolSize_
-                : max(1, (cast(size_t) totalCPUs * 3) / 4);
+            // Без флага потоков столько же, сколько миров в пуле физики:
+            // лишние воркеры только блокируются на его условии, а мир и его
+            // сетка земли — самые тяжёлые объекты в процессе.
+            const n = physicsPoolSize_ > 0 ? physicsPoolSize_ : maxPooledWorlds;
             physicsPool_ = new TaskPool(n);
             physicsPool_.isDaemon = true;
         }
