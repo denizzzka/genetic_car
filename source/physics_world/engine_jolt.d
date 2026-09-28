@@ -29,6 +29,10 @@ import physics_world.engine;
 /// которому модуль не задавали, падает как на этой машине.
 enum float joltDefaultGravity = 9.81f;
 
+/// Шаг миров пула нельзя гонять параллельно: joltc держит для всех систем
+/// один TempAllocator, и общий LIFO-стек ломается в "Freeing in the wrong order".
+private __gshared Object updateLock_ = new Object();
+
 /// Радиус скругления формы Jolt. Меньше нуля Jolt не берёт, а большой съедает
 /// габариты тонких балок.
 private enum float convexRadius = 0.005f;
@@ -852,7 +856,8 @@ final class JoltPhysWorld : PhysWorld
     override void step(double dt)
     {
         ctx_.log.clear();
-        JPH_PhysicsSystem_Update(system_, cast(float) dt, 1, jobs_);
+        synchronized (updateLock_)
+            JPH_PhysicsSystem_Update(system_, cast(float) dt, 1, jobs_);
         foreach (b; bodiesOwned_)
             b.readBackPose();
     }
