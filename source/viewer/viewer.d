@@ -543,6 +543,15 @@ class BuggyScene: Scene
         disposeLivePhysics();
         removeLiveEntities();
 
+        import physics_world.engineselect: simLock;
+        if (auto lk = simLock)
+            synchronized (lk)
+                return spawnLiveBuggyRun(frame);
+        spawnLiveBuggyRun(frame);
+    }
+
+    private void spawnLiveBuggyRun(const Frame frame)
+    {
         liveWorld = acquireWorld();
         livePhysics = new BuggyPhysics(new Buggy(placedFrame(frame)),
             liveWorld, sharedTerrain());
@@ -744,6 +753,17 @@ class BuggyScene: Scene
 
     /// Снос живого заезда и возврат его мира в пул.
     private void disposeLivePhysics()
+    {
+        // Разбор сцены идёт под тем же замком, что и заезды воркеров: Jolt
+        // не переносит, когда один мир разбирают, пока другой шагает.
+        import physics_world.engineselect: simLock;
+        if (auto lk = simLock)
+            synchronized (lk)
+                return disposeLivePhysicsRun();
+        disposeLivePhysicsRun();
+    }
+
+    private void disposeLivePhysicsRun()
     {
         if (livePhysics !is null)
         {

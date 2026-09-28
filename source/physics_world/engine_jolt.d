@@ -31,7 +31,19 @@ enum float joltDefaultGravity = 9.81f;
 
 /// Шаг миров пула нельзя гонять параллельно: joltc держит для всех систем
 /// один TempAllocator, и общий LIFO-стек ломается в "Freeing in the wrong order".
+/// Под тем же замком идёт работа с фигурами: пересборка окна земли на ходу
+/// создаёт и убивает heightfield посреди чужого шага, и Jolt от этого
+/// рассыпается — падает то в CreateShape, то в освобождении шарнира.
 private __gshared Object updateLock_ = new Object();
+
+/// Замок на всё время работы с миром, а не только на шаг. Jolt переносит
+/// параллельные миры плохо: сцена одного мира (тела, шарниры, фигуры) портит
+/// соседний, и это стоит дороже, чем даёт выигрыш в потоках, — замер показал
+/// одинаковое время при одном и двух воркерах.
+Object joltLock() @property
+{
+    return updateLock_;
+}
 
 /// Радиус скругления формы Jolt. Меньше нуля Jolt не берёт, а большой съедает
 /// габариты тонких балок.
@@ -366,13 +378,15 @@ final class JoltPhysBody : PhysBody
         // борт.
         JPH_Shape* geom = shape.inner;
         if (comOffset_ != vec3(0.0f, 0.0f, 0.0f))
-        {
-            JPH_Vec3 off = world_.toEngineDir(comOffset_);
-            JPH_OffsetCenterOfMassShapeSettings* cs =
-                JPH_OffsetCenterOfMassShapeSettings_Create2(&off, geom);
-            geom = cast(JPH_Shape*) JPH_OffsetCenterOfMassShapeSettings_CreateShape(cs);
-            JPH_ShapeSettings_Destroy(cast(JPH_ShapeSettings*) cs);
-        }
+            synchronized (updateLock_)
+            {
+                JPH_Vec3 off = world_.toEngineDir(comOffset_);
+                JPH_OffsetCenterOfMassShapeSettings* cs =
+                    JPH_OffsetCenterOfMassShapeSettings_Create2(&off, geom);
+                geom = cast(JPH_Shape*)
+                    JPH_OffsetCenterOfMassShapeSettings_CreateShape(cs);
+                JPH_ShapeSettings_Destroy(cast(JPH_ShapeSettings*) cs);
+            }
 
         const auto pose = world_.pose(this);
         JPH_RVec3 pos = world_.toEnginePos(pose.pos);
@@ -912,7 +926,9 @@ final class JoltPhysWorld : PhysWorld
     {
         JPH_Vec3 h = halfExtent;
         JPH_BoxShapeSettings* cs = JPH_BoxShapeSettings_Create(&h, convexRadius);
-        return keepShape(cast(JPH_Shape*) JPH_BoxShapeSettings_CreateShape(cs), cs);
+        synchronized (updateLock_)
+            return keepShape(cast(JPH_Shape*)
+                JPH_BoxShapeSettings_CreateShape(cs), cs);
     }
 
     /// Ось цилиндра Jolt уже вдоль локальной Y — как требует модель, — в
@@ -920,17 +936,20 @@ final class JoltPhysWorld : PhysWorld
     /// сужается к ободу, поэтому форма конусная.
     override PhysShape cylinderShape(float radius1, float radius2, float height)
     {
-        if (radius1 != radius2)
+        synchronized (updateLock_)
         {
-            auto cs = JPH_TaperedCylinderShapeSettings_Create(height * 0.5f,
-                radius1, radius2, convexRadius, null);
+            if (radius1 != radius2)
+            {
+                auto cs = JPH_TaperedCylinderShapeSettings_Create(height * 0.5f,
+                    radius1, radius2, convexRadius, null);
+                return keepShape(cast(JPH_Shape*)
+                    JPH_TaperedCylinderShapeSettings_CreateShape(cs), cs);
+            }
+            auto cy = JPH_CylinderShapeSettings_Create(height * 0.5f, radius1,
+                convexRadius);
             return keepShape(cast(JPH_Shape*)
-                JPH_TaperedCylinderShapeSettings_CreateShape(cs), cs);
+                JPH_CylinderShapeSettings_CreateShape(cy), cy);
         }
-        auto cy = JPH_CylinderShapeSettings_Create(height * 0.5f, radius1,
-            convexRadius);
-        return keepShape(cast(JPH_Shape*)
-            JPH_CylinderShapeSettings_CreateShape(cy), cy);
     }
 
     /// Статическая геометрия: Jolt строит дерево по индексам, нормали вершин
@@ -954,7 +973,9 @@ final class JoltPhysWorld : PhysWorld
         }
         JPH_MeshShapeSettings* cs = JPH_MeshShapeSettings_Create2(vs.ptr, nv,
             ts.ptr, nt);
-        return keepShape(cast(JPH_Shape*) JPH_MeshShapeSettings_CreateShape(cs), cs);
+        synchronized (updateLock_)
+            return keepShape(cast(JPH_Shape*)
+                JPH_MeshShapeSettings_CreateShape(cs), cs);
     }
 
     /// Ровная земля: плоскость Jolt бесконечна и стоит в нуле по высоте, а тело
@@ -968,8 +989,10 @@ final class JoltPhysWorld : PhysWorld
         plane.distance = 0.0f;
         JPH_PlaneShapeSettings* cs = JPH_PlaneShapeSettings_Create(&plane, null,
             2.0f * halfExtent);
-        auto shape = keepShape(cast(JPH_Shape*)
-            JPH_PlaneShapeSettings_CreateShape(cs), cs);
+        PhysShape shape;
+        synchronized (updateLock_)
+            shape = keepShape(cast(JPH_Shape*)
+                JPH_PlaneShapeSettings_CreateShape(cs), cs);
         auto b = createBody(BodyRole.ground, BodyMotion.staticBody, shape, 0.0f);
         b.setWorldPosition(vec3(0.0f, 0.0f, topZ));
         b.syncPose();
@@ -998,8 +1021,10 @@ final class JoltPhysWorld : PhysWorld
         JPH_Vec3 scale = JPH_Vec3(cell, 1.0f, cell);
         JPH_HeightFieldShapeSettings* cs = JPH_HeightFieldShapeSettings_Create(
             samples.ptr, &offset, &scale, n, null);
-        auto shape = keepShape(cast(JPH_Shape*)
-            JPH_HeightFieldShapeSettings_CreateShape(cs), cs);
+        PhysShape shape;
+        synchronized (updateLock_)
+            shape = keepShape(cast(JPH_Shape*)
+                JPH_HeightFieldShapeSettings_CreateShape(cs), cs);
         auto b = createBody(BodyRole.ground, BodyMotion.staticBody, shape, 0.0f);
         // Высоты Jolt идут по локальной +Y, а вертикаль рельефа — up (car-z);
         // поворот тела не совместит оси (нужно зеркало), поэтому поле ставится
@@ -1036,7 +1061,8 @@ final class JoltPhysWorld : PhysWorld
         JPH_Shape* inner = s.inner;
         s.inner = null;
         untrackShape(cast(void*) inner);
-        JPH_Shape_Destroy(inner);
+        synchronized (updateLock_)
+            JPH_Shape_Destroy(inner);
     }
 
     override PhysAxleJoint newAxleJoint(PhysBody wheel, PhysBody master,
@@ -1159,7 +1185,8 @@ final class JoltPhysWorld : PhysWorld
         bodiesOwned_ = null;
         poses_ = null;
         foreach (s; shapes_)
-            JPH_Shape_Destroy(cast(JPH_Shape*) s);
+            synchronized (updateLock_)
+                JPH_Shape_Destroy(cast(JPH_Shape*) s);
         shapes_ = null;
         ctx_.log.clear();
     }

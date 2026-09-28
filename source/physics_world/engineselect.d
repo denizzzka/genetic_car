@@ -95,6 +95,14 @@ PhysWorld createPhysWorld()
     }
 }
 
+/// Замок движка на время заезда. У Jolt миры из разных потоков портят друг
+/// друга, поэтому заезд идёт под замком; у Newton своего общего состояния
+/// нет, и там возвращается null — заезды идут параллельно.
+Object simLock() @property
+{
+    return selected_ == PhysicsEngine.jolt ? joltLock : null;
+}
+
 /// Умеет ли движок рулевую балку. У Jolt рулевой шарнир — заглушка, поэтому
 /// тесты руля на нём не имеют смысла.
 bool engineHasSteerJoint() @property

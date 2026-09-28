@@ -337,6 +337,17 @@ struct PhysicsResult
 /// Счёт — доля полной дистанции × средняя скорость доезда (в долях номинала).
 PhysicsResult physicsFitness(const Buggy buggy, double seconds)
 {
+    import physics_world.engineselect: simLock;
+    // Движок, миры которого нельзя крутить из нескольких потоков, требует
+    // заезда целиком под замком — иначе сцена одного мира портит соседний.
+    if (auto lk = simLock)
+        synchronized (lk)
+            return physicsFitnessRun(buggy, seconds);
+    return physicsFitnessRun(buggy, seconds);
+}
+
+private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
+{
     PhysicsResult r;
     r.wheels = buggy.frame.anchors.length;
 
