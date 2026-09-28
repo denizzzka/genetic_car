@@ -817,8 +817,8 @@ final class NewtonPhysWorld : PhysWorld
         }
         auto s = cast(Shape) shape;
         enforce(s !is null, "форма выдана не этим бэкендом");
-        if (s.inner !is null)
-            shapes_ ~= s.inner;
+        // Форму регистрирует её фабрика: повторная запись дала бы в shapes_
+        // два указателя на неё, и clearScene() снёс бы её дважды.
         auto b = New!NewtonPhysBody(this, role, t, s.inner, mass, newton);
         bodies_ ~= b.body_;
         return b;
