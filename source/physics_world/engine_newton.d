@@ -328,6 +328,14 @@ private final class FlatHeightfield : NewtonCollisionShape
 
     ~this()
     {
+        // Порядок обязателен: Newton держит на высотах указатель, поэтому
+        // коллизия должна умереть раньше буферов, а базовый деструктор
+        // после обнуления указателя уже ничего не трогает.
+        if (newtonCollision)
+        {
+            NewtonDestroyCollision(newtonCollision);
+            newtonCollision = null;
+        }
         Delete(elevations_);
         Delete(attributes_);
     }
@@ -360,6 +368,14 @@ private final class WindowHeightfield : NewtonCollisionShape
 
     ~this()
     {
+        // Порядок обязателен: Newton держит на высотах указатель, поэтому
+        // коллизия должна умереть раньше буферов, а базовый деструктор
+        // после обнуления указателя уже ничего не трогает.
+        if (newtonCollision)
+        {
+            NewtonDestroyCollision(newtonCollision);
+            newtonCollision = null;
+        }
         Delete(elevations_);
         Delete(attributes_);
     }
@@ -675,6 +691,15 @@ final class NewtonPhysWorld : PhysWorld
     SoilWorld newton;
     ContactLog log_;
 
+    /// Всё, что мир отдал за заезд. Формы, тела и шарниры числятся у мира
+    /// (`dlib.Owner`) и живут до его гибели, а пул миры не уничтожает —
+    /// без этих списков каждый заезд навечно оставлял бы миру свои объекты
+    /// (`NewtonDestroyAllBodies` сносит только тела Newton, но не их
+    /// обёртки, не формы и не шарниры).
+    private NewtonConstraint[] joints_;
+    private NewtonSensorBody[] bodies_;
+    private NewtonCollisionShape[] shapes_;
+
     this()
     {
         ensureNewtonLoaded();
@@ -694,7 +719,8 @@ final class NewtonPhysWorld : PhysWorld
 
     override PhysShape boxShape(const vec3 halfExtent)
     {
-        return New!Shape(New!NewtonBoxShape(halfExtent, newton));
+        shapes_ ~= New!NewtonBoxShape(halfExtent, newton);
+        return New!Shape(shapes_[$ - 1]);
     }
 
     /// Цилиндр Newton создаётся с осью вдоль локальной X, а весь остальной
@@ -705,6 +731,7 @@ final class NewtonPhysWorld : PhysWorld
         auto shape = New!NewtonCylinderShape(radius1, radius2, height, newton);
         shape.setTransformation(
             rotationQuaternion(Vector3f(0, 0, 1), 0.5f * PI).toMatrix4x4);
+        shapes_ ~= shape;
         return New!Shape(shape);
     }
 
@@ -713,12 +740,14 @@ final class NewtonPhysWorld : PhysWorld
     override PhysShape triangleMeshShape(const float[] vertices,
         const float[] normals, const uint[] indices)
     {
-        return New!Shape(New!TreeShape(newton, vertices, normals, indices));
+        shapes_ ~= New!TreeShape(newton, vertices, normals, indices);
+        return New!Shape(shapes_[$ - 1]);
     }
 
     override PhysBody createFlatGround(float halfExtent, uint cells, float topZ)
     {
-        auto shape = New!Shape(New!FlatHeightfield(newton, halfExtent, cells));
+        shapes_ ~= New!FlatHeightfield(newton, halfExtent, cells);
+        auto shape = New!Shape(shapes_[$ - 1]);
         // Верх земли — car-Z `topZ`, в Newton это плоскость Y; её левый
         // нижний угол уезжает по −Y (вперёд), то есть по +car-Y.
         auto b = createBody(BodyRole.ground, BodyMotion.staticBody, shape, 0.0f);
@@ -730,8 +759,8 @@ final class NewtonPhysWorld : PhysWorld
     override PhysBody createHeightfieldGround(const float[] heights, uint dims,
         float cell, const vec3 corner)
     {
-        auto shape = New!Shape(
-            New!WindowHeightfield(newton, heights, dims, cell));
+        shapes_ ~= New!WindowHeightfield(newton, heights, dims, cell);
+        auto shape = New!Shape(shapes_[$ - 1]);
         auto b = createBody(BodyRole.ground, BodyMotion.staticBody, shape, 0.0f);
         b.setWorldPosition(corner);
         b.syncPose();
@@ -750,7 +779,11 @@ final class NewtonPhysWorld : PhysWorld
         }
         auto s = cast(Shape) shape;
         enforce(s !is null, "форма выдана не этим бэкендом");
-        return New!NewtonPhysBody(this, role, t, s.inner, mass, newton);
+        if (s.inner !is null)
+            shapes_ ~= s.inner;
+        auto b = New!NewtonPhysBody(this, role, t, s.inner, mass, newton);
+        bodies_ ~= b.body_;
+        return b;
     }
 
     override void destroyBody(PhysBody body)
@@ -761,13 +794,16 @@ final class NewtonPhysWorld : PhysWorld
         // Тело снесено движком, обёртка и её форма — нами: иначе висят
         // указатели на высоты heightfield'а.
         NewtonDestroyBody(b.body_.newtonBody);
+        untrack(bodies_, b.body_);
         newton.deleteOwnedObject(b.body_);
     }
 
     override PhysAxleJoint newAxleJoint(PhysBody wheel, PhysBody master,
         const vec3 pivotMaster)
     {
-        return New!AxleJoint(wheel, master, pivotMaster);
+        auto j = New!AxleJoint(wheel, master, pivotMaster);
+        joints_ ~= j;
+        return j;
     }
 
     override PhysSteerJoint newSteerJoint(PhysBody steer, PhysBody master,
@@ -801,9 +837,35 @@ final class NewtonPhysWorld : PhysWorld
         }
     }
 
+    /// Снять объект с учёта: `deleteOwnedObject` сравнивает указатели, и
+    /// оставшийся в списке освобождённый адрес однажды совпал бы с новым
+    /// живым объектом.
+    private static void untrack(T)(ref T[] list, T obj)
+    {
+        foreach (i, x; list)
+            if (x is obj)
+            {
+                list[i] = list[$ - 1];
+                list.length = list.length - 1;
+                return;
+            }
+    }
+
     override void clearScene()
     {
+        // Порядок обязателен: шарнир ссылается на тела, а форма держит
+        // указатель на буферы высот, поэтому сначала шарниры, потом тела,
+        // потом формы.
+        foreach (j; joints_)
+            newton.deleteOwnedObject(j);
         NewtonDestroyAllBodies(newton.newtonWorld);
+        foreach (b; bodies_)
+            newton.deleteOwnedObject(b);
+        foreach (sh; shapes_)
+            newton.deleteOwnedObject(sh);
+        joints_ = null;
+        bodies_ = null;
+        shapes_ = null;
         log_.clear();
     }
 
