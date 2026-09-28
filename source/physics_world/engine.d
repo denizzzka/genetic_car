@@ -163,9 +163,23 @@ interface PhysWorld
     /// Шаг симуляции.
     void step(double dt);
 
-    /// Считать мир на вызывающем потоке, без пула: заезд длится один шаг,
-    /// а пул физики уже держит зуботистую очередь Newton.
+    /// Считать мир на вызывающем потоке, без побочных потоков движка: заезд
+    /// длится один шаг, а внутренние потоки Newton и так живут в пуле.
     void useCallingThread();
+
+    /// Оси базиса в координатах каркаса: каркасные right/forward/up. Бэкенды
+    /// переопределяют: внутри оси движка другие, наружу — всегда каркасные.
+    immutable vec3 right() @property;
+    immutable vec3 forward() @property;
+    immutable vec3 up() @property;
+
+    /// Перевод координат и векторов между базисом каркаса и базисом движка.
+    vec3 toEnginePos(const vec3 carPos);
+    vec3 toCarPos(const vec3 enginePos);
+    vec3 toEngineDir(const vec3 carDir);
+    vec3 toCarDir(const vec3 engineDir);
+    Quaternionf toEngineRot(const Quaternionf carRot);
+    Quaternionf toCarRot(const Quaternionf engineRot);
 
     PhysShape boxShape(const vec3 halfExtent);
     /// Цилиндр с осью вдоль локальной Y — оси мешей модели (продольная
@@ -218,9 +232,10 @@ interface PhysWorld
     void dispose();
 }
 
-/// Создать мир выбранного движка — единственное место, где модель знает про
-/// бэкенд. Подмена движка это другая реализация `PhysWorld` плюс правка
-/// этой строки.
-static import physics_world.engine_newton;
+/// Создать мир выбранного движка. Само имя движка здесь не упоминается: его
+/// выбирает `physics_world.engineselect` (флаг `--engine`), а бэкенды —
+/// `physics_world.engine_jolt` и `physics_world.engine_newton` — лежат по
+/// сторонам и не знают друг о друге.
+static import physics_world.engineselect;
 
-alias createPhysWorld = physics_world.engine_newton.createPhysWorld;
+alias createPhysWorld = physics_world.engineselect.createPhysWorld;
