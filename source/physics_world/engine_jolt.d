@@ -835,11 +835,37 @@ final class JoltPhysWorld : PhysWorld
 
     private void createJobs()
     {
-        JobSystemThreadPoolConfig cfg;
-        cfg.maxJobs = 512;
-        cfg.maxBarriers = 8;
-        cfg.numThreads = jobThreads_;
-        jobs_ = JPH_JobSystemThreadPool_Create(&cfg);
+        if (jobThreads_ > 0)
+        {
+            JobSystemThreadPoolConfig cfg;
+            cfg.maxJobs = 512;
+            cfg.maxBarriers = 8;
+            cfg.numThreads = jobThreads_;
+            jobs_ = JPH_JobSystemThreadPool_Create(&cfg);
+        }
+        else
+        {
+            // Джобы C++ гонят вне D-рантайма: воркер не регистрируется в GC и
+            // колбэки контактов, читающие ассоциативные массивы мира, ловят
+            // сборку памяти под ногами. Вызывающему потоку это не грозит.
+            JPH_JobSystemConfig cfg;
+            cfg.queueJob = &runInline;
+            cfg.queueJobs = &runInlineMany;
+            cfg.maxConcurrency = 1;
+            cfg.maxBarriers = 8;
+            jobs_ = JPH_JobSystemCallback_Create(&cfg);
+        }
+    }
+
+    private static extern(C) void runInline(void* context, JPH_JobFunction job, void* arg)
+    {
+        job(arg);
+    }
+
+    private static extern(C) void runInlineMany(void* context, JPH_JobFunction job, void** args, uint count)
+    {
+        foreach (i; 0 .. count)
+            job(args[i]);
     }
 
     override void useCallingThread()
