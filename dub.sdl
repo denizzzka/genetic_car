@@ -4,6 +4,7 @@ authors "Denis Feklushkin"
 copyright "Copyright © 2026, Denis Feklushkin"
 license "proprietary"
 dependency "dagon" version="~>1.6.0"
+dependency "dagon:jolt" version="~>1.6.0"
 dependency "dagon:newton" version="~>1.6.0"
 dependency "fast_noise" version="~>1.0.5"
 
@@ -11,8 +12,9 @@ dependency "fast_noise" version="~>1.0.5"
 // в frame.cockpit; кортеж разрешается из assets на этапе компиляции.
 stringImportPaths "assets"
 
-// Копии libnewton.so + libdg*.so (copyFiles из dagon:newton) складываются в
-// корень проекта; dlopen по имени ищет их только через LD_LIBRARY_PATH,
-// поэтому dub run обязан выставлять его перед запуском целевой программы.
+// Копии libnewton.so, libjoltc.so и libdg*.so (copyFiles из dagon:newton и
+// dagon:jolt) складываются в корень проекта; dlopen по имени ищет их только
+// через LD_LIBRARY_PATH, поэтому dub run обязан выставлять его перед запуском
+// целевой программы.
 // $ROOT_PACKAGE_DIR подставляется dub'ом и равно корневому каталогу пакета.
 runEnvironments "LD_LIBRARY_PATH" "$ROOT_PACKAGE_DIR"
