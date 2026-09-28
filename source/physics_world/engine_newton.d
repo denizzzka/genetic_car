@@ -123,11 +123,22 @@ private Vector3f newtonGravity(float accel)
  * Пишут сюда колбэки C++, читает модель. Живёт отдельно от мира, чтобы
  * колбэкам не нужно было знать тип мира (они приходят из движка и видят
  * только указатели на тела).
+ *
+ * Журнал хранится ПО ЗНАЧЕНИЮ в `NewtonPhysWorld` и держит буфер пар в
+ * dlib-памяти. Пока он был GC-классом, единственные ссылки на него жили
+ * в dlib-указателях (мир и сенсорные тела), а GC такую память не
+ * обходит: под давлением аллокаций журнал уходил в free-list и
+ * переписывался чужыми данными прямо во время заезда — зависание и
+ * SIGSEGV в разборе контактов.
  * ------------------------------------------------------------------ */
 
-final class ContactLog
+struct ContactLog
 {
-    ContactPair[] pairs;
+    /// Буфер пар в dlib-памяти: GC-объекты из мира его не увидят.
+    private ContactPair[] buf_;
+    private size_t len_;
+
+    const(ContactPair)[] pairs() const { return buf_[0 .. len_]; }
 
     /// Повторы гасим: сенсорный диспетчер и материальный колбэк могут
     /// сообщить одну пару дважды, а вердикту важно лишь «было». Контактов на
@@ -136,15 +147,42 @@ final class ContactLog
     {
         if (a is null || b is null || a is b)
             return;
-        foreach (p; pairs)
-            if (p.a is a && p.b is b)
+        foreach (i; 0 .. len_)
+            if (buf_[i].a is a && buf_[i].b is b)
                 return;
-        pairs ~= ContactPair(a, b);
+        if (len_ == buf_.length)
+            grow();
+        buf_[len_++] = ContactPair(a, b);
     }
 
     void clear()
     {
-        pairs.length = 0;
+        len_ = 0;
+    }
+
+    void dispose()
+    {
+        freeBuf();
+        len_ = 0;
+    }
+
+    private void grow()
+    {
+        const size_t cap = buf_.length == 0 ? 16 : buf_.length * 2;
+        auto grown = New!(ContactPair[])(cap);
+        foreach (i; 0 .. len_)
+            grown[i] = buf_[i];
+        freeBuf();
+        buf_ = grown;
+    }
+
+    /// `Delete` у dlib читает заголовок размера перед указателем, поэтому
+    /// на пустом массиве (контактов не было) он падает.
+    private void freeBuf()
+    {
+        if (buf_ !is null)
+            Delete(buf_);
+        buf_ = null;
     }
 }
 
@@ -193,10 +231,10 @@ private int groupOf(const SoilWorld w, const BodyRole role)
 final class NewtonSensorBody : NewtonRigidBody
 {
     PhysBody phys;
-    ContactLog log;
+    ContactLog* log;
 
     this(NewtonRigidBodyType bodyType, NewtonCollisionShape shape, float mass,
-        NewtonPhysicsWorld world, Owner owner, ContactLog log)
+        NewtonPhysicsWorld world, Owner owner, ContactLog* log)
     {
         super(bodyType, shape, mass, world, owner);
         this.log = log;
@@ -399,7 +437,7 @@ final class NewtonPhysBody : PhysBody
         world_ = w;
         role_ = role;
         body_ = New!NewtonSensorBody(bodyType, shape, mass, w.newton, owner,
-            w.log_);
+            &w.log_);
         body_.phys = this;
         body_.groupId = groupOf(w.newton, role);
         body_.dynamic = bodyType == NewtonRigidBodyType.Dynamic;
@@ -704,7 +742,6 @@ final class NewtonPhysWorld : PhysWorld
     this()
     {
         ensureNewtonLoaded();
-        log_ = new ContactLog;
         newton = New!SoilWorld(cast(EventManager) null, cast(Owner) null);
     }
 
@@ -883,7 +920,7 @@ final class NewtonPhysWorld : PhysWorld
     {
         Delete(newton);
         newton = null;
-        log_.clear();
+        log_.dispose();
     }
 }
 
