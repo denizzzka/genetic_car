@@ -427,6 +427,7 @@ final class NewtonPhysBody : PhysBody
     }
 
     override PhysWorld physWorld() @property { return world_; }
+    override PhysShape shape() @property { return New!Shape(body_.collisionShape); }
     override BodyRole role() @property const { return role_; }
     override void tag(size_t t) @property { tag_ = t; }
     override size_t tag() @property const { return tag_; }
@@ -796,6 +797,15 @@ final class NewtonPhysWorld : PhysWorld
         NewtonDestroyBody(b.body_.newtonBody);
         untrack(bodies_, b.body_);
         newton.deleteOwnedObject(b.body_);
+    }
+
+    override void destroyShape(PhysShape shape)
+    {
+        auto s = cast(Shape) shape;
+        if (s is null || s.inner is null)
+            return;
+        untrack(shapes_, s.inner);
+        newton.deleteOwnedObject(s.inner);
     }
 
     override PhysAxleJoint newAxleJoint(PhysBody wheel, PhysBody master,

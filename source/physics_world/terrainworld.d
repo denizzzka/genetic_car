@@ -30,6 +30,7 @@ final class TerrainWorld
 
     /// Единственное ground-тело окна и его центр (номер центрального тайла).
     private PhysBody ground_;
+    private PhysShape groundShape_;
     private int groundTx_ = int.max;
     private int groundTy_ = int.max;
 
@@ -58,10 +59,23 @@ final class TerrainWorld
     /// (`clearScene`) или уничтожат, — иначе двойное освобождение тел.
     void dispose()
     {
+        dropGround();
+    }
+
+    /// Тело и его форма снимаются вместе: форма земли — самый крупный
+    /// объект заезда (сетка 193×193 плюс дерево Ньютона), и оставленная
+    /// в мире она копилась бы до самого конца эволюции.
+    private void dropGround()
+    {
         if (ground_ !is null)
         {
             world_.destroyBody(ground_);
             ground_ = null;
+        }
+        if (groundShape_ !is null)
+        {
+            world_.destroyShape(groundShape_);
+            groundShape_ = null;
         }
     }
 
@@ -72,11 +86,7 @@ final class TerrainWorld
     /// пересчёта шума.
     private void rebuildGround(int cx, int cy)
     {
-        if (ground_ !is null)
-        {
-            world_.destroyBody(ground_);
-            ground_ = null;
-        }
+        dropGround();
 
         const int R = windowRadius_;
         const int tx0 = cx - R, ty0 = cy - R;
@@ -106,6 +116,7 @@ final class TerrainWorld
             + frameForward * (cast(float) tx0 * cfg_.tileSize - gridHalfShift(cfg_))
             + frameRight * (cast(float) ty0 * cfg_.tileSize - gridHalfShift(cfg_));
         ground_ = world_.createHeightfieldGround(elev, grid, cell, corner);
+        groundShape_ = ground_.shape;
         Delete(elev);
     }
 }

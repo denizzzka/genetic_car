@@ -78,6 +78,10 @@ interface PhysBody
     PhysWorld physWorld() @property;
     BodyRole role() @property const;
 
+    /// Форма тела: чтобы снятое тело можно было отпустить вместе с формой,
+    /// а форма не осталась висеть в мире до его гибели.
+    PhysShape shape() @property;
+
     /// Номер тела в модели (индекс балки, индекс колеса): по нему вердикт
     /// отличает чужое колесо от ступицы своего же якоря.
     void tag(size_t t) @property;
@@ -186,6 +190,11 @@ interface PhysWorld
     /// Снести одно тело, оставив мир и его настройки: окно terrain
     /// пересобирается на каждом смене центрального тайла.
     void destroyBody(PhysBody body);
+
+    /// Отпустить форму. Формы, как и тела, живут в списке ownership мира,
+    /// поэтому без этого счёта мир копит их до своей гибели; порядок —
+    /// сначала снять тело, потом форму.
+    void destroyShape(PhysShape shape);
 
     PhysAxleJoint newAxleJoint(PhysBody wheel, PhysBody master, const vec3 pivotMaster);
     /// `limit` — предел хода рыскания, `errorCap` — потолок подпитки ряда:
