@@ -1,6 +1,7 @@
 module genetics.selection;
 
 import std.algorithm : max;
+import std.range : iota;
 import std.random;
 import std.stdio : writefln;
 import std.parallelism : TaskPool, totalCPUs;
@@ -132,13 +133,20 @@ PhysicsBatch evaluateStatic(const Grammar gr, Genotype[] pop,
 void runPhysics(ref PhysicsBatch batch, const EvolutionConfig params,
     size_t generation = 0)
 {
-    const runs = physicsPool().amap!runBuggy(batch.needPhysics);
-    foreach (k, run; runs)
+    // Индексы, а не замыкание с `params`: LDC не собирает nested-функции с
+    // захватом (dual-context), а разбирать поколение по индексам и писать
+    // лог на одном потоке заодно делает вывод детерминированным.
+    const size_t n = batch.needPhysics.length;
+    PhysicsResult[] runs = new PhysicsResult[n];
+    foreach (i; physicsPool().parallel(iota(0, n), 1))
+        runs[i] = runBuggy(batch.needPhysics[i], params);
+
+    foreach (i, run; runs)
     {
-        batch.res[batch.physIdx[k]].fitness *= run.score;
+        batch.res[batch.physIdx[i]].fitness *= run.score;
         if (params.logPhysics)
-            logPhysicsIndividual(batch.physIdx[k], generation,
-                batch.res[batch.physIdx[k]].fitness, run);
+            logPhysicsIndividual(batch.physIdx[i], generation,
+                batch.res[batch.physIdx[i]].fitness, run);
     }
 }
 
@@ -151,9 +159,9 @@ Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
     return batch.res;
 }
 
-private PhysicsResult runBuggy(Buggy buggy)
+private PhysicsResult runBuggy(Buggy buggy, const EvolutionConfig params)
 {
-    return physicsFitness(buggy, physicsSimSeconds);
+    return physicsFitness(buggy, params.simulateSeconds);
 }
 
 private void logPhysicsIndividual(size_t idx, size_t generation, float finalFit, const PhysicsResult run)

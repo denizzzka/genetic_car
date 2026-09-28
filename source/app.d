@@ -11,12 +11,15 @@ import std.random : Random;
 import std.conv : to;
 import std.stdio;
 
+/// Headless-прогон: тот же отбор, что и по G во вьюере, но без окна —
+/// эволюция стартует сразу и печатает поколения в stdout.
 private struct HeadlessOptions
 {
     size_t generations = 400;
     size_t seed = 42;
-    double simulateSeconds = 120.0;
+    double simulateSeconds = physicsSimSeconds;
     size_t threads = 0;
+    bool logPhysics = false;
 }
 
 private HeadlessOptions parseHeadless(string[] args)
@@ -44,6 +47,9 @@ private HeadlessOptions parseHeadless(string[] args)
                 opt.simulateSeconds = to!double(args[i + 1]);
                 ++i;
                 break;
+            case "-log", "--log":
+                opt.logPhysics = true;
+                break;
             default:
                 break;
         }
@@ -55,9 +61,14 @@ private void runHeadless(const HeadlessOptions opt)
 {
     EvolutionConfig cfg = EvolutionConfig.init;
     cfg.simulateSeconds = opt.simulateSeconds;
+    cfg.logPhysics = opt.logPhysics;
 
     if (opt.threads > 0)
         setPhysicsPoolSize(opt.threads);
+
+    writefln("headless: %d поколений, зерно %d, окно заезда %.1fs%s",
+        opt.generations, opt.seed, opt.simulateSeconds,
+        opt.logPhysics ? ", лог по особям" : "");
 
     auto gr = buggyGrammar();
     auto cur = evaluatePopulation(gr, seedPopulation(gr, EvolutionConfig.populationSize), cfg);
@@ -71,8 +82,8 @@ private void runHeadless(const HeadlessOptions opt)
         runPhysics(batch, cfg, gen + 1);
         cur = batch.res;
         const size_t now = sw.peek.total!"msecs";
-        writefln("gen %d: needPhysics=%d best=%.4f dt=%.2fs total=%.1fs",
-            gen + 1, batch.needPhysics.length, bestFitness(cur),
+        writefln("gen %d: needPhysics=%d best=%.4f mean=%.4f dt=%.2fs total=%.1fs",
+            gen + 1, batch.needPhysics.length, bestFitness(cur), meanFitness(cur),
             (now - prev) / 1000.0, now / 1000.0);
         prev = now;
     }
