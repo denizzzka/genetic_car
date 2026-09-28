@@ -1,7 +1,7 @@
 module physics_world.worldpool;
 
 import std.parallelism : totalCPUs;
-import std.algorithm : max;
+import std.algorithm : max, min;
 import core.sync.mutex : Mutex;
 import core.sync.condition : Condition;
 
@@ -99,6 +99,11 @@ final class PhysWorldPool
     }
 }
 
+/// Потолок миров в пуле. Каждый мир — целый Newton со своими телами и сеткой
+/// земли 193x193, и на 16 ядрах прежние 12 миров дергали всю машину, не
+/// оставляя системе ничего, кроме себя.
+enum size_t maxPooledWorlds = 4;
+
 /// Один глобальный пул на процесс: физику гоняют и воркеры TaskPool
 /// (до 75% ядер), и главный поток вьюера. Мир из пула живёт столько,
 /// сколько нужно; число миров — ровно степень параллелизма, не больше.
@@ -114,7 +119,8 @@ private PhysWorldPool worldPool()
     {
         if (pool_ is null)
         {
-            const n = max(1, (cast(size_t) totalCPUs * 3) / 4);
+            const n = min(maxPooledWorlds,
+                max(1, (cast(size_t) totalCPUs * 3) / 4));
             pool_ = new PhysWorldPool(n);
         }
         return pool_;
