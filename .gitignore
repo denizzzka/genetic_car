@@ -26,3 +26,6 @@ libnewton.so
 
 # Кэш вендоренной сборки Ньютона (third_party/newton/build.sh)
 third_party/newton/.cache/
+
+# JPH копируется из dagon:jolt (copyFiles) в корень сборки
+libjoltc.so

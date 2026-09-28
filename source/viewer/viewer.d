@@ -163,6 +163,8 @@ class BuggyScene: Scene
         // пик миров держится на потолке, а вьюер не ждёт освобождения за ними.
         setPhysicsPoolSize(pooledWorldCount() - 1);
 
+        writefln("engine: %s", selectedEngineName);
+
         auto camera = addCamera();
         freeview = New!FreeviewComponent(eventManager, camera);
         freeview.setZoom(15.0f);

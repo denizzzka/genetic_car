@@ -23,6 +23,7 @@ import bindbc.newton;
 import dagon.core.event;
 import dagon.ext.newton;
 
+import physics_world.contactlog : ContactLog;
 import physics_world.engine;
 
 /* ------------------------------------------------------------------ *
@@ -58,7 +59,8 @@ void ensureNewtonLoaded()
  * Перевод осей
  *
  * (x, y, z)каркас → (x, z, −y)newton: мир Newton — это геометрия каркаса,
- * повёрнутая вокруг X на −90°.
+ * повёрнутая вокруг X на −90°. Реализация перевода — в методах
+ * `NewtonPhysWorld` (контракт `PhysWorld`), здесь живёт только поворот базиса.
  * ------------------------------------------------------------------ */
 
 /// Выведено из образов осей базиса: литерал, потому что LDC сворачивает
@@ -66,124 +68,10 @@ void ensureNewtonLoaded()
 immutable Quaternionf carToNewtonQuat =
     Quaternionf(-0.70710678f, 0.0f, 0.0f, 0.70710678f);
 
-private vec3 toNewtonPos(const vec3 carPos)
-{
-    return vec3(carPos.x, carPos.z, -carPos.y);
-}
-
-private vec3 toCarPos(const vec3 newtonPos)
-{
-    return vec3(newtonPos.x, -newtonPos.z, newtonPos.y);
-}
-
-private Quaternionf toNewtonRot(const Quaternionf carRot)
-{
-    // dlib над кватернионами не const — работаем на копии.
-    Quaternionf r = carToNewtonQuat;
-    return r * carRot;
-}
-
-/// `body.rotation` — инверсия истинного поворота (её кэширует dagon), так
-/// что наружу уходит `carToNewton⁻¹ · conj(rotation)`.
-private Quaternionf toCarRot(const Quaternionf cachedNewtonRot)
-{
-    Quaternionf r = carToNewtonQuat;
-    Quaternionf c = cachedNewtonRot;
-    return r.conj * c.conj;
-}
-
-/// Вектор поворачивается тем же поворотом, что и тело: ось угловой скорости
-/// живёт в мире, а не в системе тела.
-private Vector3f toNewtonDir(const Vector3f carDir)
-{
-    Quaternionf q = carToNewtonQuat;
-    return q.rotate(carDir);
-}
-
-private Vector3f toCarDir(const Vector3f newtonDir)
-{
-    Quaternionf q = carToNewtonQuat;
-    return q.conj.rotate(newtonDir);
-}
-
-private Matrix4x4f carBodyMatrix(const vec3 carPos, const Quaternionf carRot)
-{
-    return translationMatrix(toNewtonPos(carPos)) * toNewtonRot(carRot).toMatrix4x4;
-}
-
 /// Ускорение свободного падения в координатах Newton: вниз вдоль −Y.
 private Vector3f newtonGravity(float accel)
 {
     return Vector3f(0.0f, -accel, 0.0f);
-}
-
-/* ------------------------------------------------------------------ *
- * Контакты за шаг
- *
- * Пишут сюда колбэки C++, читает модель. Живёт отдельно от мира, чтобы
- * колбэкам не нужно было знать тип мира (они приходят из движка и видят
- * только указатели на тела).
- *
- * Журнал хранится ПО ЗНАЧЕНИЮ в `NewtonPhysWorld` и держит буфер пар в
- * dlib-памяти. Пока он был GC-классом, единственные ссылки на него жили
- * в dlib-указателях (мир и сенсорные тела), а GC такую память не
- * обходит: под давлением аллокаций журнал уходил в free-list и
- * переписывался чужыми данными прямо во время заезда — зависание и
- * SIGSEGV в разборе контактов.
- * ------------------------------------------------------------------ */
-
-struct ContactLog
-{
-    /// Буфер пар в dlib-памяти: GC-объекты из мира его не увидят.
-    private ContactPair[] buf_;
-    private size_t len_;
-
-    const(ContactPair)[] pairs() const { return buf_[0 .. len_]; }
-
-    /// Повторы гасим: сенсорный диспетчер и материальный колбэк могут
-    /// сообщить одну пару дважды, а вердикту важно лишь «было». Контактов на
-    /// шаг единицы, поэтому поиск линейный.
-    void add(PhysBody a, PhysBody b)
-    {
-        if (a is null || b is null || a is b)
-            return;
-        foreach (i; 0 .. len_)
-            if (buf_[i].a is a && buf_[i].b is b)
-                return;
-        if (len_ == buf_.length)
-            grow();
-        buf_[len_++] = ContactPair(a, b);
-    }
-
-    void clear()
-    {
-        len_ = 0;
-    }
-
-    void dispose()
-    {
-        freeBuf();
-        len_ = 0;
-    }
-
-    private void grow()
-    {
-        const size_t cap = buf_.length == 0 ? 16 : buf_.length * 2;
-        auto grown = New!(ContactPair[])(cap);
-        foreach (i; 0 .. len_)
-            grown[i] = buf_[i];
-        freeBuf();
-        buf_ = grown;
-    }
-
-    /// `Delete` у dlib читает заголовок размера перед указателем, поэтому
-    /// на пустом массиве (контактов не было) он падает.
-    private void freeBuf()
-    {
-        if (buf_ !is null)
-            Delete(buf_);
-        buf_ = null;
-    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -470,15 +358,15 @@ final class NewtonPhysBody : PhysBody
     override void tag(size_t t) @property { tag_ = t; }
     override size_t tag() @property const { return tag_; }
 
-    override Vector3f worldPosition() @property { return toCarPos(body_.position.xyz); }
-    override Quaternionf worldRotation() @property { return toCarRot(body_.rotation); }
+    override Vector3f worldPosition() @property { return world_.toCarPos(body_.position.xyz); }
+    override Quaternionf worldRotation() @property { return world_.toCarRot(body_.rotation); }
 
     override Quaternionf worldFrameRotation() @property
     {
         // `toCarRot` оставляет в повороте постоянный разворот осей фантома;
         // домножаем на базис каркаса, и у неповёрнутого тела выходит тождество.
         Quaternionf r = carToNewtonQuat;
-        return toCarRot(body_.rotation) * r;
+        return world_.toCarRot(body_.rotation) * r;
     }
 
     override void worldRotation(Quaternionf carRot) @property
@@ -486,29 +374,31 @@ final class NewtonPhysBody : PhysBody
         // Вокруг текущего центра масс: иначе тело уедет из-под привязанных
         // к нему колёс.
         body_.setTransformation(
-            translationMatrix(toNewtonPos(body_.worldCenterOfMass))
-            * toNewtonRot(carRot).toMatrix4x4);
+            translationMatrix(world_.toEnginePos(body_.worldCenterOfMass))
+            * world_.toEngineRot(carRot).toMatrix4x4);
         body_.update(0.0);
     }
 
     override void worldTransform(const vec3 carPos, const Quaternionf carRot) @property
     {
-        body_.setTransformation(carBodyMatrix(carPos, carRot));
+        body_.setTransformation(
+            translationMatrix(world_.toEnginePos(carPos))
+            * world_.toEngineRot(carRot).toMatrix4x4);
         body_.update(0.0);
     }
 
     override void setWorldPosition(const vec3 carPos)
     {
-        body_.setTransformation(translationMatrix(toNewtonPos(carPos)));
+        body_.setTransformation(translationMatrix(world_.toEnginePos(carPos)));
         body_.update(0.0);
     }
 
-    override Vector3f velocity() @property { return toCarDir(body_.velocity); }
-    override void velocity(Vector3f v) @property { body_.velocity = toNewtonPos(v); }
-    override Vector3f angularVelocity() @property { return toCarDir(body_.angularVelocity); }
-    override void angularVelocity(Vector3f w) @property { body_.angularVelocity = toNewtonDir(w); }
+    override Vector3f velocity() @property { return world_.toCarDir(body_.velocity); }
+    override void velocity(Vector3f v) @property { body_.velocity = world_.toEnginePos(v); }
+    override Vector3f angularVelocity() @property { return world_.toCarDir(body_.angularVelocity); }
+    override void angularVelocity(Vector3f w) @property { body_.angularVelocity = world_.toEngineDir(w); }
 
-    override Vector3f worldCenterOfMass() @property { return toCarPos(body_.worldCenterOfMass); }
+    override Vector3f worldCenterOfMass() @property { return world_.toCarPos(body_.worldCenterOfMass); }
     override void localCenterOfMass(Vector3f offset) @property { body_.centerOfMass = offset; }
     override void mass(float m) @property { body_.mass = m; }
     override void inertia(Vector3f principal) @property
@@ -519,8 +409,8 @@ final class NewtonPhysBody : PhysBody
     override void linearDamping(float damping) @property { body_.linearDamping = damping; }
     override void angularDamping(Vector3f damping) @property { body_.angularDamping = damping; }
     override void collidable(bool on) @property { body_.collidable = on; }
-    override void addForce(Vector3f f) { body_.addForce(toNewtonPos(f)); }
-    override void addTorque(Vector3f t) { body_.addTorque(toNewtonDir(t)); }
+    override void addForce(Vector3f f) { body_.addForce(world_.toEnginePos(f)); }
+    override void addTorque(Vector3f t) { body_.addTorque(world_.toEngineDir(t)); }
     override void syncPose() { body_.update(0.0); }
 
 }
@@ -567,7 +457,7 @@ private final class AxleJoint : NewtonUserConstraint, PhysAxleJoint
         physB_ = m;
         wheel_ = w.body_;
         master_ = m.body_;
-        pivotMasterLocal_ = toNewtonPos(pivotMaster);
+        pivotMasterLocal_ = w.world_.toEnginePos(pivotMaster);
         super(master_.world, wheel_, master_, 6);
 
         // Ось в локальных координатах мастера: берём живую ось колеса, а не
@@ -646,7 +536,7 @@ private final class SteerJoint : NewtonUserConstraint, PhysSteerJoint
         steer_ = s.body_;
         master_ = m.body_;
         pivotSteerLocal_ = pivotSteer;
-        pivotMasterLocal_ = toNewtonPos(pivotMaster);
+        pivotMasterLocal_ = s.world_.toEnginePos(pivotMaster);
         armUpLocal_ = armUp;
         masterUpLocal_ = Vector3f(0.0f, 1.0f, 0.0f);
         limit_ = limit;
@@ -743,6 +633,61 @@ final class NewtonPhysWorld : PhysWorld
     {
         ensureNewtonLoaded();
         newton = New!SoilWorld(cast(EventManager) null, cast(Owner) null);
+    }
+
+    override immutable vec3 right() @property
+    {
+        return vec3(1.0f, 0.0f, 0.0f);
+    }
+
+    override immutable vec3 forward() @property
+    {
+        return vec3(0.0f, -1.0f, 0.0f);
+    }
+
+    override immutable vec3 up() @property
+    {
+        return vec3(0.0f, 0.0f, 1.0f);
+    }
+
+    override vec3 toEnginePos(const vec3 carPos)
+    {
+        return vec3(carPos.x, carPos.z, -carPos.y);
+    }
+
+    override vec3 toCarPos(const vec3 newtonPos)
+    {
+        return vec3(newtonPos.x, -newtonPos.z, newtonPos.y);
+    }
+
+    override Quaternionf toEngineRot(const Quaternionf carRot)
+    {
+        // dlib над кватернионами не const — работаем на копии.
+        Quaternionf r = carToNewtonQuat;
+        return r * carRot;
+    }
+
+    /// `body.rotation` — инверсия истинного поворота (её кэширует dagon), так
+    /// что наружу уходит `carToNewton⁻¹ · conj(rotation)`.
+    override Quaternionf toCarRot(const Quaternionf cachedNewtonRot)
+    {
+        Quaternionf r = carToNewtonQuat;
+        Quaternionf c = cachedNewtonRot;
+        return r.conj * c.conj;
+    }
+
+    /// Вектор поворачивается тем же поворотом, что и тело: ось угловой
+    /// скорости живёт в мире, а не в системе тела.
+    override Vector3f toEngineDir(const Vector3f carDir)
+    {
+        Quaternionf q = carToNewtonQuat;
+        return q.rotate(carDir);
+    }
+
+    override Vector3f toCarDir(const Vector3f newtonDir)
+    {
+        Quaternionf q = carToNewtonQuat;
+        return q.conj.rotate(newtonDir);
     }
 
     override void useCallingThread() { newton.threadsCount = 0; }

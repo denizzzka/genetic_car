@@ -66,8 +66,8 @@ private void runHeadless(const HeadlessOptions opt)
     if (opt.threads > 0)
         setPhysicsPoolSize(opt.threads);
 
-    writefln("headless: %d поколений, зерно %d, окно заезда %.1fs%s",
-        opt.generations, opt.seed, opt.simulateSeconds,
+    writefln("headless: engine %s, %d поколений, зерно %d, окно заезда %.1fs%s",
+        selectedEngineName, opt.generations, opt.seed, opt.simulateSeconds,
         opt.logPhysics ? ", лог по особям" : "");
 
     auto gr = buggyGrammar();
@@ -92,6 +92,7 @@ private void runHeadless(const HeadlessOptions opt)
 
 void main(string[] args)
 {
+    args = selectEngine(args);
     if (args.canFind("-headless") || args.canFind("--headless"))
     {
         runHeadless(parseHeadless(args));
