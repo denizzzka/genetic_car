@@ -111,6 +111,13 @@ enum size_t maxPooledWorlds = 4;
 private __gshared Object poolLock_ = new Object();
 private __gshared PhysWorldPool pool_;
 
+/// Сколько миров в пуле на этой машине. Нижняя граница — 2: один мир держит
+/// живой заезд вьюера на реальном времени, и воркерам при одном мире ждать.
+size_t pooledWorldCount()
+{
+    return min(maxPooledWorlds, max(2, (cast(size_t) totalCPUs * 3) / 4));
+}
+
 private PhysWorldPool worldPool()
 {
     if (pool_ !is null)
@@ -118,11 +125,7 @@ private PhysWorldPool worldPool()
     synchronized (poolLock_)
     {
         if (pool_ is null)
-        {
-            const n = min(maxPooledWorlds,
-                max(1, (cast(size_t) totalCPUs * 3) / 4));
-            pool_ = new PhysWorldPool(n);
-        }
+            pool_ = new PhysWorldPool(pooledWorldCount());
         return pool_;
     }
 }

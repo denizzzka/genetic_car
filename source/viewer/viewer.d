@@ -16,6 +16,7 @@ import frame.cockpit : loadCockpit;
 import frame.objmesh : ObjModel;
 import genetics;
 import physics_world;
+import physics_world.engine : PhysWorld;
 import viewer.scene : carToScenePos;
 import viewer.terrainvisualizer;
 
@@ -77,6 +78,7 @@ class BuggyScene: Scene
 
     // Живой заезд realtime:
     private BuggyPhysics livePhysics;
+    private PhysWorld liveWorld;
     private Entity[] liveCar;
     private double liveSimTime;
     private double liveRunSeconds;
@@ -156,6 +158,10 @@ class BuggyScene: Scene
         liveRunSeconds = evolutionConfig.simulateSeconds;
         // Виден ли ход заездов в stdout (по особам и поколениям).
         evolutionConfig.logPhysics = true;
+
+        // Мир показа берём из пула, поэтому фоновым остаётся на один меньше:
+        // пик миров держится на потолке, а вьюер не ждёт освобождения за ними.
+        setPhysicsPoolSize(pooledWorldCount() - 1);
 
         auto camera = addCamera();
         freeview = New!FreeviewComponent(eventManager, camera);
@@ -530,17 +536,15 @@ class BuggyScene: Scene
     /// сколько она простояла, столько и ехала.
     private void spawnLiveBuggy(const Frame frame)
     {
-        auto physics = new BuggyPhysics(new Buggy(placedFrame(frame)),
-            sharedTerrain());
-
-        if (livePhysics !is null)
-        {
-            livePhysics.dispose();
-            livePhysics = null;
-        }
+        // Старый мир возвращаем в пул до запроса нового: иначе вьюер на
+        // время держит два мира, а пул конечен.
+        disposeLivePhysics();
         removeLiveEntities();
 
-        livePhysics = physics;
+        liveWorld = acquireWorld();
+        livePhysics = new BuggyPhysics(new Buggy(placedFrame(frame)),
+            liveWorld, sharedTerrain());
+
         liveSimTime = 0.0;
         liveFailed_ = false;
         liveFailTime = 0.0;
@@ -736,14 +740,25 @@ class BuggyScene: Scene
         liveEph.length = 0;
     }
 
-    private void stopLiveCar()
+    /// Снос живого заезда и возврат его мира в пул.
+    private void disposeLivePhysics()
     {
-        removeLiveEntities();
         if (livePhysics !is null)
         {
             livePhysics.dispose();
             livePhysics = null;
         }
+        if (liveWorld !is null)
+        {
+            releaseWorld(liveWorld);
+            liveWorld = null;
+        }
+    }
+
+    private void stopLiveCar()
+    {
+        removeLiveEntities();
+        disposeLivePhysics();
         liveBatch = null;
         liveBatchIdx = 0;
     }
