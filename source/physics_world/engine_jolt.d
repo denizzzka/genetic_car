@@ -182,19 +182,18 @@ private struct RoleRule
 /// единственный `userData` — указатель на контекст мира.
 private struct ContactCtx
 {
+    /// Роли — ordinal edenum, индексируем таблицу ими самими; не заданное
+    /// правило — `RoleRule.init`.
+    enum brc = BodyRole.max + 1;
     ContactLog log;
-    RoleRule[BodyRole][BodyRole] rules;
+    RoleRule[brc][brc] rules;
 
-    private static RoleRule ruleFor(const RoleRule[BodyRole][BodyRole] table,
+    private static RoleRule ruleFor(const RoleRule[brc][brc] table,
         const BodyRole a, const BodyRole b)
     {
-        const BodyRole lo = a < b ? a : b;
-        const BodyRole hi = a < b ? b : a;
-        auto r = lo in table;
-        if (r is null)
-            return RoleRule.init;
-        auto c = hi in *r;
-        return c is null ? RoleRule.init : *c;
+        const lo = cast(size_t) (a < b ? a : b);
+        const hi = cast(size_t) (a < b ? b : a);
+        return table[lo][hi];
     }
 
     private bool ignored(const BodyRole a, const BodyRole b)
@@ -215,46 +214,65 @@ private struct ContactCtx
 
 /// Обёртка тела лежит в памяти мира, а не в GC: контакт-листендер достаёт её
 /// по `userData` тела Jolt.
+///
+/// `userData` хранит указатель на класс, а не на интерфейс, поэтому битый
+/// `void*` в `PhysBody` уводил бы вызов в vtable `Object` вместо `PhysBody`.
 private PhysBody physOf(const JPH_Body* body)
 {
     const ulong raw = JPH_Body_GetUserData(cast(JPH_Body*) body);
-    return cast(PhysBody)(cast(void*) cast(size_t) raw);
+    return cast(PhysBody)(cast(JoltPhysBody) cast(void*) cast(size_t) raw);
 }
 
+/// Обёртка колбэка: D-исключение не должно уходить в Jolt — там его разматывание
+/// оставит все мьютексы тел захваченными, и следующий `DestroyBody` упадёт с
+/// EDEADLK вместо нормального отчёта об ошибке.
 private extern(C) JPH_ValidateResult joltOnContactValidate(void* userData,
     const(JPH_Body)* body1, const(JPH_Body)* body2,
     const(JPH_RVec3)* baseOffset, const(JPH_CollideShapeResult)* collisionResult)
 {
-    auto ctx = cast(ContactCtx*) userData;
-    if (ctx is null)
+    try
+    {
+        auto ctx = cast(ContactCtx*) userData;
+        if (ctx is null)
+            return JPH_ValidateResult.AcceptAllContactsForThisBodyPair;
+        auto a = physOf(body1);
+        auto b = physOf(body2);
+        if (a is null || b is null)
+            return JPH_ValidateResult.AcceptAllContactsForThisBodyPair;
+        if (ctx.ignored(a.role, b.role))
+            return JPH_ValidateResult.RejectAllContactsForThisBodyPair;
         return JPH_ValidateResult.AcceptAllContactsForThisBodyPair;
-    auto a = physOf(body1);
-    auto b = physOf(body2);
-    if (a is null || b is null)
+    }
+    catch (Throwable)
+    {
         return JPH_ValidateResult.AcceptAllContactsForThisBodyPair;
-    if (ctx.ignored(a.role, b.role))
-        return JPH_ValidateResult.RejectAllContactsForThisBodyPair;
-    return JPH_ValidateResult.AcceptAllContactsForThisBodyPair;
+    }
 }
 
 private extern(C) void joltOnContactAdded(void* userData, const(JPH_Body)* body1,
     const(JPH_Body)* body2, const(JPH_ContactManifold)* manifold,
     JPH_ContactSettings* settings)
 {
-    auto ctx = cast(ContactCtx*) userData;
-    if (ctx is null)
-        return;
-    auto a = physOf(body1);
-    auto b = physOf(body2);
-    if (a is null || b is null)
-        return;
-    const RoleRule rule = ctx.ruleFor(ctx.rules, a.role, b.role);
-    settings.combinedFriction = rule.friction;
-    // TODO: кинетическое трение. Jolt сводит пару к одному коэффициенту
-    // сцепления, порога срыва отдельно не знает, поэтому разгон будет
-    // отличаться от Newton.
-    settings.combinedRestitution = rule.elasticity;
-    ctx.report(a, b);
+    try
+    {
+        auto ctx = cast(ContactCtx*) userData;
+        if (ctx is null)
+            return;
+        auto a = physOf(body1);
+        auto b = physOf(body2);
+        if (a is null || b is null)
+            return;
+        const RoleRule rule = ctx.ruleFor(ctx.rules, a.role, b.role);
+        settings.combinedFriction = rule.friction;
+        // TODO: кинетическое трение. Jolt сводит пару к одному коэффициенту
+        // сцепления, порога срыва отдельно не знает, поэтому разгон будет
+        // отличаться от Newton.
+        settings.combinedRestitution = rule.elasticity;
+        ctx.report(a, b);
+    }
+    catch (Throwable)
+    {
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1046,7 +1064,7 @@ final class JoltPhysWorld : PhysWorld
         r.friction = rule.friction;
         r.kineticFriction = rule.kineticFriction;
         r.elasticity = rule.elasticity;
-        ctx_.rules[lo][hi] = r;
+        ctx_.rules[cast(size_t) lo][cast(size_t) hi] = r;
     }
 
     /// Настройки отпускаются сразу же, форма живёт в списке до конца заезда.
