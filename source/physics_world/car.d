@@ -446,6 +446,7 @@ final class BuggyPhysics
         steerJoint_ = null;
         steerBeamIdx = size_t.max;
         steerFarNode = size_t.max;
+        steerBuildQuat = Quaternionf.identity;
         beamFail_ = BeamFailure.none;
     }
 
@@ -997,6 +998,7 @@ final class BuggyPhysics
             const float len = dir.length;
             Quaternionf qBeam = rotationBetween(Vector3f(0, 1, 0), dir / len);
             Quaternionf qArm = qBeam;
+            steerBuildQuat = qBeam;
             const vec3 mid = (a + c) * 0.5f;
 
             steer = world.createBody(BodyRole.master, BodyMotion.dynamicBody,

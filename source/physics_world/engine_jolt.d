@@ -674,12 +674,23 @@ private final class AxleJoint : PhysAxleJoint
         const vec3 axleCar = w.pose().rot.rotate(Vector3f(0.0f, 1.0f, 0.0f));
         const vec3 pointCar = m.pose().pos + m.pose().rot.rotate(pivotMaster);
         JPH_HingeConstraintSettings s;
+        // D инициализирует float в NaN, а Jolt строит по normalAxis базис угла
+        // шарнира: без штатных значений решатель выдаёт NaN-скорости тел.
+        JPH_HingeConstraintSettings_Init(&s);
         s.base.enabled = true;
         s.space = JPH_ConstraintSpace.WorldSpace;
         s.point1 = m.world_.toEnginePos(pointCar);
         s.hingeAxis1 = m.world_.toEngineDir(axleCar);
         s.point2 = s.point1;
         s.hingeAxis2 = s.hingeAxis1;
+        // Базис угла строится из нормали, и она обязана быть перпендикулярна
+        // оси шарнира, иначе якобиан вырожден и решатель расходится.
+        vec3 sideCar = axleCar.cross(vec3(0.0f, 0.0f, 1.0f));
+        if (sideCar.lengthsqr < 1e-6f)
+            sideCar = axleCar.cross(vec3(1.0f, 0.0f, 0.0f));
+        const JPH_Vec3 side = m.world_.toEngineDir(sideCar.normalized());
+        s.normalAxis1 = side;
+        s.normalAxis2 = side;
         s.limitsMin = -PI;
         s.limitsMax = PI;
         s.maxFrictionTorque = 0.0f;
@@ -1213,5 +1224,7 @@ final class JoltPhysWorld : PhysWorld
 
 PhysWorld createPhysWorld()
 {
-    return New!JoltPhysWorld();
+    // Мир держит тела, шарниры и кэш поз в GC-контейнерах, поэтому New! (dlib)
+    // недопустим: его память сборщик не сканирует, и `bodyIds_` уносится первым.
+    return new JoltPhysWorld();
 }
