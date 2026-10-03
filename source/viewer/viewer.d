@@ -18,6 +18,7 @@ import genetics;
 import physics_world;
 import physics_world.engine : PhysWorld;
 import viewer.scene : carToScenePos;
+import viewer.startaxes : buildStartAxes;
 import viewer.terrainvisualizer;
 
 class BuggyScene: Scene
@@ -225,6 +226,8 @@ class BuggyScene: Scene
         // Плоская «земля» больше не нужна: её рисует процедурная поверхность
         // TerrainVisualizer (общий shared-кэш с фитнесом).
         terrainVis = new TerrainVisualizer(this, sharedTerrain());
+
+        buildStartAxes(this, sharedTerrain());
 
         resetPopulation();
         buildGallery();
