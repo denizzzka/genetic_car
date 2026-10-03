@@ -388,7 +388,7 @@ final class JoltPhysBody : PhysBody
                 JPH_ShapeSettings_Destroy(cast(JPH_ShapeSettings*) cs);
             }
 
-        const auto pose = world_.pose(this);
+        const auto pose = world_.pose(id_);
         JPH_RVec3 pos = world_.toEnginePos(pose.pos);
         JPH_Quat rot = world_.toEngineRot(pose.rot);
         JPH_BodyCreationSettings* cs = JPH_BodyCreationSettings_Create3(geom,
@@ -440,7 +440,7 @@ final class JoltPhysBody : PhysBody
 
     private ref pose() @property
     {
-        return world_.pose(this);
+        return world_.pose(id_);
     }
 
     private void recreate()
@@ -751,7 +751,7 @@ final class JoltPhysWorld : PhysWorld
     private JoltPhysBody[] bodiesOwned_;
     private AxleJoint[] joints_;
     private void*[] constraints_;
-    private BodyPose[PhysBody] poses_;
+    private BodyPose[JPH_BodyID] poses_;
 
     /// Пул потоков Jolt: свой на мир, по одному потоку. Ноль означает, что
     /// работу делает вызывающий поток — этого просит `useCallingThread`.
@@ -1135,9 +1135,9 @@ final class JoltPhysWorld : PhysWorld
     }
 
     /// Поза тела: кэш для геттеров, переживающий пересоздание тела.
-    ref pose(PhysBody b)
+    ref pose(JPH_BodyID id)
     {
-        auto p = b in poses_;
+        auto p = id in poses_;
         if (p is null)
         {
             // .init у float — NaN, а кэш обязан стартовать с единичного
@@ -1145,9 +1145,9 @@ final class JoltPhysWorld : PhysWorld
             BodyPose d;
             d.pos = vec3(0.0f, 0.0f, 0.0f);
             d.rot = Quaternionf.identity;
-            poses_[b] = d;
+            poses_[id] = d;
         }
-        return poses_[b];
+        return poses_[id];
     }
 
     void track(JoltPhysBody b)
@@ -1167,7 +1167,7 @@ final class JoltPhysWorld : PhysWorld
                 bodiesOwned_.length = bodiesOwned_.length - 1;
                 break;
             }
-        poses_.remove(b);
+        poses_.remove(b.id_);
     }
 
     override void clearScene()
