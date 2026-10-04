@@ -176,6 +176,17 @@ void main(string[] args)
                 a.radius + founder.beamRadius, f.beams.length);
             ++wi;
         }
+        float lo = float.max, hi = -float.max, sum = 0.0f;
+        foreach (bi, b; f.beams)
+        {
+            const float len = distance(f.nodes[b.a].pos, f.nodes[b.b].pos);
+            lo = min(lo, len);
+            hi = max(hi, len);
+            sum += len;
+        }
+        writefln("DIAG балки=%d длина min=%.3f avg=%.3f max=%.3f (шаг=%.3f)",
+            cast(int) f.beams.length, lo, sum / f.beams.length, hi,
+            founder.stepLength);
         return;
     }
     if (args.canFind("-headless") || args.canFind("--headless"))

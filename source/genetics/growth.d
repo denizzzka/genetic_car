@@ -77,13 +77,13 @@ enum size_t maxGrowthRounds = 40;
 /// Слияние: конец балки ближе этого расстояния к чужому узлу не становится
 /// новым узлом, а присоединяется к нему балкой. Так ветвь заканчивается
 /// петлёй — каркас получает жёсткость, а не цепь висящих концов.
-/// Доля шага: при мелком шаге слияние наступает раньше.
+/// Доля масштаба организма: при мелких балках слияние наступает раньше.
 enum float mergeShare = 0.35f;
 
 /// Латеральное подавление в пространстве: конец балки ближе этого расстояния к
 /// любому чужому узлу не заводится вовсе. Это вторая, чисто геометрическая
 /// половина механизма: поле решает, КУДА растёт, а расстояние — КАК далеко
-/// ветви могут стоять друг от друга. Доля шага.
+/// ветви могут стоять друг от друга. Доля масштаба организма.
 enum float spacingShare = 3.0f;
 
 /// Провисание: балка под подвеской тянется вниз, а вверх растёт плохо. Платит
@@ -119,7 +119,7 @@ enum float maxDrop = 0.25f;
 enum float crowdShare = 0.4f;
 
 /// Насколько близко к своему предку можно поставить новый узел, не превращая
-/// ветвь в виток. Доля шага.
+/// ветвь в виток. Доля масштаба организма.
 enum float foldShare = 0.7f;
 
 /// Инерция роста: насколько сильно новая балка старается продолжить предыдущую.
@@ -140,8 +140,23 @@ enum float wheelAxleShare = 0.5f;
 enum float flowCourseShare = 1.0f;
 enum float flowLateralShare = 0.6f;
 
+/// Длина балки сверх базового шага: насколько её вытягивает локальное поле.
+/// Измеряется радиусом действия активатора — это масштаб паттерна, и он же
+/// задаёт масштаб его сегментов.
+enum float stretchShare = 0.1f;
+
+/// Потолок длины одной балки, м. Гена шага и вытяжки поля недостаточно, чтобы
+/// удержать машину в габарите, — предел держит сам рост.
+enum float maxBeamLength = 3.0f;
+
+/// Сколько точек внутри балки проверяется на отклик. Поле гладкое (сумма
+/// экспонент), поэтому горстки точек хватает: длинная балка не должна
+/// перепрыгнуть мёртвый участок.
+enum size_t spanSamples = 4;
+
 /// 26 направлений шага: оси и диагонали кубической решётки. Непрерывная сфера
-/// направлений здесь не нужна — балка всё равно растёт дискретным шагом.
+/// направлений здесь не нужна — направление выбирается дискретно, а длина
+/// приходит из поля.
 private immutable vec3[26] stepDirections = makeStepDirections();
 
 private immutable(vec3[26]) makeStepDirections()
@@ -187,6 +202,18 @@ private struct Growth
     /// Балок выросло всего.
     size_t grown;
 
+    /// Сумма длин выросших балок — числитель `scale`.
+    float grownLen;
+
+    /// Характерный масштаб организма: средняя длина его балок. Запреты роста
+    /// (расстояние между ветвями, слияние, виток) меряются им, а не базовым
+    /// шагом: вытянувшийся организм иначе ветвит реже, чем велик запрет, и
+    /// локальное торможение роста перестаёт его останавливать.
+    float scale() const
+    {
+        return grown > 0 ? max(c.stepLength, grownLen / grown) : c.stepLength;
+    }
+
     /// Потолок для этого организма: общий счётчик каркаса из фитнеса.
     size_t grownMax;
 
@@ -208,6 +235,29 @@ private struct Growth
         return score / c.threshold;
     }
 
+    /// Длина новой балки: базовый шаг гена плюс вытяжка, которую даёт
+    /// локальное поле. Поле богаче — балка длиннее, и так длина становится
+    /// такой же эволюционируемой величиной, как и всё остальное.
+    float budLength(const float resp) const
+    {
+        const float excess = max(0.0f, resp - respondGate);
+        return min(c.stepLength + stretchShare * c.actDiffusion * excess,
+            maxBeamLength);
+    }
+
+    /// Живое ли поле по всей длине балки: длинная балка не перепрыгивает
+    /// мёртвый участок, иначе вытяжка стала бы обходом правила роста.
+    bool aliveAlong(const vec3 from, const vec3 to) const
+    {
+        foreach (i; 1 .. spanSamples)
+        {
+            const float t = cast(float) i / cast(float) spanSamples;
+            if (response(from + (to - from) * t, frameTissue) <= respondGate)
+                return false;
+        }
+        return true;
+    }
+
     /// Подавление вблизи чужой ветви: чем ближе точка к чужому выросшему узлу,
     /// тем беднее отклик, и совсем близко рост запрещён.
     ///
@@ -220,7 +270,7 @@ private struct Growth
     {
         if (tip == noParent || f.nodes.length <= scaffoldNodes)
             return 0.0f;
-        const float spacing = spacingShare * c.stepLength;
+        const float spacing = spacingShare * scale();
         float sum = 0.0f;
         foreach (i; scaffoldNodes .. f.nodes.length)
         {
@@ -322,7 +372,7 @@ private struct Growth
     /// порога слияния, или -1.
     ptrdiff_t mergeTarget(const vec3 p, size_t except) const
     {
-        const float mergeDist = mergeShare * c.stepLength;
+        const float mergeDist = mergeShare * scale();
         ptrdiff_t best = -1;
         float bestD = mergeDist;
         foreach (i, n; f.nodes)
@@ -346,8 +396,8 @@ private struct Growth
     /// каркас кабины организм обтекает, а не отталкивается от него.
     bool tooClose(const vec3 to, size_t tip) const
     {
-        const float spacing = spacingShare * c.stepLength;
-        const float fold = foldShare * c.stepLength;
+        const float spacing = spacingShare * scale();
+        const float fold = foldShare * scale();
         foreach (i; scaffoldNodes .. f.nodes.length)
         {
             if (isAncestor(tip, i))
@@ -395,6 +445,7 @@ private struct Growth
         sprouts ~= 0;
         sprouts[from] += 1;
         grown += 1;
+        grownLen += sqrt(dot(step, step));
     }
 }
 
@@ -499,7 +550,19 @@ private bool growRound(ref Growth g)
         const vec3 from = g.f.nodes[tip].pos;
         foreach (d; stepDirections)
         {
-            const vec3 to = from + d * g.c.stepLength;
+            // Проба базовым шагом: отклик в ней задаёт и допуск роста, и
+            // длину будущей балки. Проба лежит на самой балке, поэтому
+            // ограничения габарита проверяем на ней же — отбраковка дешёвая,
+            // поле считаем после неё.
+            const vec3 probe = from + d * g.c.stepLength;
+            if (abs(probe.x - g.f.nodes[0].pos.x) > maxHalfWidth)
+                continue;
+            if (probe.z < g.hangZ - maxDrop)
+                continue;
+            const float resp = g.response(probe, frameTissue, tip);
+            if (resp <= respondGate)
+                continue;
+            const vec3 to = from + d * g.budLength(resp);
             // Кабина неприкосновенна: сквозь корпус не растём.
             if (beamHitsCabin(g.f, from, to))
                 continue;
@@ -507,11 +570,9 @@ private bool growRound(ref Growth g)
                 continue;
             if (to.z < g.hangZ - maxDrop)
                 continue;
-            const float resp = g.response(to, frameTissue, tip);
-            if (resp > respondGate)
-                buds ~= Bud(tip, to, resp,
-                    resp + turnShare * dot(d, g.born[tip])
-                    + g.outward(d, from.x));
+            buds ~= Bud(tip, to, resp,
+                resp + turnShare * dot(d, g.born[tip])
+                + g.outward(d, from.x));
         }
     }
     sort!((a, b) => a.rank > b.rank)(buds);
@@ -525,6 +586,10 @@ private bool growRound(ref Growth g)
         // узел сам стал источником и может задушить соседние места.
         if (g.response(bud.to, frameTissue) <= respondGate)
             continue;
+        // Вытяжка по полю не должна перескакивать выжженный участок: балка
+        // лежит только там, где ткань жива по всей длине.
+        if (!g.aliveAlong(g.f.nodes[bud.tip].pos, bud.to))
+            continue;
         const auto merged = g.mergeTarget(bud.to, bud.tip);
         if (merged >= 0)
         {
@@ -535,6 +600,8 @@ private bool growRound(ref Growth g)
             g.f.beams ~= new Beam(bud.tip, cast(size_t) merged, g.c.beamRadius);
             g.sprouts[bud.tip] += 1;
             g.grown += 1;
+            g.grownLen += distance(g.f.nodes[bud.tip].pos,
+                g.f.nodes[cast(size_t) merged].pos);
             grew = true;
             ++taken;
             continue;
