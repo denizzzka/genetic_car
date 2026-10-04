@@ -146,6 +146,7 @@ void main(string[] args)
     {
         import genetics.chromosome : Chromosome;
         import genetics.growth : develop;
+        import genetics.fitness : buggyFitness;
         import frame.frame : AnchorKind;
         import dlib.math.vector : distance;
         import std.algorithm : min, max;
@@ -186,6 +187,16 @@ void main(string[] args)
         writefln("DIAG балки=%d длина min=%.3f avg=%.3f max=%.3f (шаг=%.3f)",
             cast(int) f.beams.length, lo, sum / f.beams.length, hi,
             founder.stepLength);
+        float nodeLo = float.max, nodeHi = -float.max, wheelLo = float.max;
+        foreach (n; f.nodes)
+        {
+            nodeLo = min(nodeLo, n.pos.z);
+            nodeHi = max(nodeHi, n.pos.z);
+        }
+        foreach (a; f.anchors)
+            wheelLo = min(wheelLo, f.nodes[a.node].pos.z - a.radius);
+        writefln("DIAG узлы z=%.2f..%.2f низ колеса=%.2f фитнес=%.4f",
+            nodeLo, nodeHi, wheelLo, buggyFitness(f));
         return;
     }
     if (args.canFind("-headless") || args.canFind("--headless"))
