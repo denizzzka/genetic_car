@@ -114,11 +114,6 @@ enum float outwardDepth = 0.9f;
 /// Жёсткий предел полуширины машины, м. Дальше вынос не растёт вовсе.
 enum float maxHalfWidth = 1.1f;
 
-/// Насколько ниже линии подвески машине можно расти, м. Колёса — самая низкая
-/// точка: ниже их обода каркасу нельзя, иначе он и станет опорой, а колёса
-/// повиснут. Предел держит это прямо в росте, не надеясь на поле.
-enum float maxDrop = 0.25f;
-
 /// Сила короткодействующего подавления вблизи чужой ветви.
 enum float crowdShare = 0.4f;
 
@@ -571,8 +566,6 @@ private bool growRound(ref Growth g)
             const vec3 probe = from + d * g.c.stepLength;
             if (abs(probe.x - g.f.nodes[0].pos.x) > maxHalfWidth)
                 continue;
-            if (probe.z < g.hangZ - maxDrop)
-                continue;
             const float resp = g.response(probe, frameTissue, tip);
             if (resp <= respondGate)
                 continue;
@@ -581,8 +574,6 @@ private bool growRound(ref Growth g)
             if (beamHitsCabin(g.f, from, to))
                 continue;
             if (abs(to.x - g.f.nodes[0].pos.x) > maxHalfWidth)
-                continue;
-            if (to.z < g.hangZ - maxDrop)
                 continue;
             buds ~= Bud(tip, to, resp,
                 resp + turnShare * dot(d, g.born[tip])
