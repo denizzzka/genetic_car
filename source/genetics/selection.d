@@ -61,38 +61,42 @@ Chromosome[] seedPopulation(size_t n)
     return pop;
 }
 
-/// Пул Phobos для физических заездов поколения, не более 75% ядер.
+/// Пул Phobos для работы поколения: заезды физики и, между ними, рост
+/// каркасов — не более 75% ядер.
 /// Демон-воркеры: на выходе их убирает статический деструктор Phobos.
 /// Инициализируется под __gshared-локом: впервые пул поднимается либо с
 /// главного потока, либо с jobThread вьюера — кто первый, тот и строит.
-private __gshared Object physicsPoolLock_ = new Object();
-private __gshared TaskPool physicsPool_;
-private __gshared size_t physicsPoolSize_;
+private __gshared Object workPoolLock_ = new Object();
+private __gshared TaskPool workPool_;
+private __gshared size_t workPoolSize_;
 
-/// Задать размер пула физики; действует до первого physicsPool().
-void setPhysicsPoolSize(size_t n)
+/// Задать размер рабочего пула; действует до первого workPool().
+void setWorkPoolSize(size_t n)
 {
-    physicsPoolSize_ = n;
+    workPoolSize_ = n;
 }
 
-private TaskPool physicsPool()
+/// Пул для заездов и роста каркасов: пока идёт одно, другое свободно, так
+/// что второй пул в процессе только мешал бы.
+TaskPool workPool()
 {
-    if (physicsPool_ !is null)
-        return physicsPool_;
-    synchronized (physicsPoolLock_)
+    if (workPool_ !is null)
+        return workPool_;
+    synchronized (workPoolLock_)
     {
-        if (physicsPool_ is null)
+        if (workPool_ is null)
         {
             // Без флага потоков столько же, сколько миров в пуле физики:
             // лишние воркеры только блокируются на его условии, а мир и его
             // сетка земли — самые тяжёлые объекты в процессе.
-            const n = physicsPoolSize_ > 0 ? physicsPoolSize_ : maxPooledWorlds;
-            physicsPool_ = new TaskPool(n);
-            physicsPool_.isDaemon = true;
+            const n = workPoolSize_ > 0 ? workPoolSize_ : maxPooledWorlds;
+            workPool_ = new TaskPool(n);
+            workPool_.isDaemon = true;
         }
-        return physicsPool_;
+        return workPool_;
     }
 }
+
 
 struct PhysicsBatch
 {
@@ -150,7 +154,7 @@ void runPhysics(ref PhysicsBatch batch, const EvolutionConfig params,
     // лог на одном потоке заодно делает вывод детерминированным.
     const size_t n = batch.needPhysics.length;
     PhysicsResult[] runs = new PhysicsResult[n];
-    foreach (i; physicsPool().parallel(iota(0, n), 1))
+    foreach (i; workPool().parallel(iota(0, n), 1))
         runs[i] = runBuggy(batch.needPhysics[i], params);
 
     foreach (i, run; runs)

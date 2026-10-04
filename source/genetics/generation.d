@@ -3,6 +3,7 @@ module genetics.generation;
 import std.algorithm : sort, map, min, max;
 import std.array : array;
 import std.exception : enforce;
+import std.range : iota;
 import std.random;
 import std.typecons : Nullable;
 
@@ -86,19 +87,40 @@ Organism[] buildNextGeneration(Individual[] pop, const EvolutionConfig p,
     // Заполнение остальных слотов: родители — все, лучшие первыми, по ним
     // счётчик идёт по кругу; на каждого — кроссовер со случайным партнёром
     // (турнир по всей популяции) и до maxMutationAttempts мутаций ребёнка.
+    //
+    // Рост детей одного круга идёт на пуле: родители в круге независимы, а
+    // выращивание каркаса — самая тяжёлая часть поколения. Выбор родителя,
+    // партнёра и кроссовер остаются на главном потоке: это дешёво, зато RNG
+    // не надо делить между воркерами — каждому ребёнку достаётся своя соль.
     auto pool = ranked;
     size_t parentIdx;
-    for (size_t visited; next.length < EvolutionConfig.populationSize; ++visited)
+    for (size_t visited; next.length < EvolutionConfig.populationSize;)
     {
-        enforce(visited < maxParentCycles * pool.length,
+        const size_t budget = maxParentCycles * pool.length;
+        enforce(visited < budget,
             "не удалось заполнить кандидаты физической симуляции: "
             ~ "исчерпаны 3 цикла по родителям");
+        const size_t batch = min(pool.length,
+            min(EvolutionConfig.populationSize - next.length, budget - visited));
 
-        auto base = pool[parentIdx];
-        const mate = ranked[tournament(ranked, p.tournamentSize, rnd)].chromosome;
-        next ~= tryCreateViableMutant(base.chromosome.crossover(mate, rnd), p,
-            rnd, base.frame);
-        parentIdx = (parentIdx + 1) % pool.length;
+        Chromosome[] kids = new Chromosome[batch];
+        Nullable!Frame[] baseFrames = new Nullable!Frame[batch];
+        Random[] kidsRnd = new Random[batch];
+        foreach (k; 0 .. batch)
+        {
+            auto base = pool[parentIdx];
+            const mate = ranked[tournament(ranked, p.tournamentSize, rnd)].chromosome;
+            kids[k] = base.chromosome.crossover(mate, rnd);
+            baseFrames[k] = base.frame;
+            kidsRnd[k] = Random(uniform!uint(rnd));
+            parentIdx = (parentIdx + 1) % pool.length;
+        }
+
+        Organism[] grown = new Organism[batch];
+        foreach (k; workPool().parallel(iota(0, batch), 1))
+            grown[k] = tryCreateViableMutant(kids[k], p, kidsRnd[k], baseFrames[k]);
+        next ~= grown;
+        visited += batch;
     }
     return next;
 }

@@ -187,7 +187,7 @@ class BuggyScene: Scene
 
         // Мир показа берём из пула, поэтому фоновым остаётся на один меньше:
         // пик миров держится на потолке, а вьюер не ждёт освобождения за ними.
-        setPhysicsPoolSize(pooledWorldCount() - 1);
+        setWorkPoolSize(pooledWorldCount() - 1);
 
         writefln("engine: %s", selectedEngineName);
 

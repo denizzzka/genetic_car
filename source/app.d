@@ -66,7 +66,7 @@ private void runHeadless(const HeadlessOptions opt)
     cfg.logPhysics = opt.logPhysics;
 
     if (opt.threads > 0)
-        setPhysicsPoolSize(opt.threads);
+        setWorkPoolSize(opt.threads);
 
     writefln("headless: engine %s, %d поколений, зерно %d, окно заезда %.1fs%s",
         selectedEngineName, opt.generations, opt.seed, opt.simulateSeconds,
