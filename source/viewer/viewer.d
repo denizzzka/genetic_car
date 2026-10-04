@@ -147,9 +147,7 @@ class BuggyScene: Scene
 
     /// Фазы последнего поколения, с: рост (buildNextGeneration), отбор
     /// (evaluateStatic) и фоновая физика — печатаются одной строкой.
-    private double jobGrowSec_;
-    private double jobEvalSec_;
-    private double jobPhysicsSec_;
+    private GenerationTiming jobTiming_;
 
     override void afterLoad()
     {
@@ -496,11 +494,10 @@ class BuggyScene: Scene
         StopWatch swGen = StopWatch(AutoStart.yes);
         auto children = buildNextGeneration(cur, runCfg, rnd);
         const double growSec = swGen.peek.total!"seconds";
-        swGen.stop();
         batch = evaluateStatic(children, runCfg);
         batchIsPopulation_ = false;   // это следующее поколение, не текущее
-        jobGrowSec_ = growSec;
-        jobEvalSec_ = swGen.peek.total!"seconds" - growSec;
+        jobTiming_.grow = growSec;
+        jobTiming_.eval = swGen.peek.total!"seconds" - growSec;
         jobGen = generation + 1;
         // Новый batch — следующее поколение: сброс live-цикла. Текущая машина
         // продолжает ехать (V не рвётся), а следующий спавн (после схода или
@@ -513,7 +510,7 @@ class BuggyScene: Scene
             StopWatch swPhys = StopWatch(AutoStart.yes);
             runPhysics(batch, runCfg, jobGen);
             swPhys.stop();
-            jobPhysicsSec_ = swPhys.peek.total!"seconds";
+            jobTiming_.physics = swPhys.peek.total!"seconds";
             atomicStore(jobDone, true);
         });
         jobThread.isDaemon = true;
@@ -816,11 +813,9 @@ class BuggyScene: Scene
 
     private void logGeneration()
     {
-        const double physSec = jobPhysicsSec_;
-        writefln("gen %d: best=%.4f mean=%.4f pop=%d рост=%.2fs отбор=%.2fs физика=%.2fs цикл=%.2fs",
+        writefln("gen %d: best=%.4f mean=%.4f pop=%d %s",
             generation, bestFitness(population), meanFitness(population),
-            population.length, jobGrowSec_, jobEvalSec_, physSec,
-            jobGrowSec_ + jobEvalSec_ + physSec);
+            population.length, jobTiming_.toPhases());
     }
 
     private void removeCar()

@@ -87,12 +87,11 @@ private void runHeadless(const HeadlessOptions opt)
         runPhysics(batch, cfg, gen + 1);
         cur = batch.res;
         const size_t now = sw.peek.total!"msecs";
-        const double growSec = (growMs - prev) / 1000.0;
-        const double evalSec = (evalMs - growMs) / 1000.0;
-        const double physSec = (now - evalMs) / 1000.0;
-        writefln("поколение %d: needPhysics=%d best=%.4f mean=%.4f рост=%.2fs отбор=%.2fs физика=%.2fs цикл=%.2fs всего=%.1fs",
+        const GenerationTiming timing = GenerationTiming((growMs - prev) / 1000.0,
+            (evalMs - growMs) / 1000.0, (now - evalMs) / 1000.0);
+        writefln("поколение %d: needPhysics=%d best=%.4f mean=%.4f %s всего=%.1fs",
             gen + 1, batch.needPhysics.length, bestFitness(cur), meanFitness(cur),
-            growSec, evalSec, physSec, (now - prev) / 1000.0, now / 1000.0);
+            timing.toPhases(), now / 1000.0);
         prev = now;
     }
     writefln("headless done: %d поколений, seed %d", opt.generations, opt.seed);
