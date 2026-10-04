@@ -1,8 +1,12 @@
 module genetics.growth;
 
 import std.algorithm : max, min, sort;
-import std.math : abs, exp, sqrt;
+import std.math : abs, sqrt;
 import std.typecons : Nullable;
+
+// `std.math.exp` для float считается портабельным полиномом — в цикле поля
+// это втрое дороже libc-варианта.
+import core.stdc.math : expf;
 
 import dlib.math.vector : distance, dot, vec3;
 import dlib.math.utils : clamp;
@@ -298,8 +302,8 @@ private struct Growth
         foreach (n; f.nodes)
         {
             const float d = distance(n.pos, p);
-            r.act += exp(-d / c.actDiffusion);
-            r.inh += exp(-d / c.inhDiffusion);
+            r.act += expf(-d / c.actDiffusion);
+            r.inh += expf(-d / c.inhDiffusion);
         }
         return r;
     }
@@ -331,7 +335,7 @@ private struct Growth
         if (d > 0.0f)
             return -hangShare * d;
         const float down = -d;
-        return hangShare * down * exp(-down / hangDepth);
+        return hangShare * down * expf(-down / hangDepth);
     }
 
     /// Боковой вынос шага: до `outwardDepth` наружу расти выгоднее, чем вдоль
