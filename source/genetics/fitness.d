@@ -6,8 +6,7 @@ import std.math;
 import dlib.math.vector;
 
 import frame.frame;
-import frame.cockpit : cockpitGeometry, CockpitGeometry;
-import genetics.buggyast;
+import frame.cockpit : beamHitsCabin, wheelHitsCabin;
 import physics_world;
 
 /*
@@ -39,8 +38,8 @@ enum float wheelWheelMinGap = 1e-3f;
 /// балка в самой плоскости пола зону не задевает, эволюция сама расставит
 /// балки ниже.
 
-/// Разумный потолок сложности каркаса.
-enum size_t maxBeamCount = 64;
+/// Разумный потолок сложности каркаса: столько балок вырастает максимум.
+enum size_t maxBeamCount = 200;
 
 /// Габаритный ящик каркаса — единый односторонний потолок размера:
 /// 3 по курсу (размах) × 2.5 поперёк × 2.5 над землёй, центр встаёт на
@@ -55,12 +54,11 @@ enum float boxHeight = 2.5f;
 /// ящик, получает порог вместо ~e^-25 и остаётся видимым отбору и физике.
 enum float morphologyFloor = 0.01f;
 
-/// Слой симметрии в фитнесе выключен: симметрия, которую задаёт грамматика,
+/// Слой симметрии в фитнесе выключен: симметрия, которую задаёт химия роста,
 /// должна быть видна в эволюции без давления отбора — ни в сторону зеркала,
 /// ни в сторону асимметрии. Включение возвращает и штраф за асимметрию
-/// (узлы, колёса, масса балок, радиальный разброс twin-пар), и поощрение
-/// симметрии; `motorBalance` (ведущие колёса по сторонам) — часть того же
-/// слоя и тоже выключен.
+/// (узлы, колёса, масса балок), и поощрение симметрии; `motorBalance`
+/// (ведущие колёса по сторонам) — часть того же слоя и тоже выключен.
 enum bool symmetryFitnessEnabled = false;
 
 /// Оценочная фитнес-функция каркаса (без физики).
@@ -74,11 +72,6 @@ enum bool symmetryFitnessEnabled = false;
 ///   - симметрия через плоскость X=0 и баланс ведущих колёс (слой
 ///     `symmetryFitnessEnabled`).
 float buggyFitness(const Frame f)
-{
-    return buggyFitness(f, Ast.init);
-}
-
-float buggyFitness(const Frame f, const Ast ast)
 {
     // ---- Гейт: физическая выполнимость ----
     if (f.nodes.length == 0 || f.beams.length == 0)
@@ -136,7 +129,7 @@ float buggyFitness(const Frame f, const Ast ast)
 
     // ---- Слоты морфологии ----
     // Симметрия и баланс ведущих колёс по сторонам отключены: пока смотрят,
-    // как сама грамматика строит тело, отбор не должен давить на симметрию
+    // как сама химия роста строит тело, отбор не должен давить на симметрию
     // ни в сторону зеркала, ни в сторону асимметрии. Слой остаётся в коде и
     // включается обратно одним флагом.
     float phiSym = 1.0f;
@@ -146,9 +139,8 @@ float buggyFitness(const Frame f, const Ast ast)
         const float nodeSym = symmetryRatio(f);
         const float wheelSym = wheelSymmetry(f);
         const float pairSym = beamMassSymmetry(f);
-        const float forkSym = forkRadiusSymmetry(ast);
         const float base = 0.5f * nodeSym + 0.3f * wheelSym + 0.2f * pairSym;
-        phiSym = (0.5f + 0.5f * base) * forkSym;
+        phiSym = 0.5f + 0.5f * base;
         phiDrive = 0.5f + 0.5f * motorBalance(f);
     }
 
@@ -195,100 +187,6 @@ float wheelAnchorSpacing(const Frame f)
     return best;
 }
 
-/// Пол запретной зоны на курсе y (локальный, от ЦМ кабины): контур днища,
-/// интерполяция профиля. За пределами станций — крайние значения контура.
-private float cabinFloor(const CockpitGeometry cg, float yLocal)
-{
-    const profile = cg.floorProfile;
-    if (yLocal <= profile[0].y)
-        return profile[0].z;
-    if (yLocal >= profile[$ - 1].y)
-        return profile[$ - 1].z;
-    foreach (i; 1 .. profile.length)
-        if (yLocal <= profile[i].y)
-        {
-            const float t = (yLocal - profile[i - 1].y)
-                / (profile[i].y - profile[i - 1].y);
-            return profile[i - 1].z + (profile[i].z - profile[i - 1].z) * t;
-        }
-    assert(false);
-}
-
-/// Пересекает ли отрезок строгую внутренность зоны кабины: параллелепипед
-/// `lo..hi` с полом по контуру днища (повторяет наклон). Балка в самой
-/// плоскости пола зону не задевает — ловится только реальный проход сквозь
-/// корпус.
-private bool beamPiercesCabin(const vec3 a, const vec3 b,
-    const vec3 lo, const vec3 hi, const CockpitGeometry cg,
-    const vec3 node0)
-{
-    const vec3 d = b - a;
-    float tmin = 0.0f, tmax = 1.0f;
-    if (!slab(tmin, tmax, a.x, d.x, lo.x, hi.x)) return false;
-    if (!slab(tmin, tmax, a.y, d.y, lo.y, hi.y)) return false;
-    if (!slab(tmin, tmax, a.z, d.z, -float.max, hi.z)) return false;
-    if (!(tmin < tmax))
-        return false;
-
-    // Изломы профиля пола и границы окна — кандидаты на максимум
-    // g(t) = z(t) − пол(y(t)); внутри каждого вдоль-линейного куска максимум
-    // достигается на его концах.
-    float[3 + 8] tPts;
-    tPts[0] = tmin;
-    size_t n = 1;
-    if (abs(d.y) > 1e-12f)
-        foreach (s; cg.floorProfile)
-        {
-            const float t = (node0.y + s.y - a.y) / d.y;
-            if (t > tmin + 1e-9f && t < tmax - 1e-9f)
-            {
-                assert(n + 1 < tPts.length, "станций больше, чем ждём");
-                tPts[n++] = t;
-            }
-        }
-    tPts[n++] = tmax;
-    sort(tPts[0 .. n]);
-
-    foreach (i; 0 .. n)
-    {
-        const vec3 p = a + d * tPts[i];
-        const float g = p.z - (node0.z + cabinFloor(cg, p.y - node0.y));
-        if (g > 1e-6f)
-            return true;
-    }
-    return false;
-}
-
-/// Слэб-тест одной оси: сужает [tmin, tmax] на пересечение луча с полосой.
-private bool slab(ref float tmin, ref float tmax,
-    float p, float d, float lo, float hi)
-{
-    if (abs(d) < 1e-12f)
-        return p > lo && p < hi;
-    float t0 = (lo - p) / d;
-    float t1 = (hi - p) / d;
-    if (t0 > t1)
-    {
-        const float t = t0; t0 = t1; t1 = t;
-    }
-    if (t0 > tmin) tmin = t0;
-    if (t1 < tmax) tmax = t1;
-    return tmin < tmax;
-}
-
-/// Касается ли колесо кабины: центр диска внутри корпуса, расширенного на
-/// радиус колеса; низ корпуса — по контуру днища на курсе колеса.
-private bool wheelHitsCabin(const vec3 p, float r,
-    const vec3 lo, const vec3 hi, const CockpitGeometry cg,
-    const vec3 node0)
-{
-    if (!(p.x >= lo.x - r && p.x <= hi.x + r
-        && p.y >= lo.y - r && p.y <= hi.y + r))
-        return false;
-    const float floorZ = node0.z + cabinFloor(cg, p.y - node0.y);
-    return p.z + r > floorZ && p.z - r < hi.z;
-}
-
 /// Первое касание корпуса кабины в каркасе: none — никто её не трогает.
 /// Запретная зона — параллелепипед от узла 0 (ЦМ кабины, совмещён с началом
 /// координат меша) по AABB меша, пол по профилю днища. Эфемерные
@@ -297,22 +195,17 @@ private RunOutcome frameCabinContact(const Frame f)
 {
     if (f.nodes.length == 0)
         return RunOutcome.none;
-    const cg = cockpitGeometry();
-    const vec3 lo = f.nodes[0].pos + cg.minP;
-    const vec3 hi = f.nodes[0].pos + cg.maxP;
 
     foreach (b; f.beams)
     {
         if (cast(Beam) b is null)
             continue;
-        if (beamPiercesCabin(f.nodes[b.a].pos, f.nodes[b.b].pos,
-            lo, hi, cg, f.nodes[0].pos))
+        if (beamHitsCabin(f, f.nodes[b.a].pos, f.nodes[b.b].pos))
             return RunOutcome.cabinPierce;
     }
 
     foreach (a; f.anchors)
-        if (wheelHitsCabin(f.nodes[a.node].pos, a.radius, lo, hi, cg,
-            f.nodes[0].pos))
+        if (wheelHitsCabin(f, f.nodes[a.node].pos, a.radius))
             return RunOutcome.cabinWheel;
 
     return RunOutcome.none;
@@ -628,28 +521,6 @@ float beamMassSymmetry(const Frame f)
     return total > 0.0f ? matched / total : 1.0f;
 }
 
-/// Радиальная симметрия fork-пар из AST: 1 при нулевой материализованной
-/// асимметрии (`|beamAsymmetry|`, вместе с организменным градиентом и порогом
-/// билатеральности) на всех балках раздвоенных сегментов. На пустом AST
-/// (синтетические каркасы без генома) — нейтрально 1.
-float forkRadiusSymmetry(const Ast ast)
-{
-    float sum = 0.0f;
-    size_t n = 0;
-    foreach (s; ast.segments)
-        if (s.fork)
-            foreach (b; s.beams)
-            {
-                sum += abs(beamAsymmetry(ast.lrGradient, b));
-                n += 1;
-            }
-    if (n == 0)
-        return 1.0f;
-
-    enum penaltyFactor = 12.0f;
-    return exp(-penaltyFactor * sum / n);
-}
-
 /// Цикломатическое число графа балок μ = E - V + c (число независимых петель).
 size_t cyclomaticNumber(const Frame f)
 {
@@ -712,14 +583,8 @@ float motorBalance(const Frame f)
 
 unittest
 {
-    import genetics.sge;
-    import genetics.buggygrammar;
-    import genetics.initial_data;
-
-    // Стартовый закодированный багги — правдоподобный каркас.
-    auto grammar = buggyGrammar();
-    auto frame = develop(grammar, startGenome(grammar)).get.frame;
-    assert(buggyFitness(frame) > 0.0f,
+    // Стартовый каркас — правдоподобная машина с положительным фитнесом.
+    assert(buggyFitness(symmetricBuggyFrame()) > 0.0f,
         "стартовый багги должен получать положительный фитнес");
 
     // Пустой каркас — не машина.
@@ -804,57 +669,6 @@ unittest
         "ведущие колёса попарно по сторонам");
     assert(motorBalance(asymmetricBuggyFrame()) < 1.0f,
         "ведущие колёса только с одной стороны — баланс ниже единицы");
-}
-
-unittest
-{
-    // Nodal/Lefty из AST: слой симметрии штрафует ненулевой |beamAsymmetry|
-    // fork-пары. Пустой AST нейтрален.
-    Ast a0;
-    a0.segments ~= SegmentAst(true, []);
-    Ast aD;
-    // Ненулевой активатор без ингибитора при ровной паре рождает сдвиг twin.
-    aD.segments ~= SegmentAst(true, []);
-    aD.segments[0].beams ~= BeamAst(StartRef(StartRefKind.last, 0),
-        EndRef(EndRefKind.newNode, origin, 0),
-        0.04f, 0.1f, 0.0f, 0.0f, BeamKind.normal, 0.0f);
-
-    assert(abs(forkRadiusSymmetry(a0) - 1.0f) < 1e-6f,
-        "нулевой Nodal/Lefty не штрафуется");
-    assert(forkRadiusSymmetry(aD) < forkRadiusSymmetry(a0),
-        "ненулевой |beamAsymmetry| штрафует асимметрию fork-пары");
-}
-
-unittest
-{
-    // Организменный LR-градиент штрафуется на всех парах сразу, а порог
-    // билатеральности способен от шума-зазора освободить каркас целиком.
-    BeamAst b;
-    b.nodal = 0.01f;
-    b.lefty = 0.0f;
-    b.threshold = 0.0f;
-
-    Ast open;
-    open.segments ~= SegmentAst(true, []);
-    open.segments[0].beams ~= b;
-
-    BeamAst frozenBeam = b;
-    frozenBeam.threshold = 1.0f;
-    Ast frozen;
-    frozen.segments ~= SegmentAst(true, []);
-    frozen.segments[0].beams ~= frozenBeam;
-
-    Ast polarized;
-    polarized.lrGradient = 0.1f;
-    polarized.segments ~= SegmentAst(true, []);
-    polarized.segments[0].beams ~= b;
-
-    const float sOpen = forkRadiusSymmetry(open);
-    assert(sOpen < 1.0f, "шум-зазор без порога материализуется в асимметрию");
-    assert(abs(forkRadiusSymmetry(frozen) - 1.0f) < 1e-6f,
-        "порог билатеральности выше отклика замораживает симметрию");
-    assert(forkRadiusSymmetry(polarized) < sOpen,
-        "организменный градиент асимметрирует каждую пару организма");
 }
 
 unittest

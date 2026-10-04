@@ -58,7 +58,6 @@ class BuggyScene: Scene
     /// `meshCockpit`, а asset владеет вершинами.
     private ObjModel cockpitModel_;
 
-    Grammar grammar;
     Random rnd;
 
     /// Текущая популяция отбора и номер поколения.
@@ -146,13 +145,12 @@ class BuggyScene: Scene
     {
         // BuggyScene создан через New! (dlib): GC не сканирует dlib-память.
         // Регистрируем объект сцены как GC-диапазон, чтобы ссылки в его полях
-        // (grammar, population, terrainVis) не уносились сборщиком.
+        // (population, terrainVis) не уносились сборщиком.
         // afterLoad, как и update, может быть вызван позже при загрузке сцены.
         import core.memory: GC;
         GC.addRange(cast(void*)this, __traits(classInstanceSize, BuggyScene));
 
         eventManager.trackUpDownState = true;
-        grammar = buggyGrammar();
         rnd = Random(42);
         // Гибридная оценка: статический гейт + 2 минуты физического заезда.
         evolutionConfig.simulateSeconds = 120.0;
@@ -293,7 +291,7 @@ class BuggyScene: Scene
     /// Новое 0-е поколение: идентичные копии закодированного багги.
     private void resetPopulation()
     {
-        population = evaluatePopulation(grammar, seedPopulation(grammar, EvolutionConfig.populationSize));
+        population = evaluatePopulation(seedPopulation(EvolutionConfig.populationSize));
         generation = 0;
     }
 
@@ -323,8 +321,8 @@ class BuggyScene: Scene
             {
                 // Живой просмотр продолжается, но по новому 0-му поколению.
                 stopLiveCar();
-                batch = evaluateStatic(grammar,
-                    population.map!(e => e.genotype).array, evolutionConfig);
+                batch = evaluateStatic(
+                    population.map!(e => e.chromosome).array, evolutionConfig);
             }
             buildGallery();
             logGeneration();
@@ -422,8 +420,8 @@ class BuggyScene: Scene
             // заезда): и до первого G, и после R batch может не совпадать с
             // population, а живому просмотру нужны его needPhysics.
             if (jobThread is null)
-                batch = evaluateStatic(grammar,
-                    population.map!(e => e.genotype).array, evolutionConfig);
+                batch = evaluateStatic(
+                    population.map!(e => e.chromosome).array, evolutionConfig);
             startLiveCar();
         }
         else
@@ -477,8 +475,8 @@ class BuggyScene: Scene
     /// Строит партию поколения на главном потоке и запускает её физику в фоне.
     private void startNextGen()
     {
-        auto children = buildNextGeneration(grammar, cur, runCfg, rnd);
-        batch = evaluateStatic(grammar, children, runCfg);
+        auto children = buildNextGeneration(cur, runCfg, rnd);
+        batch = evaluateStatic(children, runCfg);
         jobGen = generation + 1;
         // Новый batch — следующее поколение: сброс live-цикла. Текущая машина
         // продолжает ехать (V не рвётся), а следующий спавн (после схода или
@@ -824,13 +822,13 @@ class BuggyScene: Scene
 
         foreach (i, pick; picks)
         {
-            auto f = develop(grammar, pick.genotype);
+            auto f = develop(pick.chromosome);
             if (f.isNull)
                 continue;
             const float laneX = i * gallerySpacing - firstX;
             // Buggy раскладывает каркас сам (центр в нуле, колёса на земле);
             // витрине остаётся только сдвиг в свою полосу по X (display-only).
-            auto buggy = new Buggy(placedFrame(f.get.frame));
+            auto buggy = new Buggy(placedFrame(f.get));
             drawBuggy(buggy, vec3(laneX, 0.0f, 0.0f) + backward * galleryBack);
         }
 

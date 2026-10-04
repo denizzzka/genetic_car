@@ -6,8 +6,8 @@ import std.random;
 import std.stdio : writefln;
 import std.parallelism : TaskPool;
 
-import genetics.sge;
-import genetics.buggygrammar;
+import genetics.chromosome;
+import genetics.growth : develop;
 import genetics.initial_data;
 import genetics.fitness;
 import genetics.generation : buildNextGeneration;
@@ -19,7 +19,7 @@ import frame.cockpit : cockpitFrameBeamCount;
 /// Отобранный индивид: геном и его фитнес (0 — невалидный/неразвиваемый).
 struct Individual
 {
-    Genotype genotype;
+    Chromosome chromosome;
     float fitness;
 }
 
@@ -28,13 +28,11 @@ struct EvolutionConfig
 {
     enum size_t populationSize = 100;
     size_t tournamentSize = 2;
-    /// Стартовые темпы мутаций поколения 0; дальше особи самоадаптируются.
-    /// Инделей заметно больше дефолтных: длина гена — единственное, что
-    /// ограничивает число костей, а точечная правка по замыслу не трогает
-    /// списки (их вес 0.2).
-    size_t mutateHits = defaultPointHits;
-    size_t indelHits = 2;
-    float structuralChance = 0.5f;
+
+    /// Шаг мутации в долях диапазона гена. Мало — эволюция ползёт, много —
+    /// потомки мгновенно вырождаются и отбору нечего выбирать.
+    float mutationRate = 0.05f;
+
     size_t generationsPerPress = 25;
 
     double simulateSeconds = 0.0;
@@ -50,17 +48,13 @@ struct EvolutionConfig
 /// Все особи одного генома — первая галерея стоит одинаковой шеренгой,
 /// а мутация раздробит её уже на первом поколении. Так различие между
 /// «до» и «после» отбора видно сразу.
-Genotype[] seedPopulation(Grammar gr, size_t n,
-    const EvolutionConfig params = EvolutionConfig.init)
+Chromosome[] seedPopulation(size_t n)
 {
-    Genotype[] pop;
+    Chromosome[] pop;
     pop.reserve(n);
-    auto base = startGenome(gr);
-    base.pointHits = params.mutateHits;
-    base.indelHits = params.indelHits;
-    base.structuralChance = params.structuralChance;
+    const base = startChromosome;
     foreach (_; 0 .. n)
-        pop ~= base.dup;
+        pop ~= base;
     return pop;
 }
 
@@ -104,7 +98,7 @@ struct PhysicsBatch
     size_t[] physIdx;
 }
 
-PhysicsBatch evaluateStatic(const Grammar gr, Genotype[] pop,
+PhysicsBatch evaluateStatic(Chromosome[] pop,
     const EvolutionConfig params = EvolutionConfig.init)
 {
     auto res = new Individual[pop.length];
@@ -114,19 +108,19 @@ PhysicsBatch evaluateStatic(const Grammar gr, Genotype[] pop,
     size_t[] physIdx;
     physIdx.reserve(pop.length);
 
-    foreach (i, g; pop)
+    foreach (i, chr; pop)
     {
         float fit = 0.0f;
-        if (auto may = develop(gr, g))
+        if (auto may = develop(chr))
         {
-            fit = buggyFitness(may.get.frame, may.get.ast);
+            fit = buggyFitness(may.get);
             if (fit > 0.0f && params.simulateSeconds > 0.0)
             {
-                needPhysics ~= new Buggy(placedFrame(may.get.frame));
+                needPhysics ~= new Buggy(placedFrame(may.get));
                 physIdx ~= i;
             }
         }
-        res[i] = Individual(g, fit);
+        res[i] = Individual(chr, fit);
     }
 
     return PhysicsBatch(res, needPhysics, physIdx);
@@ -153,10 +147,10 @@ void runPhysics(ref PhysicsBatch batch, const EvolutionConfig params,
 }
 
 /// Оценка популяции
-Individual[] evaluatePopulation(const Grammar gr, Genotype[] pop,
+Individual[] evaluatePopulation(Chromosome[] pop,
     const EvolutionConfig params = EvolutionConfig.init, size_t generation = 0)
 {
-    auto batch = evaluateStatic(gr, pop, params);
+    auto batch = evaluateStatic(pop, params);
     runPhysics(batch, params, generation);
     return batch.res;
 }
@@ -181,14 +175,14 @@ private void logPhysicsIndividual(size_t idx, size_t generation, float finalFit,
  * кроссовер + мутация. Возвращает оценённую популяцию следующего поколения;
  * исходная не меняется.
  */
-Individual[] evolve(const Grammar gr, Individual[] pop,
-    size_t generations, ref Random rnd, EvolutionConfig params = EvolutionConfig.init)
+Individual[] evolve(Individual[] pop, size_t generations, ref Random rnd,
+    EvolutionConfig params = EvolutionConfig.init)
 {
     auto cur = pop;
     foreach (gen; 0 .. generations)
     {
-        auto children = buildNextGeneration(gr, cur, params, rnd);
-        auto batch = evaluateStatic(gr, children, params);
+        auto children = buildNextGeneration(cur, params, rnd);
+        auto batch = evaluateStatic(children, params);
         runPhysics(batch, params, gen + 1);
         cur = batch.res;
         if (params.logPhysics)
@@ -231,20 +225,19 @@ float meanFitness(const Individual[] pop)
 
 unittest
 {
-    // Поколение 0: все геномы идентичны, фитнес одинаковый и положительный.
-    auto gr = buggyGrammar();
-    auto seed = seedPopulation(gr, EvolutionConfig.populationSize);
-    auto pop = evaluatePopulation(gr, seed);
+    // Поколение 0: все хромосомы идентичны, фитнес одинаковый и положительный.
+    auto seed = seedPopulation(EvolutionConfig.populationSize);
+    auto pop = evaluatePopulation(seed);
     assert(pop.length == EvolutionConfig.populationSize, "размер популяции сохраняется");
     const f0 = pop[0].fitness;
-    assert(f0 > 0.0f, "закодированный багги развивается в валидный каркас");
+    assert(f0 > 0.0f, "хромосома основателя вырастает в валидный каркас");
     foreach (e; pop)
         assert(e.fitness == f0, "поколение 0 — идентичные особи");
 
     // Элитизм: лучший фитнес не падает при эволюции (элита сохраняется
     // как есть, поэтому верхний фитнес не ниже исходного).
     auto rnd = Random(7);
-    auto evolved = evolve(gr, pop, 10, rnd);
+    auto evolved = evolve(pop, 10, rnd);
     assert(evolved.length == EvolutionConfig.populationSize,
         "поколение строится по enum populationSize");
     assert(bestFitness(evolved) >= f0 - 1e-6f,
@@ -252,16 +245,16 @@ unittest
 
     // Родителей больше, чем нужно на поколение, — слоты заполняются
     // гарантированно без провалов мутаций.
-    auto many = evaluatePopulation(gr, seedPopulation(gr, EvolutionConfig.populationSize * 2));
+    auto many = evaluatePopulation(seedPopulation(EvolutionConfig.populationSize * 2));
     auto rnd3 = Random(7);
-    auto evolved3 = evolve(gr, many, 10, rnd3);
+    auto evolved3 = evolve(many, 10, rnd3);
     assert(evolved3.length == EvolutionConfig.populationSize,
         "enum populationSize задаёт размер поколения");
 
     // Тот же посев и та же последовательность — тот же результат.
     auto rnd2 = Random(7);
-    auto evolved2 = evolve(gr, evaluatePopulation(gr,
-        seedPopulation(gr, EvolutionConfig.populationSize)), 10, rnd2);
+    auto evolved2 = evolve(evaluatePopulation(
+        seedPopulation(EvolutionConfig.populationSize)), 10, rnd2);
     assert(bestFitness(evolved2) == bestFitness(evolved),
         "отбор детерминирован при фиксированном зерне");
 }
@@ -272,15 +265,14 @@ unittest
     // должны быть конечными и не разваливаться. Величина счёта зависит от
     // каркаса — здесь важно отсутствие NaN/разлёта по поколениям.
     import std.math : isFinite;
-    auto gr = buggyGrammar();
-    auto pop = seedPopulation(gr, EvolutionConfig.populationSize);
+    auto pop = seedPopulation(EvolutionConfig.populationSize);
     EvolutionConfig cfg;
     cfg.simulateSeconds = 2.0;
-    auto e0 = evaluatePopulation(gr, pop, cfg);
+    auto e0 = evaluatePopulation(pop, cfg);
     foreach (x; e0)
         assert(isFinite(x.fitness) && x.fitness >= 0.0f, "физика в оценке конечна");
     auto rnd = Random(7);
-    auto e1 = evolve(gr, e0, 2, rnd, cfg);
+    auto e1 = evolve(e0, 2, rnd, cfg);
     const float b = bestFitness(e1);
     const float m = meanFitness(e1);
     assert(isFinite(b) && isFinite(m) && b >= 0.0f && m >= 0.0f,
@@ -289,31 +281,23 @@ unittest
 
 unittest
 {
-    // Структурные мутации подключены в цикл отбора: число балок обязано
-    // уметь расти за поколения, а не только менять геометрию скелета.
-    // Скелет (11 балок) неизменен, поэтому рост меряем относительно него.
-    auto gr = buggyGrammar();
-    const startAnchors = 2;
+    // Химия роста подключена к отбору: за поколения форма обязана меняться, и
+    // меняться в ту сторону, которую отбор оплачивает. Проверяем, что эволюция
+    // вообще способна улучшить лучшего — иначе новый генетический слой просто
+    // не работает.
+    auto rnd = Random(11);
+    auto pop = evaluatePopulation(seedPopulation(EvolutionConfig.populationSize));
+    auto evolved = evolve(pop, 15, rnd);
+    assert(bestFitness(evolved) >= bestFitness(pop) - 1e-6f,
+        "эволюция не ухудшает лучшего");
 
-    bool grewBeams;
-    bool dropAnchors;
-    foreach (s; 11 .. 41)
-    {
-        auto rnd = Random(s);
-        auto pop = evaluatePopulation(gr, seedPopulation(gr, 100), EvolutionConfig.init, 0);
-        auto evolved = evolve(gr, pop, 16, rnd, EvolutionConfig.init);
-        foreach (e; evolved)
-            if (auto may = develop(gr, e.genotype))
-            {
-                if (may.get.frame.beams.length > cockpitFrameBeamCount() + 2)
-                    grewBeams = true;
-                if (may.get.frame.anchors.length < startAnchors)
-                    dropAnchors = true;
-            }
-    }
-    assert(grewBeams, "число балок должно уметь расти через инделы");
-    // Жизнеспособные каркасы не теряют колёса (балки и якоря отбор сохраняет);
-    // третье колесо требует опоры на внешнюю структуру за зоной кабины —
-    // кабину не поощряется трогать колёсами (см. frameCabinContact).
-    assert(!dropAnchors, "отбор не должен разоружать багги до одного колеса");
+    // Форма каркаса обязана отличаться от основательской: иначе отбор
+    // выбирает среди одинаковых машин и эволюция стоит на месте.
+    const auto founder = develop(pop[0].chromosome).get;
+    bool formsDiffer;
+    foreach (e; evolved)
+        if (auto grown = develop(e.chromosome))
+            if (grown.get.beams.length != founder.beams.length)
+                formsDiffer = true;
+    assert(formsDiffer, "потомки обязаны отличаться от основателя");
 }
