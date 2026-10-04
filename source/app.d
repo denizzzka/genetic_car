@@ -79,16 +79,25 @@ private void runHeadless(const HeadlessOptions opt)
     size_t prev = sw.peek.total!"msecs";
     foreach (gen; 0 .. opt.generations)
     {
-        auto batch = evaluateStatic(buildNextGeneration(cur, cfg, rnd), cfg);
+        StopWatch swGen = StopWatch(AutoStart.yes);
+        auto nextGen = buildNextGeneration(cur, cfg, rnd);
+        auto batch = evaluateStatic(nextGen, cfg);
+        const auto createMs = swGen.peek.total!"msecs";
+        swGen.stop();
+
+        swGen.start();
         runPhysics(batch, cfg, gen + 1);
+        const auto physicsMs = swGen.peek.total!"msecs";
+        swGen.stop();
+
         cur = batch.res;
         const size_t now = sw.peek.total!"msecs";
-        writefln("gen %d: needPhysics=%d best=%.4f mean=%.4f dt=%.2fs total=%.1fs",
+        writefln("поколение %d создано: needPhysics=%d best=%.4f mean=%.4f время_создания=%.2fs время_физики=%.2fs цикл=%.2fs всего=%.1fs",
             gen + 1, batch.needPhysics.length, bestFitness(cur), meanFitness(cur),
-            (now - prev) / 1000.0, now / 1000.0);
+            createMs / 1000.0, physicsMs / 1000.0, (now - prev) / 1000.0, now / 1000.0);
         prev = now;
     }
-    writefln("headless done: %d generations, seed %d", opt.generations, opt.seed);
+    writefln("headless done: %d поколений, seed %d", opt.generations, opt.seed);
 }
 
 void main(string[] args)
