@@ -130,13 +130,6 @@ enum float wheelInnerRadius = 0.22f;
 /// Масштабируется пропорционально радиусу генетического колеса.
 enum float wheelWidth = 0.2f;
 
-/// Тор для рендера полой покрышки: внешний радиус — `wheelRadius`,
-/// внутренний — `wheelInnerRadius`, число сегментов — как у физической трубы.
-/// Сечение тора круглое, поэтому по оси его растягивает `wheelRingAxial`.
-enum float wheelRingMajor = (wheelRadius + wheelInnerRadius) / 2;
-enum float wheelRingMinor = (wheelRadius - wheelInnerRadius) / 2;
-enum float wheelRingAxial = wheelWidth / (2 * wheelRingMinor);
-
 /// Плотность материала колеса, кг/м^3.
 enum float wheelDensity = 400.0f;
 

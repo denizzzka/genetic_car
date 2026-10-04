@@ -17,10 +17,11 @@ import frame.cockpit : loadCockpit;
 import frame.objmesh : ObjModel;
 import genetics;
 import physics_world;
-import physics_world.engine : PhysWorld, tubeSegments;
+import physics_world.engine : PhysWorld;
 import viewer.scene : carToScenePos;
 import viewer.startaxes : buildStartAxes;
 import viewer.terrainvisualizer;
+import viewer.wheelmesh;
 
 class BuggyScene: Scene
 {
@@ -193,8 +194,9 @@ class BuggyScene: Scene
         galleryRoot.rotation = rotationQuaternion(Vector3f(1, 0, 0), degtorad(-90.0f));
 
         meshBeam = New!ShapeCylinder(1.0f, 1.0f, 8, assetManager);
-        meshWheel = New!ShapeTorus(wheelRingMajor, wheelRingMinor,
-            cast(uint) tubeSegments, 8, assetManager);
+        // Покрышка — та же полая труба, что и в физике: внешний радиус, ширина
+        // и число граней берутся одни и те же.
+        meshWheel = buildWheelMesh(assetManager);
 
         matBeam = addMaterial();
         matBeam.baseColorFactor = Color4f(0.55f, 0.55f, 0.62f, 1.0f);
@@ -612,10 +614,10 @@ class BuggyScene: Scene
             auto e = addEntity(carRoot);
             e.drawable = meshWheel;
             e.material = a.kind == AnchorKind.motorWheel ? matDriveWheel : matWheel;
-            // Масштаб под генетический радиус колеса, как и в витрине; вдоль
-            // оси — растяжка сечения до ширины покрышки.
+            // Меш построен под базовый `wheelRadius`, генетический радиус
+            // отличается равномерным масштабом: пропорции трубы те же.
             const float s = a.radius / wheelRadius;
-            e.scaling = Vector3f(s, s * wheelRingAxial, s);
+            e.scaling = Vector3f(s, s, s);
             liveCar ~= e;
         }
 
@@ -947,10 +949,10 @@ class BuggyScene: Scene
         e.material = mat;
         e.position = pos;
         e.rotation = rotationBetween(Vector3f(0, 1, 0), axle);
-        // Масштаб по генетическому радиусу: тор рисуется под базовый
-        // `wheelRadius`, обод вытягивается на свой размер.
+        // Меш построен под базовый `wheelRadius`, генетический радиус
+        // отличается равномерным масштабом: пропорции трубы те же.
         const float s = radius / wheelRadius;
-        e.scaling = Vector3f(s, s * wheelRingAxial, s);
+        e.scaling = Vector3f(s, s, s);
     }
 }
 
