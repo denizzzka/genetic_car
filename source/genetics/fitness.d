@@ -59,7 +59,7 @@ enum float morphologyFloor = 0.01f;
 /// ни в сторону асимметрии. Включение возвращает и штраф за асимметрию
 /// (узлы, колёса, масса балок), и поощрение симметрии; `motorBalance`
 /// (ведущие колёса по сторонам) — часть того же слоя и тоже выключен.
-enum bool symmetryFitnessEnabled = false;
+enum bool symmetryFitnessEnabled = true;
 
 /// Оценочная фитнес-функция каркаса (без физики).
 ///
