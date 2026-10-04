@@ -1,4 +1,4 @@
-module viewer.wheelmesh;
+module viewer.meshes;
 
 import std.math : PI, cos, sin;
 
@@ -97,4 +97,29 @@ private void pushQuad(Mesh mesh, ref size_t vi, ref size_t ii,
     mesh.indices[ii + 1] = [cast(uint) vi, cast(uint)(vi + 2), cast(uint)(vi + 3)];
     vi += 4;
     ii += 2;
+}
+/// Пятно следа на земле: квад в плоскости каркаса, нормаль — локальный +Z.
+/// Сущность под carRoot смотрит осью вверх сама, без доворота на 90°.
+///
+/// Меш единичный: сторону задаёт масштаб сущности.
+Mesh buildTrackMarkMesh(Owner owner)
+{
+    auto mesh = New!Mesh(owner);
+    mesh.vertices = New!(Vector3f[])(4);
+    mesh.normals = New!(Vector3f[])(4);
+    mesh.texcoords = New!(Vector2f[])(4);
+    mesh.indices = New!(uint[3][])(2);
+
+    size_t vi;
+    size_t ii;
+    pushQuad(mesh, vi, ii, Vector3f(0.0f, 0.0f, 1.0f),
+        [vec3(-0.5f, -0.5f, 0.0f), vec3(0.5f, -0.5f, 0.0f),
+         vec3(0.5f, 0.5f, 0.0f), vec3(-0.5f, 0.5f, 0.0f)],
+        [Vector2f(0.0f, 0.0f), Vector2f(1.0f, 0.0f),
+         Vector2f(1.0f, 1.0f), Vector2f(0.0f, 1.0f)]);
+
+    mesh.dataReady = true;
+    mesh.calcBoundingBox();
+    mesh.prepareVAO();
+    return mesh;
 }

@@ -6,6 +6,7 @@ import dagon.core.time;
 import core.thread : Thread;
 import core.atomic : atomicStore, atomicLoad;
 import std.algorithm : min, map, reduce, sort;
+import std.math : atan2;
 import std.range : evenChunks;
 import std.array : array;
 import std.random;
@@ -21,7 +22,7 @@ import physics_world.engine : PhysWorld;
 import viewer.scene : carToScenePos;
 import viewer.startaxes : buildStartAxes;
 import viewer.terrainvisualizer;
-import viewer.wheelmesh;
+import viewer.meshes;
 
 class BuggyScene: Scene
 {
@@ -49,12 +50,14 @@ class BuggyScene: Scene
     Mesh meshBeam = null;
     Mesh meshWheel = null;
     Mesh meshCockpit = null;
+    Mesh meshTrack;
     Texture texBeam;
     Material matBeam;
     Material matWheel;
     Material matDriveWheel;
     Material matCockpit;
     Material matEphemeral;
+    Material matTrack;
 
     /// Держит меш кабины живым (dlib-память вне GC): из него берётся
     /// `meshCockpit`, а asset владеет вершинами.
@@ -101,6 +104,21 @@ class BuggyScene: Scene
 
     /// Тонкий радиус дебажных цилиндров эфемерных балок, м.
     enum float ephVisRadius = 0.01f;
+
+    /// Следы колёс живого заезда: пятно на земле, когда колесо на ней стоит и
+    /// прошло с прошлого пятна trackStep. Пул по кругу — за длинный заезд
+    /// пятна больше, чем trackCap, и самые старые просто сменяются новыми.
+    private Entity[] tracks;
+    private vec3[] trackLast;
+    private bool[] trackSeen;
+    private size_t trackNext;
+
+    /// След вдоль курса и поперёк, м; шаг между пятнами, м; ёмкость пула.
+    /// Поперёк пятно равно ширине покрышки, иначе след уже самой покрышки.
+    enum float trackMarkLen = 0.1f;
+    enum float trackMarkWidth = wheelWidth;
+    enum float trackStep = 0.25f;
+    enum size_t trackCap = 512;
 
     /// Камера-орбита; в живом заезде плавно ведёт центр масс машины.
     private FreeviewComponent freeview;
@@ -221,6 +239,14 @@ class BuggyScene: Scene
         matEphemeral.baseColorFactor = Color4f(1.0f, 0.12f, 0.12f, 1.0f);
         matEphemeral.roughnessFactor = 0.7f;
         matEphemeral.metallicFactor = 0.1f;
+
+        // След колёса: тёмное матовое пятно на земле, один квад на все следы.
+        meshTrack = buildTrackMarkMesh(assetManager);
+        matTrack = addMaterial();
+        matTrack.baseColorFactor = Color4f(0.12f, 0.11f, 0.10f, 1.0f);
+        matTrack.roughnessFactor = 1.0f;
+        matTrack.metallicFactor = 0.0f;
+        buildTracks();
 
         // Кабина-корпус: яркий не-металл, чтобы её ориентация читалась визуально
         // на фоне серых балок. Меш один на все сущности (галерея + live).
@@ -575,6 +601,7 @@ class BuggyScene: Scene
         // время держит два мира, а пул конечен.
         disposeLivePhysics();
         removeLiveEntities();
+        clearTracks();
 
         import physics_world.engineselect: simLock;
         if (auto lk = simLock)
@@ -733,7 +760,72 @@ class BuggyScene: Scene
 
         updateLiveEphemeral();
 
+        dropTracks(wheels);
+
         carRoot.updateTransformationTopDown();
+    }
+
+    /// Пул пятен следов: сущности создаются один раз и дальше только
+    /// переставляются, чтобы заезд не плодил геометрию в кадре.
+    private void buildTracks()
+    {
+        tracks = new Entity[trackCap];
+        foreach (i; 0 .. trackCap)
+        {
+            auto e = addEntity(carRoot);
+            e.drawable = meshTrack;
+            e.material = matTrack;
+            e.scaling = Vector3f(trackMarkLen, trackMarkWidth, 1.0f);
+            e.castShadow = false;
+            e.visible = false;
+            tracks[i] = e;
+        }
+    }
+
+    /// Следы прошлой машины — в пул: пятна переиспользуются по кругу.
+    private void clearTracks()
+    {
+        foreach (e; tracks)
+            e.visible = false;
+        foreach (ref seen; trackSeen)
+            seen = false;
+        trackNext = 0;
+    }
+
+    /// Пятно следа на колесо, которое стоит на земле и отошло от прошлого
+    /// пятна на полметра. Курс пятна берём с машины: без поворота след на
+    /// виражах читается как случайный пунктир.
+    private void dropTracks(const BodyState[] wheels)
+    {
+        if (wheels.length > trackLast.length)
+        {
+            trackLast.length = wheels.length;
+            trackSeen.length = wheels.length;
+        }
+
+        const Frame fr = livePhysics.frame;
+        auto surface = sharedTerrain();
+        const Vector3f fwd = livePhysics.cockpitState.orientation
+            .rotate(frameForward);
+        const float yaw = atan2(fwd.y, fwd.x);
+        foreach (i, s; wheels)
+        {
+            const float r = i < fr.anchors.length ? fr.anchors[i].radius
+                : wheelRadius;
+            const float h = surface.heightAt(s.position);
+            if (heightOf(s.position) - r > h + 0.05f)
+                continue;
+            if (trackSeen[i] && (s.position - trackLast[i]).length < trackStep)
+                continue;
+
+            auto e = tracks[trackNext];
+            trackNext = (trackNext + 1) % trackCap;
+            e.visible = true;
+            e.position = vec3(s.position.x, s.position.y, h + 0.02f);
+            e.rotation = rotationQuaternion(Vector3f(0, 0, 1), yaw);
+            trackLast[i] = s.position;
+            trackSeen[i] = true;
+        }
     }
 
     /// Эфемерные балки каркаса красным слоем: концы едут на мастере, поэтому
