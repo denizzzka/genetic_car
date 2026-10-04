@@ -5,9 +5,10 @@ import std.range : iota;
 import std.random;
 import std.stdio : writefln;
 import std.parallelism : TaskPool;
+import std.typecons : Nullable;
 
 import genetics.chromosome;
-import genetics.growth : develop;
+import genetics.growth : Organism, develop;
 import genetics.initial_data;
 import genetics.fitness;
 import genetics.generation : buildNextGeneration;
@@ -16,10 +17,12 @@ import dlib.math.vector;
 import frame.frame;
 import frame.cockpit : cockpitFrameBeamCount;
 
-/// Отобранный индивид: геном и его фитнес (0 — невалидный/неразвиваемый).
+/// Отобранный индивид: геном, его каркас и фитнес (0 — невалидный/неразвиваемый).
+/// Каркас хранится, чтобы элита следующего поколения не росла заново.
 struct Individual
 {
     Chromosome chromosome;
+    Nullable!Frame frame;
     float fitness;
 }
 
@@ -98,7 +101,8 @@ struct PhysicsBatch
     size_t[] physIdx;
 }
 
-PhysicsBatch evaluateStatic(Chromosome[] pop,
+/// Оценка особей с готовым каркасом: без фенотипа особь растится заново.
+PhysicsBatch evaluateStatic(Organism[] pop,
     const EvolutionConfig params = EvolutionConfig.init)
 {
     auto res = new Individual[pop.length];
@@ -108,22 +112,34 @@ PhysicsBatch evaluateStatic(Chromosome[] pop,
     size_t[] physIdx;
     physIdx.reserve(pop.length);
 
-    foreach (i, chr; pop)
+    foreach (i, org; pop)
     {
+        auto frame = org.frame.isNull ? develop(org.chromosome) : org.frame;
         float fit = 0.0f;
-        if (auto may = develop(chr))
+        if (!frame.isNull)
         {
-            fit = buggyFitness(may.get);
+            fit = buggyFitness(frame.get);
             if (fit > 0.0f && params.simulateSeconds > 0.0)
             {
-                needPhysics ~= new Buggy(placedFrame(may.get));
+                needPhysics ~= new Buggy(placedFrame(frame.get));
                 physIdx ~= i;
             }
         }
-        res[i] = Individual(chr, fit);
+        res[i] = Individual(org.chromosome, frame, fit);
     }
 
     return PhysicsBatch(res, needPhysics, physIdx);
+}
+
+/// Оценка голых хромосом: каркаса нет — растим с нуля.
+PhysicsBatch evaluateStatic(Chromosome[] pop,
+    const EvolutionConfig params = EvolutionConfig.init)
+{
+    Organism[] orgs;
+    orgs.reserve(pop.length);
+    foreach (chr; pop)
+        orgs ~= Organism(chr, Nullable!Frame.init);
+    return evaluateStatic(orgs, params);
 }
 
 void runPhysics(ref PhysicsBatch batch, const EvolutionConfig params,

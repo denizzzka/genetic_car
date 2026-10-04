@@ -332,8 +332,11 @@ class BuggyScene: Scene
             {
                 // Живой просмотр продолжается, но по новому 0-му поколению.
                 stopLiveCar();
+                // Каркасы текущей популяции уже выращены — растить их заново
+                // только ради пересчёта фитнеса незачем.
                 batch = evaluateStatic(
-                    population.map!(e => e.chromosome).array, evolutionConfig);
+                    population.map!(e => Organism(e.chromosome, e.frame)).array,
+                    evolutionConfig);
                 batchIsPopulation_ = true;
             }
             else
@@ -436,8 +439,11 @@ class BuggyScene: Scene
             // population, а живому просмотру нужны его needPhysics.
             if (jobThread is null && !batchIsPopulation_)
             {
+                // Каркасы текущей популяции уже выращены — растить их заново
+                // только ради пересчёта фитнеса незачем.
                 batch = evaluateStatic(
-                    population.map!(e => e.chromosome).array, evolutionConfig);
+                    population.map!(e => Organism(e.chromosome, e.frame)).array,
+                    evolutionConfig);
                 batchIsPopulation_ = true;
             }
             startLiveCar();
