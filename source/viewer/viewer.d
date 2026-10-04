@@ -145,8 +145,10 @@ class BuggyScene: Scene
     /// просмотра незачем, а пересчёт ставит эволюцию на десятки секунд.
     private bool batchIsPopulation_;
 
-    /// Время фоновой физики последнего поколения, с: печатается вместе с
-    /// итогом поколения.
+    /// Фазы последнего поколения, с: рост (buildNextGeneration), отбор
+    /// (evaluateStatic) и фоновая физика — печатаются одной строкой.
+    private double jobGrowSec_;
+    private double jobEvalSec_;
     private double jobPhysicsSec_;
 
     override void afterLoad()
@@ -493,12 +495,12 @@ class BuggyScene: Scene
     {
         StopWatch swGen = StopWatch(AutoStart.yes);
         auto children = buildNextGeneration(cur, runCfg, rnd);
+        const double growSec = swGen.peek.total!"seconds";
+        swGen.stop();
         batch = evaluateStatic(children, runCfg);
         batchIsPopulation_ = false;   // это следующее поколение, не текущее
-        const double createSec = swGen.peek.total!"seconds";
-        swGen.stop();
-        writefln("поколение %d: создание=%.2fs (buildNextGeneration+evaluateStatic) needPhysics=%d",
-            generation + 1, createSec, batch.needPhysics.length);
+        jobGrowSec_ = growSec;
+        jobEvalSec_ = swGen.peek.total!"seconds" - growSec;
         jobGen = generation + 1;
         // Новый batch — следующее поколение: сброс live-цикла. Текущая машина
         // продолжает ехать (V не рвётся), а следующий спавн (после схода или
@@ -814,9 +816,11 @@ class BuggyScene: Scene
 
     private void logGeneration()
     {
-        writefln("gen %d: best=%.4f mean=%.4f pop=%d физика=%.2fs",
+        const double physSec = jobPhysicsSec_;
+        writefln("gen %d: best=%.4f mean=%.4f pop=%d рост=%.2fs отбор=%.2fs физика=%.2fs цикл=%.2fs",
             generation, bestFitness(population), meanFitness(population),
-            population.length, jobPhysicsSec_);
+            population.length, jobGrowSec_, jobEvalSec_, physSec,
+            jobGrowSec_ + jobEvalSec_ + physSec);
     }
 
     private void removeCar()

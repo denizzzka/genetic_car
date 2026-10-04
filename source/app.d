@@ -79,20 +79,20 @@ private void runHeadless(const HeadlessOptions opt)
     size_t prev = sw.peek.total!"msecs";
     foreach (gen; 0 .. opt.generations)
     {
-        StopWatch swGen = StopWatch(AutoStart.yes);
         auto nextGen = buildNextGeneration(cur, cfg, rnd);
+        const size_t growMs = sw.peek.total!"msecs";
         auto batch = evaluateStatic(nextGen, cfg);
-        swGen.stop();
-        const double createSec = swGen.peek.total!"seconds";
-        const size_t physStart = sw.peek.total!"msecs";
+        const size_t evalMs = sw.peek.total!"msecs";
 
         runPhysics(batch, cfg, gen + 1);
         cur = batch.res;
         const size_t now = sw.peek.total!"msecs";
-        writefln("поколение %d: needPhysics=%d best=%.4f mean=%.4f создание=%.2fs физика=%.2fs цикл=%.2fs всего=%.1fs",
+        const double growSec = (growMs - prev) / 1000.0;
+        const double evalSec = (evalMs - growMs) / 1000.0;
+        const double physSec = (now - evalMs) / 1000.0;
+        writefln("поколение %d: needPhysics=%d best=%.4f mean=%.4f рост=%.2fs отбор=%.2fs физика=%.2fs цикл=%.2fs всего=%.1fs",
             gen + 1, batch.needPhysics.length, bestFitness(cur), meanFitness(cur),
-            createSec, (now - physStart) / 1000.0, (now - prev) / 1000.0,
-            now / 1000.0);
+            growSec, evalSec, physSec, (now - prev) / 1000.0, now / 1000.0);
         prev = now;
     }
     writefln("headless done: %d поколений, seed %d", opt.generations, opt.seed);
