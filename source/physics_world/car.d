@@ -1241,8 +1241,10 @@ final class BuggyPhysics
 
             float mass = cast(float)(wheelDensity * PI
                 * (r * r - ir * ir) * w);
+            // Покрышка полая: труба, а не диск. Сплошной диск отвергал любой
+            // каркас — балка подвески, кроме несущей, попадала внутрь колеса.
             auto wheel = world.createBody(BodyRole.wheel, BodyMotion.dynamicBody,
-                world.cylinderShape(r, r, w), mass);
+                world.tubeShape(r, ir, w), mass);
             wheel.tag = i;
             wheel.gravity = gravityAccel;
             // Линейное — лёгкий выкат (Crr гасит зацепление, не «воздух»);

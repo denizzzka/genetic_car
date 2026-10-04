@@ -963,6 +963,29 @@ final class JoltPhysWorld : PhysWorld
         }
     }
 
+    /// Покрышка колеса: труба из `tubeSegments` брусьев в составной форме.
+    /// Выпуклость бруса берём по самой тонкой стороне покрышки, общий
+    /// `convexRadius` у тонкой стенки съел бы её целиком.
+    override PhysShape tubeShape(float outerRadius, float innerRadius, float height)
+    {
+        JPH_StaticCompoundShapeSettings* cs = JPH_StaticCompoundShapeSettings_Create();
+        foreach (k; 0 .. tubeSegments)
+        {
+            const float angle = 2.0f * PI * cast(float) k / tubeSegments;
+            const auto segment = tubeSegment(outerRadius, innerRadius, height, angle);
+            JPH_Vec3 h = segment.halfExtent;
+            const float thin = min(h.x, min(h.y, h.z));
+            JPH_BoxShapeSettings* bs = JPH_BoxShapeSettings_Create(&h,
+                min(convexRadius, 0.25f * thin));
+            JPH_Vec3 pos = segment.center;
+            JPH_Quat rot = rotationQuaternion(Vector3f(0.0f, 1.0f, 0.0f), angle);
+            JPH_CompoundShapeSettings_AddShape(cast(JPH_CompoundShapeSettings*) cs,
+                &pos, &rot, cast(const(JPH_ShapeSettings)*) bs, 0);
+        }
+        synchronized (updateLock_)
+            return keepShape(cast(JPH_Shape*) JPH_StaticCompoundShape_Create(cs), cs);
+    }
+
     /// Статическая геометрия: Jolt строит дерево по индексам, нормали вершин
     /// ему не нужны.
     override PhysShape triangleMeshShape(const float[] vertices,

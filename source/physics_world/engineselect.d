@@ -23,6 +23,9 @@ import physics_world.engine_newton;
 /// выбран движком по умолчанию.
 private __gshared PhysicsEngine selected_ = PhysicsEngine.jolt;
 
+/// Движок назвали в командной строке — тогда своё мнение не навязываем.
+private __gshared bool chosen_;
+
 enum PhysicsEngine
 {
     newton,
@@ -72,9 +75,20 @@ string[] selectEngine(string[] args)
         enforce(name == "jolt" || name == "newton",
             "неизвестный движок: " ~ name ~ " (доступны jolt, newton)");
         selected_ = name == "jolt" ? PhysicsEngine.jolt : PhysicsEngine.newton;
+        chosen_ = true;
         return (args[0 .. i] ~ tail).array;
     }
     return args;
+}
+
+/**
+ * Движок по умолчанию для режимов, которым он подходит лучше общего: headless
+ * на Newton идёт заметно быстрее Jolt. Явный `--engine` всегда главнее.
+ */
+void defaultEngine(PhysicsEngine e)
+{
+    if (!chosen_)
+        selected_ = e;
 }
 
 /// Имя выбранного движка: для вывода в прологе прогона.

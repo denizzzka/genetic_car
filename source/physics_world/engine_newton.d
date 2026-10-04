@@ -10,6 +10,7 @@ module physics_world.engine_newton;
 
 import std.algorithm : clamp;
 import std.exception : enforce;
+import core.stdc.math : cos, sin;
 import std.math : PI, atan2, fabs;
 
 import dlib.core.memory;
@@ -714,6 +715,30 @@ final class NewtonPhysWorld : PhysWorld
         auto shape = New!NewtonCylinderShape(radius1, radius2, height, newton);
         shape.setTransformation(
             rotationQuaternion(Vector3f(0, 0, 1), 0.5f * PI).toMatrix4x4);
+        shapes_ ~= shape;
+        return New!Shape(shape);
+    }
+
+    /// Покрышка колеса: труба из `tubeSegments` брусьев, склеенных составной
+    /// формой Newton. Смещение и поворот бруса едут в его собственной
+    /// трансформации — составная форма берёт под-формы как есть.
+    override PhysShape tubeShape(float outerRadius, float innerRadius, float height)
+    {
+        NewtonCollisionShape[] parts;
+        foreach (k; 0 .. tubeSegments)
+        {
+            const float angle = 2.0f * PI * cast(float) k / tubeSegments;
+            const auto segment = tubeSegment(outerRadius, innerRadius, height, angle);
+            auto box = New!NewtonBoxShape(segment.halfExtent, newton);
+            Matrix4x4f m = Matrix4x4f.identity;
+            const float ca = cos(angle), sa = sin(angle);
+            m[0, 0] = ca;  m[0, 2] = sa;  m[0, 3] = segment.center.x;
+            m[1, 1] = 1.0f;                m[1, 3] = segment.center.y;
+            m[2, 0] = -sa; m[2, 2] = ca;  m[2, 3] = segment.center.z;
+            box.setTransformation(m);
+            parts ~= box;
+        }
+        auto shape = New!NewtonCompoundShape(parts, newton);
         shapes_ ~= shape;
         return New!Shape(shape);
     }

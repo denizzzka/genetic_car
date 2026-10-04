@@ -12,6 +12,9 @@
  */
 module physics_world.engine;
 
+import core.stdc.math : cos, sin, tan;
+import std.math : PI;
+
 import dlib.core.ownership;
 import dlib.math.vector;
 import dlib.math.matrix;
@@ -151,6 +154,36 @@ interface PhysSteerJoint : PhysAxleJoint
     float yawNow() @property const;
 }
 
+/**
+ * Труба склеивается из одинаковых брусьев по окружности: описание общее для
+ * обоих движков, чтобы покрышка выглядела одинаково.
+ */
+enum uint tubeSegments = 16;
+
+/// Брус трубы под углом `angle` вокруг оси колеса.
+struct TubeSegment
+{
+    /// Половины габаритов в осях бруса: радиальная, ось колеса, касательная.
+    vec3 halfExtent;
+
+    /// Центр бруса в локальных осях колеса.
+    vec3 center;
+}
+
+TubeSegment tubeSegment(float outerRadius, float innerRadius,
+    float height, float angle)
+{
+    const float rm = 0.5f * (outerRadius + innerRadius);
+    const float hr = 0.5f * (outerRadius - innerRadius);
+    // По касательной брус длиннее своей дуги: между соседними брусьями иначе
+    // остаётся щель, в которую проваливается конец балки.
+    const float ht = rm * tan(PI / tubeSegments) * 1.2f;
+    TubeSegment segment;
+    segment.halfExtent = vec3(hr, 0.5f * height, ht);
+    segment.center = vec3(rm * cos(angle), 0.0f, rm * sin(angle));
+    return segment;
+}
+
 /// Контакт, зарегистрированный за последний шаг.
 struct ContactPair
 {
@@ -185,6 +218,13 @@ interface PhysWorld
     /// Цилиндр с осью вдоль локальной Y — оси мешей модели (продольная
     /// ось балки, ось вращения колеса), независимо от соглашений движка.
     PhysShape cylinderShape(float radius1, float radius2, float height);
+    /**
+     * Труба: цилиндр с отверстием по оси, ось вдоль локальной Y — как у
+     * `cylinderShape`. Покрышка колеса полая, и это не украшение: сквозь
+     * ступицу проходит балка подвески, и такой проход не должен считаться
+     * контактом, тогда как проход через саму резину — должен.
+     */
+    PhysShape tubeShape(float outerRadius, float innerRadius, float height);
     /// Статическая геометрия из треугольников в car-координатах: вершины,
     /// нормали к ним и индексы по три на грань.
     PhysShape triangleMeshShape(const float[] vertices, const float[] normals,
