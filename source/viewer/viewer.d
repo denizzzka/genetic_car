@@ -145,6 +145,10 @@ class BuggyScene: Scene
     /// просмотра незачем, а пересчёт ставит эволюцию на десятки секунд.
     private bool batchIsPopulation_;
 
+    /// Время фоновой физики последнего поколения, с: печатается вместе с
+    /// итогом поколения.
+    private double jobPhysicsSec_;
+
     override void afterLoad()
     {
         // BuggyScene создан через New! (dlib): GC не сканирует dlib-память.
@@ -493,7 +497,7 @@ class BuggyScene: Scene
         batchIsPopulation_ = false;   // это следующее поколение, не текущее
         const double createSec = swGen.peek.total!"seconds";
         swGen.stop();
-        writefln("поколение %d: создание=%5.2fs, needPhysics=%d",
+        writefln("поколение %d: создание=%.2fs (buildNextGeneration+evaluateStatic) needPhysics=%d",
             generation + 1, createSec, batch.needPhysics.length);
         jobGen = generation + 1;
         // Новый batch — следующее поколение: сброс live-цикла. Текущая машина
@@ -504,7 +508,10 @@ class BuggyScene: Scene
         liveOrder = null;
         atomicStore(jobDone, false);
         jobThread = new Thread({
+            StopWatch swPhys = StopWatch(AutoStart.yes);
             runPhysics(batch, runCfg, jobGen);
+            swPhys.stop();
+            jobPhysicsSec_ = swPhys.peek.total!"seconds";
             atomicStore(jobDone, true);
         });
         jobThread.isDaemon = true;
@@ -807,9 +814,9 @@ class BuggyScene: Scene
 
     private void logGeneration()
     {
-        writefln("gen %d: best=%.4f mean=%.4f pop=%d",
+        writefln("gen %d: best=%.4f mean=%.4f pop=%d физика=%.2fs",
             generation, bestFitness(population), meanFitness(population),
-            population.length);
+            population.length, jobPhysicsSec_);
     }
 
     private void removeCar()
