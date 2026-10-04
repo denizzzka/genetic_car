@@ -141,6 +141,9 @@ class BuggyScene: Scene
     private size_t jobGen;
     private PhysicsBatch batch;
     private EvolutionConfig runCfg;
+    /// `batch` собран из текущей `population` — пересчитывать его для живого
+    /// просмотра незачем, а пересчёт ставит эволюцию на десятки секунд.
+    private bool batchIsPopulation_;
 
     override void afterLoad()
     {
@@ -325,7 +328,10 @@ class BuggyScene: Scene
                 stopLiveCar();
                 batch = evaluateStatic(
                     population.map!(e => e.chromosome).array, evolutionConfig);
+                batchIsPopulation_ = true;
             }
+            else
+                batchIsPopulation_ = false;
             buildGallery();
             logGeneration();
             return;
@@ -348,6 +354,7 @@ class BuggyScene: Scene
                 cur = batch.res;
                 generation++;
                 population = cur;
+                batchIsPopulation_ = true;
                 if (stopRequested_ || gensDone + 1 >= runGens)
                 {
                     stopRequested_ = false;
@@ -421,9 +428,12 @@ class BuggyScene: Scene
             // Свежий batch по текущей популяции (статически, без физического
             // заезда): и до первого G, и после R batch может не совпадать с
             // population, а живому просмотру нужны его needPhysics.
-            if (jobThread is null)
+            if (jobThread is null && !batchIsPopulation_)
+            {
                 batch = evaluateStatic(
                     population.map!(e => e.chromosome).array, evolutionConfig);
+                batchIsPopulation_ = true;
+            }
             startLiveCar();
         }
         else
@@ -480,6 +490,7 @@ class BuggyScene: Scene
         StopWatch swGen = StopWatch(AutoStart.yes);
         auto children = buildNextGeneration(cur, runCfg, rnd);
         batch = evaluateStatic(children, runCfg);
+        batchIsPopulation_ = false;   // это следующее поколение, не текущее
         const double createSec = swGen.peek.total!"seconds";
         swGen.stop();
         writefln("поколение %d: создание=%5.2fs, needPhysics=%d",
