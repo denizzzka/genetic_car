@@ -4,7 +4,9 @@ import std.algorithm : sort, map, min, max;
 import std.array : array;
 import std.exception : enforce;
 import std.random;
+import std.datetime.stopwatch: StopWatch, AutoStart;
 import std.typecons : Nullable;
+import std.stdio : writefln;
 
 import genetics.chromosome : Chromosome, geneCount;
 import genetics.fitness : buggyFitness;
@@ -81,6 +83,7 @@ Chromosome[] buildNextGeneration(Individual[] pop, const EvolutionConfig p,
 
     auto ranked = pop.dup.sort!((a, b) => a.fitness > b.fitness).release;
 
+    StopWatch swCreate = StopWatch(AutoStart.yes);
     Chromosome[] next;
     next.reserve(EvolutionConfig.populationSize);
 
@@ -106,6 +109,8 @@ Chromosome[] buildNextGeneration(Individual[] pop, const EvolutionConfig p,
         next ~= tryCreateViableMutant(base.crossover(mate, rnd), p, rnd);
         parentIdx = (parentIdx + 1) % pool.length;
     }
+    const auto ms = swCreate.peek.total!"msecs";
+    writefln("создание поколения: %.2fs (%d индивидов)", ms / 1000.0, next.length);
     return next;
 }
 

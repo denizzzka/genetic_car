@@ -9,6 +9,7 @@ import std.algorithm : min, map, reduce, sort;
 import std.range : evenChunks;
 import std.array : array;
 import std.random;
+import std.datetime.stopwatch: StopWatch, AutoStart;
 import std.stdio : writefln;
 import frame.frame;
 import frame.frame : frameForward = forward, frameUp = up;
@@ -475,8 +476,13 @@ class BuggyScene: Scene
     /// Строит партию поколения на главном потоке и запускает её физику в фоне.
     private void startNextGen()
     {
+        StopWatch swGen = StopWatch(AutoStart.yes);
         auto children = buildNextGeneration(cur, runCfg, rnd);
         batch = evaluateStatic(children, runCfg);
+        const double createSec = swGen.peek.total!"seconds";
+        swGen.stop();
+        writefln("поколение %d: создание=%5.2fs, needPhysics=%d",
+            generation + 1, createSec, batch.needPhysics.length);
         jobGen = generation + 1;
         // Новый batch — следующее поколение: сброс live-цикла. Текущая машина
         // продолжает ехать (V не рвётся), а следующий спавн (после схода или
