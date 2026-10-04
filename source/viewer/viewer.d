@@ -17,7 +17,7 @@ import frame.cockpit : loadCockpit;
 import frame.objmesh : ObjModel;
 import genetics;
 import physics_world;
-import physics_world.engine : PhysWorld;
+import physics_world.engine : PhysWorld, tubeSegments;
 import viewer.scene : carToScenePos;
 import viewer.startaxes : buildStartAxes;
 import viewer.terrainvisualizer;
@@ -186,7 +186,8 @@ class BuggyScene: Scene
         galleryRoot.rotation = rotationQuaternion(Vector3f(1, 0, 0), degtorad(-90.0f));
 
         meshBeam = New!ShapeCylinder(1.0f, 1.0f, 8, assetManager);
-        meshWheel = New!ShapeTorus(0.2f, 0.1f, 16, 8, assetManager);
+        meshWheel = New!ShapeTorus(wheelRingMajor, wheelRingMinor,
+            cast(uint) tubeSegments, 8, assetManager);
 
         matBeam = addMaterial();
         matBeam.baseColorFactor = Color4f(0.55f, 0.55f, 0.62f, 1.0f);
@@ -594,9 +595,10 @@ class BuggyScene: Scene
             auto e = addEntity(carRoot);
             e.drawable = meshWheel;
             e.material = a.kind == AnchorKind.motorWheel ? matDriveWheel : matWheel;
-            // Масштаб под генетический радиус колеса, как и в витрине.
+            // Масштаб под генетический радиус колеса, как и в витрине; вдоль
+            // оси — растяжка сечения до ширины покрышки.
             const float s = a.radius / wheelRadius;
-            e.scaling = Vector3f(s, s, s);
+            e.scaling = Vector3f(s, s * wheelRingAxial, s);
             liveCar ~= e;
         }
 
@@ -931,7 +933,7 @@ class BuggyScene: Scene
         // Масштаб по генетическому радиусу: тор рисуется под базовый
         // `wheelRadius`, обод вытягивается на свой размер.
         const float s = radius / wheelRadius;
-        e.scaling = Vector3f(s, s, s);
+        e.scaling = Vector3f(s, s * wheelRingAxial, s);
     }
 }
 
