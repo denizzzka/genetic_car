@@ -528,7 +528,7 @@ Nullable!Frame develop(Chromosome chr)
     g.parent[] = noParent;
     g.born = new vec3[g.scaffoldNodes];
     g.born[] = vec3(0.0f, 0.0f, -1.0f);
-    g.grownMax = maxBeamCount - cockpitFrameBeamCount();
+    g.grownMax = min(cast(size_t) c.beamBudget, maxBeamCount - cockpitFrameBeamCount());
 
     foreach (round; 0 .. maxGrowthRounds)
     {

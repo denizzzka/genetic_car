@@ -8,17 +8,17 @@ import frame.frame : initialMotorPower;
 import physics_world.wheel : defaultWheelRadius;
 
 /// Число генов хромосомы.
-enum size_t geneCount = 12;
+enum size_t geneCount = 13;
 
 /// Границы аллелей, в порядке полей `Chromosome`. Это свойства вида, а не
 /// гены: выход за границу означает «не такая машина», а не другой организм.
 enum float[geneCount] geneLo = [
     0.20f, 0.05f, 0.10f, 0.30f, 0.02f, -0.40f,
-    0.02f, 0.10f, -200.0f, 0.08f, 0.02f, 0.10f,
+    0.02f, 0.10f, -200.0f, 0.08f, 0.02f, 0.10f, 2.00f,
 ];
 enum float[geneCount] geneHi = [
     4.00f, 1.00f, 0.80f, 4.00f, 1.50f, 0.40f,
-    0.08f, 0.40f, 200.0f, 0.45f, 2.00f, 3.00f,
+    0.08f, 0.40f, 200.0f, 0.45f, 2.00f, 3.00f, 64.00f,
 ];
 
 /// Наименьшее отношение радиуса ингибитора к радиусу активатора. Ниже — система
@@ -83,13 +83,18 @@ struct Chromosome
     /// Радиус действия активатора моторного поля.
     float motorDiffusion = 2.5f;
 
+    /// Сколько балок организм вообще может нарастить. Размер тела — тоже
+    /// свойство вида: иначе поле всегда доращивает каркас до предела, и
+    /// отбор лишён выбора между компактной машиной и раздутой.
+    float beamBudget = 12.0f;
+
     /// Аллели по генам в порядке полей `Chromosome`.
 
     const(float[geneCount]) alleles() const
 {
     return [actProduction, inhProduction, actDiffusion, inhDiffusion, threshold,
         flowStrength, beamRadius, wheelRadius, motorPower, stepLength,
-        motorProduction, motorDiffusion];
+        motorProduction, motorDiffusion, beamBudget];
 }
 
     /// Хромосома в допустимых диапазонах: значения зажаты по генам, а ингибитор
@@ -144,6 +149,7 @@ Chromosome ofAlleles(const float[geneCount] a)
     c.stepLength = a[9];
     c.motorProduction = a[10];
     c.motorDiffusion = a[11];
+    c.beamBudget = a[12];
     return c;
 }
 
