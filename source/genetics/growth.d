@@ -1,7 +1,7 @@
 module genetics.growth;
 
 import std.algorithm : max, min, sort;
-import std.math : abs, sqrt;
+import std.math : PI, abs, cos, sin, sqrt;
 import std.typecons : Nullable;
 
 // `std.math.exp` для float считается портабельным полиномом — в цикле поля
@@ -153,28 +153,33 @@ enum float maxBeamLength = 3.0f;
 /// перепрыгнуть мёртвый участок.
 enum size_t spanSamples = 4;
 
-/// 26 направлений шага: оси и диагонали кубической решётки. Непрерывная сфера
-/// направлений здесь не нужна — направление выбирается дискретно, а длина
-/// приходит из поля.
-private immutable vec3[26] stepDirections = makeStepDirections();
+/// Сколько направлений пробуется из одного конца ветви за такт. Направления
+/// берутся с сферы равномерно, поэтому угол ветвления произвольный, а не
+/// привязан к шагу сетки.
+enum size_t directionProbes = 26;
 
-private immutable(vec3[26]) makeStepDirections()
+/// Псевдослучайное число из индекса. Направление роста не должно зависеть от
+/// состояния генератора: одна и та же хромосома обязана давать один и тот же
+/// каркас в каждом запуске и в каждом потоке.
+private uint mixIndex(uint x) pure nothrow @nogc
 {
-    vec3[26] dirs;
-    size_t n;
-    foreach (dx; -1 .. 2)
-        foreach (dy; -1 .. 2)
-            foreach (dz; -1 .. 2)
-                if ((dx | dy | dz) != 0)
-                {
-                    // Своя длина у каждого направления: иначе ось и диагональ
-                    // дают разный шаг, и кристаллическая решётка разъезжается.
-                    const float len = sqrt(cast(float) (dx * dx + dy * dy + dz * dz));
-                    dirs[n++] = vec3(cast(float) dx, cast(float) dy,
-                        cast(float) dz) / len;
-                }
-    assert(n == dirs.length, "направлений должно быть ровно столько, сколько в массиве");
-    return dirs;
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+/// Точка сферы по двум равномерным координатам: `z` задаёт высоту, `phi` —
+/// азимут. Раскладка равномерная, соседние пробы не слипаются в полюсах.
+private vec3 spherePoint(uint seed) pure nothrow @nogc
+{
+    const uint h = mixIndex(seed);
+    const float z = 2.0f * cast(float) (h & 0xFFFFu) / 65535.0f - 1.0f;
+    const float phi = 2.0f * PI * cast(float) ((h >> 16) & 0xFFFFu) / 65536.0f;
+    const float r = sqrt(max(0.0f, 1.0f - z * z));
+    return vec3(r * cos(phi), r * sin(phi), z);
 }
 
 /// Состояние одного растущего организма: каркас нарос, поля считаются по нему.
@@ -527,7 +532,7 @@ Nullable!Frame develop(Chromosome chr)
 
     foreach (round; 0 .. maxGrowthRounds)
     {
-        const bool grew = growRound(g);
+        const bool grew = growRound(g, round);
         if (!grew)
             break;
     }
@@ -546,7 +551,7 @@ Nullable!Frame develop(Chromosome chr)
 /// Почки отбираются глобально, а не по концам по очереди: иначе каждая ветвь
 /// выпускает свою первую почку независимо от того, какие места организм уже
 /// занял, и тело растёт комком. Список один — поле одно, конкуренция одна.
-private bool growRound(ref Growth g)
+private bool growRound(ref Growth g, size_t round)
 {
     bool grew;
 
@@ -568,8 +573,13 @@ private bool growRound(ref Growth g)
     foreach (tip; tips)
     {
         const vec3 from = g.f.nodes[tip].pos;
-        foreach (d; stepDirections)
+        // Пробы нумеруются от узла и от числа израсходованных почек: каждый
+        // конец ветви обстреливается своей серией углов.
+        const uint base = mixIndex(cast(uint) tip * 2654435761u
+            + cast(uint) g.sprouts[tip] * 40503u + cast(uint) round * 2246822519u);
+        foreach (k; 0 .. directionProbes)
         {
+            const vec3 d = spherePoint(base + cast(uint) k * 97u);
             // Проба базовым шагом: отклик в ней задаёт и допуск роста, и
             // длину будущей балки. Проба лежит на самой балке, поэтому
             // ограничения габарита проверяем на ней же — отбраковка дешёвая,
