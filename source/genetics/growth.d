@@ -11,7 +11,7 @@ import core.stdc.math : expf;
 import dlib.math.vector : distance, dot, vec3;
 import dlib.math.utils : clamp;
 
-import frame.frame : Anchor, AnchorKind, Beam, Frame, Node, acrossCourse,
+import frame.frame : Anchor, AnchorKind, Beam, Frame, Node,
     alongCourse, right;
 import physics_world.physics : wheelInnerRadius, wheelWidth;
 import physics_world.wheel : defaultWheelRadius;
@@ -62,10 +62,6 @@ enum size_t maxWheels = 6;
 /// Балок из одного узла: шесть — это крестовина, больше неводоблагообразно.
 enum size_t maxNewBeamsPerNode = 6;
 
-/// Почек, выпускаемых за один такт. Мало — рост ползёт кругами, много —
-/// организм снова заполняет всё вокруг и получается шар.
-enum size_t budsPerRound = 3;
-
 /// Узел без родителя: так помечены узлы заданного каркаса кабины.
 enum size_t noParent = size_t.max;
 
@@ -101,17 +97,7 @@ enum float hangShare = 8.0f;
 /// Глубина, на которой провисание перестаёт помогать, м.
 enum float hangDepth = 0.45f;
 
-/// Боковой вынос: наружу от центральной плоскости расти выгоднее, чем по
-/// ней. Без него провисание уводит всё вниз, а колесо физика принимает только
-/// на подвеске, зашедшей сбоку: ось колеса всегда поперечная, и балка сверху
-/// проходит через покрышку. Платит вынос до `outwardDepth`, дальше не платит —
-/// иначе машина растёт в бесконечную штангу (та же ошибка, что была у тяжести).
-enum float outwardShare = 8.0f;
-
-/// Ширина, на которой боковой вынос максимален, м.
-enum float outwardDepth = 0.9f;
-
-/// Жёсткий предел полуширины машины, м. Дальше вынос не растёт вовсе.
+/// Жёсткий предел полуширины машины, м.
 enum float maxHalfWidth = 1.1f;
 
 /// Сила короткодействующего подавления вблизи чужой ветви.
@@ -121,12 +107,6 @@ enum float crowdShare = 0.4f;
 /// ветвь в виток. Доля масштаба организма.
 enum float foldShare = 0.7f;
 
-/// Инерция роста: насколько сильно новая балка старается продолжить предыдущую.
-/// Поле решает, где вообще расти, а инерция — в какую из сторон; без неё ветвь
-/// дёргается между равноценными направлениями, и у колеса под боком оказывается
-/// чужая балка той же ветви.
-enum float turnShare = 8.0f;
-
 /// Запас на зазор колеса до чужой балки, м.
 enum float beamClearMargin = 0.005f;
 
@@ -134,10 +114,22 @@ enum float beamClearMargin = 0.005f;
 /// сверху, физикой не принимается вовсе, а таких концов в ветви много.
 enum float wheelAxleShare = 0.5f;
 
-/// Доля потока, уходящая по курсу, и доля, уходящая поперёк. Поток вперёд
-/// тянет машину, поперёк — задаёт сторону перекоса.
+/// Доля потока, уходящая по курсу.
 enum float flowCourseShare = 1.0f;
-enum float flowLateralShare = 0.6f;
+/// Организатор средней линии: ткань расходится от срединной плоскости.
+/// Это и есть тот сигнал, который тянет ветви от кабины в стороны: без него
+/// поле самое сильное там, где тело уже есть, и ветви завираются внутрь, а
+/// колесо не влезает в промежуток между ними. Симметричен по построению —
+/// зависит от расстояния до плоскости, а не от знака.
+enum float midlineShare = 16.0f;
+
+/// Ширина, на которой отход от средней линии выходит на насыщение, м.
+enum float midlineDepth = 0.5f;
+
+/// Насколько точки считаются одной и той же при поиске зеркальной пары.
+/// Больше машинного эпсилона суммирования: у настоящих близнецов координаты
+/// совпадают лишь до последнего бита.
+enum float mirrorEpsilon = 1e-3f;
 
 /// Длина балки сверх базового шага: насколько её вытягивает локальное поле.
 /// Измеряется радиусом действия активатора — это масштаб паттерна, и он же
@@ -175,7 +167,7 @@ private uint mixIndex(uint x) pure nothrow @nogc
 /// зеркальные друг другу, получили бы разные ключи и разные углы.
 private uint positionSeed(const vec3 p) pure nothrow @nogc
 {
-    uint h = cast(uint) cast(int) (p.x * 1000.0f + 0.5f);
+    uint h = cast(uint) cast(int) (abs(p.x) * 1000.0f + 0.5f);
     h += cast(uint) cast(int) (p.y * 1000.0f + 0.5f) * 2654435761u;
     h += cast(uint) cast(int) (p.z * 1000.0f + 0.5f) * 40503u;
     return mixIndex(h);
@@ -209,10 +201,6 @@ private struct Growth
     /// цепочке рост узнаёт свою ветвь.
     size_t[] parent;
 
-    /// Направление балки, которой родился каждый узел: у первых точек подвески
-    /// это «вниз», дальше — куда пошла предыдущая балка.
-    vec3[] born;
-
     /// Балок выросло всего.
     size_t grown;
 
@@ -245,8 +233,17 @@ private struct Growth
         const auto ai = raw(p);
         const float score = tissueGain[tissue] * c.actProduction * ai.act
             - c.inhProduction * ai.inh + flowAt(p) + gravityAt(p)
-            - crowdShare * crowding(p, tip);
+            + midlineAt(p) - crowdShare * crowding(p, tip);
         return score / c.threshold;
+    }
+
+    /// Отход от срединной плоскости: чем дальше от неё, тем сильнее ткань
+    /// хочет расти дальше в ту же сторону.
+    float midlineAt(const vec3 p) const
+    {
+        const float dx = abs(p.x - f.nodes[0].pos.x);
+        return midlineShare * (1.0f
+            - expf(-(dx * dx) / (midlineDepth * midlineDepth)));
     }
 
     /// Длина новой балки: базовый шаг гена плюс вытяжка, которую даёт
@@ -329,23 +326,19 @@ private struct Growth
         return r;
     }
 
-    /// Поток узла: уводит рост вперёд по курсу и в одну сторону поперёк.
-    /// Это то же, что течение у ресничек узла, только у нас оно постоянно и
-    /// всюду однонаправлено — так машина получает начальную асимметрию
-    /// без зеркала и без «направления балок» в геноме.
-    /// Поток. `alongCourse(rel) = -rel.y` — положительный отклик поощряет рост
-    /// вперёд по курсу. `acrossCourse(rel) = rel.x` — при `flowStrength>0`
-    /// отклик растёт при `x>0`, а при `flowStrength<0` — при `x<0`. Иными
-    /// словами, знак влияет и на курс, и на сторону (положительный сильнее
-    /// тянет точки с положительным `x` и дальше вперёд). Но именно он создаёт
-    /// начальную асимметрию, без добавления её напрямую в геном.
+    /// Поток узла: уводит рост вперёд по курсу. Это то же, что течение у
+    /// ресничек узла, только у нас оно постоянно и всюду однонаправлено.
+    /// Поперечной составляющей нет: она была пропорциональна `rel.x` и
+    /// делала поле антисимметричным. Начальная асимметрия, если она нужна,
+    /// задаётся снаружи — зеркальным корпусом или стартовой формой.
     float flowAt(const vec3 p) const
     {
         if (c.flowStrength == 0.0f)
             return 0.0f;
-        const vec3 rel = p - f.nodes[0].pos;
-        return c.flowStrength * (flowCourseShare * alongCourse(rel)
-            + flowLateralShare * acrossCourse(rel));
+        // Только вдоль курса: поперечная составляющая была антисимметричной
+        // (пропорциональной `rel.x`) и ломала зеркальность поля. Отход в
+        // стороны теперь задаёт organizer средней линии, он симметричен.
+        return c.flowStrength * flowCourseShare * alongCourse(p - f.nodes[0].pos);
     }
 
     /// Провисание в точке: вверх от подвески беднее, вниз — богате, но не
@@ -357,15 +350,6 @@ private struct Growth
             return -hangShare * d;
         const float down = -d;
         return hangShare * down * expf(-down / hangDepth);
-    }
-
-    /// Боковой вынос шага: до `outwardDepth` наружу расти выгоднее, чем вдоль
-    /// центральной плоскости, дальше бонус гаснет. Саму ветвь за глубиной
-    /// держит жёсткий предел `maxHalfWidth` — инерция одна ширину не держит.
-    float outward(const vec3 d, float x) const
-    {
-        const float left = 1.0f - abs(x) / outwardDepth;
-        return left > 0.0f ? outwardShare * left * abs(d.x) : 0.0f;
     }
 
     /// Свободный конец: узел ровно с одной балкой. Ветвь растёт концами, и
@@ -465,7 +449,6 @@ private struct Growth
         f.nodes ~= Node(to);
         parent ~= from;
         const vec3 step = to - f.nodes[from].pos;
-        born ~= step * (1.0f / sqrt(dot(step, step)));
         f.beams ~= new Beam(from, idx, c.beamRadius);
         sprouts ~= 0;
         sprouts[from] += 1;
@@ -480,11 +463,30 @@ private struct Bud
     size_t tip;
     vec3 to;
 
-    /// Отклик поля: выше порога — здесь можно расти.
+    /// Отклик поля: выше порога — здесь можно расти, и это же мера того,
+    /// насколько почка лучшая из доступных.
     float resp;
+}
 
-    /// Что сортируем: отклик плюс инерция направления.
-    float rank;
+/// Проба направления из конца `tip`: если место годится, почка попадает в
+/// список. Габарит проверяется на базовом шаге, поле считаем после него —
+/// отбраковка дешёвая.
+private void addBud(const Growth g, size_t tip, const vec3 from, const vec3 d,
+    ref Bud[] buds)
+{
+    const vec3 probe = from + d * g.c.stepLength;
+    if (abs(probe.x - g.f.nodes[0].pos.x) > maxHalfWidth)
+        return;
+    const float resp = g.response(probe, frameTissue, tip);
+    if (resp <= respondGate)
+        return;
+    const vec3 to = from + d * g.budLength(resp);
+    // Кабина неприкосновенна: сквозь корпус не растём.
+    if (beamHitsCabin(g.f, from, to))
+        return;
+    if (abs(to.x - g.f.nodes[0].pos.x) > maxHalfWidth)
+        return;
+    buds ~= Bud(tip, to, resp);
 }
 
 /// Кандидат на колесо: конец ветви с откликом тканей колеса и мотора.
@@ -536,8 +538,6 @@ Nullable!Frame develop(Chromosome chr)
             g.sprouts[i] = 0;
     g.parent = new size_t[g.scaffoldNodes];
     g.parent[] = noParent;
-    g.born = new vec3[g.scaffoldNodes];
-    g.born[] = vec3(0.0f, 0.0f, -1.0f);
     g.grownMax = min(cast(size_t) c.beamBudget, maxBeamCount - cockpitFrameBeamCount());
 
     foreach (round; 0 .. maxGrowthRounds)
@@ -555,12 +555,12 @@ Nullable!Frame develop(Chromosome chr)
     return Nullable!Frame(g.f);
 }
 
-/// Один такт роста: собрать все возможные почки и выпустить лучшие. `true`,
-/// если что-то выросло, — значит, есть смысл сделать ещё такт.
+/// Один такт роста: каждый конец выпускает свою лучшую зеркальную пару.
+/// `true`, если что-то выросло, — значит, есть смысл сделать ещё такт.
 ///
-/// Почки отбираются глобально, а не по концам по очереди: иначе каждая ветвь
-/// выпускает свою первую почку независимо от того, какие места организм уже
-/// занял, и тело растёт комком. Список один — поле одно, конкуренция одна.
+/// Отбор локальный, по концам: конец сам решает, куда ему расти, и не делит
+/// место с чужими ветвями. Общего списка почек и глобального отбора нет —
+/// выбирать, кому достанется место, должен не код, а поле.
 private bool growRound(ref Growth g, size_t round)
 {
     bool grew;
@@ -579,79 +579,122 @@ private bool growRound(ref Growth g, size_t round)
     if (tips.length == 0)
         return false;
 
-    Bud[] buds;
+    // Такт идёт в две фазы. Сначала каждый конец выбирает направление по
+    // полю, каким оно было до такта, и решения не записываются в каркас; затем
+    // выбранное выращивается. Если выбирать и растить вперемешку, конец,
+    // обработанный раньше, успевает изменить поле для соседнего, и зеркальные
+    // концы получают разные ответы из-за порядка, а не из-за биологии.
+    Bud[] chosen;
     foreach (tip; tips)
     {
         const vec3 from = g.f.nodes[tip].pos;
         // Пробы нумеруются от положения конца, а не от его индекса: у
         // зеркальных концов индексы разные, а поле вокруг них одинаковое, и
         // сеять надо так, чтобы они получили одну и ту же серию углов.
-        // Иначе симметрия поля тут же рассыпается на первом же такте.
         const uint base = mixIndex(cast(uint) round * 2246822519u
             + cast(uint) g.sprouts[tip] * 40503u
             + positionSeed(from));
-        foreach (k; 0 .. directionProbes)
+        Bud[] buds;
+        foreach (k2; 0 .. directionProbes)
         {
-            const vec3 d = spherePoint(base + cast(uint) k * 97u);
-            // Проба базовым шагом: отклик в ней задаёт и допуск роста, и
-            // длину будущей балки. Проба лежит на самой балке, поэтому
-            // ограничения габарита проверяем на ней же — отбраковка дешёвая,
-            // поле считаем после неё.
-            const vec3 probe = from + d * g.c.stepLength;
-            if (abs(probe.x - g.f.nodes[0].pos.x) > maxHalfWidth)
-                continue;
-            const float resp = g.response(probe, frameTissue, tip);
-            if (resp <= respondGate)
-                continue;
-            const vec3 to = from + d * g.budLength(resp);
-            // Кабина неприкосновенна: сквозь корпус не растём.
-            if (beamHitsCabin(g.f, from, to))
-                continue;
-            if (abs(to.x - g.f.nodes[0].pos.x) > maxHalfWidth)
-                continue;
-            buds ~= Bud(tip, to, resp,
-                resp + turnShare * dot(d, g.born[tip])
-                + g.outward(d, from.x));
+            const vec3 d = spherePoint(base + cast(uint) k2 * 97u);
+            addBud(g, tip, from, d, buds);
+            // Набор проб замыкается на зеркало. Без этого симметричные концы
+            // обстреливаются разными углами, и одинаковое поле вокруг них
+            // даёт разный результат: симметрия поля не доходит до каркаса.
+            addBud(g, tip, from, vec3(-d.x, d.y, d.z), buds);
         }
+        // Каждый конец выбирает сам, куда ему расти, и ни с кем не соревнуется:
+        // левый не делит место с правым, как и в развитии. Общего списка почек
+        // и глобального отбора нет — решать, кому достанется место, должно
+        // поле, а не код.
+        sort!((a2, b2) => a2.resp > b2.resp)(buds);
+        if (buds.length != 0)
+            chosen ~= buds[0];
     }
-    sort!((a, b) => a.rank > b.rank)(buds);
 
-    size_t taken;
-    foreach (bud; buds)
+    // Растить тоже парами. Один конец, выросший раньше зеркального, успевает
+    // изменить поле, и второй отвечает уже на другом поле — симметрия рассыпается
+    // из-за порядка. Проверяем оба места до того, как тронем каркас, и растим
+    // только если годны оба: одинокая ветвь без близнеца — рог.
+    bool[] taken = new bool[chosen.length];
+    foreach (i, bud; chosen)
     {
-        if (taken >= budsPerRound || g.grown >= g.grownMax)
+        if (taken[i])
+            continue;
+        // Бюджет тела — единственный ограничитель, общий для всех концов: он
+        // задаёт размер, а не распределяет место.
+        if (g.grown + 2 > g.grownMax)
             break;
-        // Поле пересчитывается на каждой принятой почке: только что выросший
-        // узел сам стал источником и может задушить соседние места.
-        if (g.response(bud.to, frameTissue) <= respondGate)
+        const auto twin = findMirror(chosen, i);
+        if (twin < 0)
             continue;
-        // Вытяжка по полю не должна перескакивать выжженный участок: балка
-        // лежит только там, где ткань жива по всей длине.
-        if (!g.aliveAlong(g.f.nodes[bud.tip].pos, bud.to))
+        if (!canGrow(g, bud) || !canGrow(g, chosen[twin]))
             continue;
-        const auto merged = g.mergeTarget(bud.to, bud.tip);
-        if (merged >= 0)
-        {
-            // Балка к узлу-слиянию уже есть — расти тут больше нечего, а новый
-            // узел в чужой точке поставил бы дубль и вторую копию той же балки.
-            if (g.linked(bud.tip, cast(size_t) merged))
-                continue;
-            g.f.beams ~= new Beam(bud.tip, cast(size_t) merged, g.c.beamRadius);
-            g.sprouts[bud.tip] += 1;
-            g.grown += 1;
-            g.grownLen += distance(g.f.nodes[bud.tip].pos,
-                g.f.nodes[cast(size_t) merged].pos);
-            grew = true;
-            ++taken;
-            continue;
-        }
-        if (g.tooClose(bud.to, bud.tip))
-            continue;
-        g.addBeam(bud.tip, bud.to);
+        commitBud(g, bud);
+        commitBud(g, chosen[twin]);
+        taken[i] = true;
+        taken[twin] = true;
         grew = true;
-        ++taken;
     }
     return grew;
+}
+
+/// Годится ли место под балку: поле не выжжено, span живой, рядом нет ни
+/// чужого узла, ни своего предка.
+private bool canGrow(const Growth g, const Bud bud)
+{
+    if (g.response(bud.to, frameTissue) <= respondGate)
+        return false;
+    if (!g.aliveAlong(g.f.nodes[bud.tip].pos, bud.to))
+        return false;
+    const auto merged = g.mergeTarget(bud.to, bud.tip);
+    if (merged >= 0)
+    {
+        // Балка к узлу-слиянию уже есть — расти тут больше нечего, а новый
+        // узел в чужой точке поставил бы дубль и вторую копию той же балки.
+        return !g.linked(bud.tip, cast(size_t) merged);
+    }
+    return !g.tooClose(bud.to, bud.tip);
+}
+
+/// Врастить почечную балку, минуя слияние: место уже проверено, балка ляжет
+/// новым узлом.
+private void commitBud(ref Growth g, const Bud bud)
+{
+    const auto merged = g.mergeTarget(bud.to, bud.tip);
+    if (merged < 0)
+    {
+        g.addBeam(bud.tip, bud.to);
+        return;
+    }
+    g.f.beams ~= new Beam(bud.tip, cast(size_t) merged, g.c.beamRadius);
+    g.sprouts[bud.tip] += 1;
+    g.grown += 1;
+    g.grownLen += distance(g.f.nodes[bud.tip].pos,
+        g.f.nodes[cast(size_t) merged].pos);
+}
+
+/// Зеркальный близнец почки `i` среди остальных выбранных. Ищем именно среди
+/// концов: у самого конца зеркальные направления недопустимы — они уводят в
+/// кабину, — так что пара есть только между разными концами.
+private ptrdiff_t findMirror(const Bud[] buds, size_t i)
+{
+    const vec3 want = vec3(-buds[i].to.x, buds[i].to.y, buds[i].to.z);
+    ptrdiff_t found = -1;
+    float best = mirrorEpsilon;
+    foreach (j; 0 .. buds.length)
+    {
+        if (j == i)
+            continue;
+        const float d = distance(want, buds[j].to);
+        if (d <= best)
+        {
+            best = d;
+            found = cast(ptrdiff_t) j;
+        }
+    }
+    return found;
 }
 
 /**
@@ -689,6 +732,7 @@ private void placeWheels(ref Growth g)
             break;
         if (!wheelFits(g, spot.node))
             continue;
+
         const bool driven = spot.motor > motorGate;
         motor = motor || driven;
         g.f.anchors ~= Anchor(spot.node,
