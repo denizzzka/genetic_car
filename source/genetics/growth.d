@@ -126,11 +126,6 @@ enum float midlineShare = 16.0f;
 /// Ширина, на которой отход от средней линии выходит на насыщение, м.
 enum float midlineDepth = 0.5f;
 
-/// Насколько точки считаются одной и той же при поиске зеркальной пары.
-/// Больше машинного эпсилона суммирования: у настоящих близнецов координаты
-/// совпадают лишь до последнего бита.
-enum float mirrorEpsilon = 1e-3f;
-
 /// Длина балки сверх базового шага: насколько её вытягивает локальное поле.
 /// Измеряется радиусом действия активатора — это масштаб паттерна, и он же
 /// задаёт масштаб его сегментов.
@@ -163,14 +158,32 @@ private uint mixIndex(uint x) pure nothrow @nogc
     return x;
 }
 
-/// Зеркально-каноничный ключ точки: `x` берётся по модулю, иначе точки,
-/// зеркальные друг другу, получили бы разные ключи и разные углы.
-private uint positionSeed(const vec3 p) pure nothrow @nogc
+/// Ключ точки в базисе тела: расстояние до средней линии по модулю, а знак
+/// берётся отдельно — стороной. Так точки по разные стороны средней линии,
+/// но на одинаковом расстоянии от неё, получают один ключ и одну серию углов.
+private uint positionSeed(const vec3 p, const float midX) pure nothrow @nogc
 {
-    uint h = cast(uint) cast(int) (abs(p.x) * 1000.0f + 0.5f);
+    uint h = cast(uint) cast(int) (abs(p.x - midX) * 1000.0f + 0.5f);
     h += cast(uint) cast(int) (p.y * 1000.0f + 0.5f) * 2654435761u;
     h += cast(uint) cast(int) (p.z * 1000.0f + 0.5f) * 40503u;
     return mixIndex(h);
+}
+
+/// Сторона от средней линии: +1 справа, -1 слева. Ось «наружу от средней
+/// линии» — это `side` по x, и она у зеркальных концов противоположна. Всё
+/// остальное (вверх, назад) у них совпадает, поэтому одна и та же программа,
+/// заданная в этом базисе, даёт на двух сторонах зеркальный результат — без
+/// всякой проверки симметрии.
+private float bodySide(const vec3 p, const float midX) pure nothrow @nogc
+{
+    return p.x >= midX ? 1.0f : -1.0f;
+}
+
+/// Направление пробы, повёрнутое в базис тела: локальное направление
+/// разворачивается наружу от средней линии согласно стороне конца.
+private vec3 toWorld(const vec3 local, const float side) pure nothrow @nogc
+{
+    return vec3(local.x * side, local.y, local.z);
 }
 
 /// Точка сферы по двум равномерным координатам: `z` задаёт высоту, `phi` —
@@ -555,12 +568,12 @@ Nullable!Frame develop(Chromosome chr)
     return Nullable!Frame(g.f);
 }
 
-/// Один такт роста: каждый конец выпускает свою лучшую зеркальную пару.
-/// `true`, если что-то выросло, — значит, есть смысл сделать ещё такт.
+/// Один такт роста: каждый конец сам выбирает, куда ему расти. `true`, если
+/// что-то выросло, — значит, есть смысл сделать ещё такт.
 ///
-/// Отбор локальный, по концам: конец сам решает, куда ему расти, и не делит
-/// место с чужими ветвями. Общего списка почек и глобального отбора нет —
-/// выбирать, кому достанется место, должен не код, а поле.
+/// Отбор локальный, по концам: конец решает за себя и ни с кем не соревнуется,
+/// левый не делит место с правым. Общего списка почек и глобального отбора нет —
+/// выбирать, кому достанется место, должно поле, а не код.
 private bool growRound(ref Growth g, size_t round)
 {
     bool grew;
@@ -579,73 +592,58 @@ private bool growRound(ref Growth g, size_t round)
     if (tips.length == 0)
         return false;
 
-    // Такт идёт в две фазы. Сначала каждый конец выбирает направление по
-    // полю, каким оно было до такта, и решения не записываются в каркас; затем
-    // выбранное выращивается. Если выбирать и растить вперемешку, конец,
-    // обработанный раньше, успевает изменить поле для соседнего, и зеркальные
-    // концы получают разные ответы из-за порядка, а не из-за биологии.
+    const float midX = g.f.nodes[0].pos.x;
+
+    // Такт идёт в две фазы. Сначала каждый конец выбирает направление по полю,
+    // каким оно было до такта, и решения не пишутся в каркас; затем выбранное
+    // выращивается. Выбирать и растить вперемешку нельзя: конец, обработанный
+    // раньше, меняет поле для соседнего, и тот отвечает уже на другом поле —
+    // расхождение из-за порядка, а не из-за биологии.
     Bud[] chosen;
     foreach (tip; tips)
     {
         const vec3 from = g.f.nodes[tip].pos;
         // Пробы нумеруются от положения конца, а не от его индекса: у
-        // зеркальных концов индексы разные, а поле вокруг них одинаковое, и
-        // сеять надо так, чтобы они получили одну и ту же серию углов.
+        // зеркальных концов индексы разные, а поле вокруг них одинаковое.
         const uint base = mixIndex(cast(uint) round * 2246822519u
             + cast(uint) g.sprouts[tip] * 40503u
-            + positionSeed(from));
+            + positionSeed(from, midX));
+        const float side = bodySide(from, midX);
         Bud[] buds;
-        foreach (k2; 0 .. directionProbes)
+        foreach (k; 0 .. directionProbes)
         {
-            const vec3 d = spherePoint(base + cast(uint) k2 * 97u);
-            addBud(g, tip, from, d, buds);
-            // Набор проб замыкается на зеркало. Без этого симметричные концы
-            // обстреливаются разными углами, и одинаковое поле вокруг них
-            // даёт разный результат: симметрия поля не доходит до каркаса.
-            addBud(g, tip, from, vec3(-d.x, d.y, d.z), buds);
+            // Углы набираются в базисе тела и разворачиваются по стороне конца,
+            // поэтому зеркальные концы обстреливаются зеркальными же углами.
+            addBud(g, tip, from, toWorld(spherePoint(base + cast(uint) k * 97u),
+                side), buds);
         }
-        // Каждый конец выбирает сам, куда ему расти, и ни с кем не соревнуется:
-        // левый не делит место с правым, как и в развитии. Общего списка почек
-        // и глобального отбора нет — решать, кому достанется место, должно
-        // поле, а не код.
         sort!((a2, b2) => a2.resp > b2.resp)(buds);
         if (buds.length != 0)
             chosen ~= buds[0];
     }
 
-    // Растить тоже парами. Один конец, выросший раньше зеркального, успевает
-    // изменить поле, и второй отвечает уже на другом поле — симметрия рассыпается
-    // из-за порядка. Проверяем оба места до того, как тронем каркас, и растим
-    // только если годны оба: одинокая ветвь без близнеца — рог.
-    bool[] taken = new bool[chosen.length];
-    foreach (i, bud; chosen)
+    foreach (bud; chosen)
     {
-        if (taken[i])
-            continue;
         // Бюджет тела — единственный ограничитель, общий для всех концов: он
         // задаёт размер, а не распределяет место.
-        if (g.grown + 2 > g.grownMax)
+        if (g.grown >= g.grownMax)
             break;
-        const auto twin = findMirror(chosen, i);
-        if (twin < 0)
-            continue;
-        if (!canGrow(g, bud) || !canGrow(g, chosen[twin]))
-            continue;
-        commitBud(g, bud);
-        commitBud(g, chosen[twin]);
-        taken[i] = true;
-        taken[twin] = true;
-        grew = true;
+        if (growBud(g, bud))
+            grew = true;
     }
     return grew;
 }
 
-/// Годится ли место под балку: поле не выжжено, span живой, рядом нет ни
-/// чужого узла, ни своего предка.
-private bool canGrow(const Growth g, const Bud bud)
+/// Врастить почечную балку. `false` — место негодное: выжжено полем, занято
+/// чужим узлом или слишком близко к своему предку.
+private bool growBud(ref Growth g, const Bud bud)
 {
+    // Поле пересчитывается на каждой выросшей балке: только что выросший узел
+    // сам стал источником и может задушить соседние места.
     if (g.response(bud.to, frameTissue) <= respondGate)
         return false;
+    // Вытяжка по полю не должна перескакивать выжженный участок: балка лежит
+    // только там, где ткань жива по всей длине.
     if (!g.aliveAlong(g.f.nodes[bud.tip].pos, bud.to))
         return false;
     const auto merged = g.mergeTarget(bud.to, bud.tip);
@@ -653,48 +651,19 @@ private bool canGrow(const Growth g, const Bud bud)
     {
         // Балка к узлу-слиянию уже есть — расти тут больше нечего, а новый
         // узел в чужой точке поставил бы дубль и вторую копию той же балки.
-        return !g.linked(bud.tip, cast(size_t) merged);
+        if (g.linked(bud.tip, cast(size_t) merged))
+            return false;
+        g.f.beams ~= new Beam(bud.tip, cast(size_t) merged, g.c.beamRadius);
+        g.sprouts[bud.tip] += 1;
+        g.grown += 1;
+        g.grownLen += distance(g.f.nodes[bud.tip].pos,
+            g.f.nodes[cast(size_t) merged].pos);
+        return true;
     }
-    return !g.tooClose(bud.to, bud.tip);
-}
-
-/// Врастить почечную балку, минуя слияние: место уже проверено, балка ляжет
-/// новым узлом.
-private void commitBud(ref Growth g, const Bud bud)
-{
-    const auto merged = g.mergeTarget(bud.to, bud.tip);
-    if (merged < 0)
-    {
-        g.addBeam(bud.tip, bud.to);
-        return;
-    }
-    g.f.beams ~= new Beam(bud.tip, cast(size_t) merged, g.c.beamRadius);
-    g.sprouts[bud.tip] += 1;
-    g.grown += 1;
-    g.grownLen += distance(g.f.nodes[bud.tip].pos,
-        g.f.nodes[cast(size_t) merged].pos);
-}
-
-/// Зеркальный близнец почки `i` среди остальных выбранных. Ищем именно среди
-/// концов: у самого конца зеркальные направления недопустимы — они уводят в
-/// кабину, — так что пара есть только между разными концами.
-private ptrdiff_t findMirror(const Bud[] buds, size_t i)
-{
-    const vec3 want = vec3(-buds[i].to.x, buds[i].to.y, buds[i].to.z);
-    ptrdiff_t found = -1;
-    float best = mirrorEpsilon;
-    foreach (j; 0 .. buds.length)
-    {
-        if (j == i)
-            continue;
-        const float d = distance(want, buds[j].to);
-        if (d <= best)
-        {
-            best = d;
-            found = cast(ptrdiff_t) j;
-        }
-    }
-    return found;
+    if (g.tooClose(bud.to, bud.tip))
+        return false;
+    g.addBeam(bud.tip, bud.to);
+    return true;
 }
 
 /**
