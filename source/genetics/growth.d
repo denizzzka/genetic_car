@@ -20,7 +20,7 @@ import frame.cockpit : beamHitsCabin, cockpitFrameContext,
     cockpitFrameBeamCount, cockpitFrameNodeCount, cockpitGeometry,
     cockpitMountNodes, wheelHitsCabin;
 import genetics.fitness : maxBeamCount;
-import genetics.chromosome : Chromosome;
+import genetics.chromosome : Chromosome, normalized;
 
 /*
  * Рост каркаса по Nodal/Lefty.
@@ -543,7 +543,7 @@ struct Organism
  */
 Nullable!Frame develop(Chromosome chr)
 {
-    const auto c = chr.normalized;
+    const auto c = normalized(chr);
     Growth g;
     g.c = c;
     g.f = cockpitFrameContext().frame;

@@ -3,38 +3,20 @@ module genetics.chromosome;
 import std.algorithm : clamp, max;
 import std.math : abs, cos, exp, isFinite, log, sqrt, PI;
 import std.random : Random, uniform;
+import std.traits : FieldNameTuple;
 
 import frame.frame : initialMotorPower;
 import physics_world.wheel : defaultWheelRadius;
-
-/// Число генов хромосомы.
-enum size_t geneCount = 13;
-
-/// Границы аллелей, в порядке полей `Chromosome`. Это свойства вида, а не
-/// гены: выход за границу означает «не такая машина», а не другой организм.
-enum float[geneCount] geneLo = [
-    0.20f, 0.05f, 0.10f, 0.30f, 0.02f, -0.40f,
-    0.02f, 0.10f, -200.0f, 0.08f, 0.02f, 0.10f, 2.00f,
-];
-enum float[geneCount] geneHi = [
-    4.00f, 1.00f, 0.80f, 4.00f, 1.50f, 0.40f,
-    0.08f, 0.40f, 200.0f, 0.45f, 2.00f, 3.00f, 64.00f,
-];
 
 /// Наименьшее отношение радиуса ингибитора к радиусу активатора. Ниже — система
 /// вырождается: ингибитор глушит собственную точку, и рост не идёт дальше
 /// первого шага.
 enum float inhSpreadFloor = 1.5f;
 
-/**
- * Хромосома — контейнер генов особи, каждое поле — ген, его значение —
- * аллель. Ген здесь не «балка в точке», а правило роста: каркас вырастает
- * сам из реакционно-диффузионной системы Nodal/Lefty (см. genetics.growth).
- *
- * Значения по умолчанию — откалиброванный основатель вида: с ними рост даёт
- * вытянутые ветви с колёсами на концах, то есть нулевое поколение уже едет.
- */
-struct Chromosome
+/// Гены хромосомы: каждое поле — ген, его значение — аллель. Отдельная
+/// структура нужна рефлексии: по самому union `FieldNameTuple` сплющивает
+/// вложенные поля вместе с `array`, и число генов из него не достать.
+struct ChromosomeGenes
 {
     /// Скорость роста активатора: насколько быстро активатор размножает себя
     /// там, где он уже есть. Мало — рост вялый, много — форма плывёт.
@@ -87,80 +69,101 @@ struct Chromosome
     /// свойство вида: иначе поле всегда доращивает каркас до предела, и
     /// отбор лишён выбора между компактной машиной и раздутой.
     float beamBudget = 2.0f;
-
-    /// Аллели по генам в порядке полей `Chromosome`.
-
-    const(float[geneCount]) alleles() const
-{
-    return [actProduction, inhProduction, actDiffusion, inhDiffusion, threshold,
-        flowStrength, beamRadius, wheelRadius, motorPower, stepLength,
-        motorProduction, motorDiffusion, beamBudget];
 }
 
-    /// Хромосома в допустимых диапазонах: значения зажаты по генам, а ингибитор
-    /// оставлен шире активатора. Правило держит и мутацию, и кроссовер — иначе
-    /// особь с негодным соотношением радиусов просто не вырастет.
-    Chromosome normalized() const
-    {
-        float[geneCount] a = alleles();
-        foreach (i; 0 .. geneCount)
-            a[i] = clamp(a[i], geneLo[i], geneHi[i]);
-        a[3] = max(a[3], a[2] * inhSpreadFloor);
-        return ofAlleles(a);
-    }
+/// Число генов выводится из полей, а не выписывается руками.
+enum size_t geneCount = FieldNameTuple!ChromosomeGenes.length;
 
-    /// Мутация: гауссов шум по каждому гену, шум измеряется долей диапазона гена.
-    /// Одна мутация меняет все гены разом, но слабо: организм остаётся собой.
-    Chromosome mutated(float rate, ref Random rnd) const
-    {
-        float[geneCount] a = alleles();
-        foreach (i; 0 .. geneCount)
-            a[i] += rate * (geneHi[i] - geneLo[i]) * cast(float) gaussian(rnd);
-        return ofAlleles(a).normalized();
-    }
+/**
+ * Хромосома — контейнер генов особи. Ген здесь не «балка в точке», а правило
+ * роста: каркас вырастает сам из реакционно-диффузионной системы Nodal/Lefty
+ * (см. genetics.growth).
+ *
+ * Union, а не структура: те же гены доступны и по имени, и по индексу в
+ * `array`, а это одна и та же память. Имя читается там, где важен конкретный
+ * ген; индекс — в общих обходах по всем генам, где имена не нужны.
+ *
+ * Значения по умолчанию — откалиброванный основатель вида: с ними рост даёт
+ * вытянутые ветви с колёсами на концах, то есть нулевое поколение уже едет.
+ */
+union Chromosome
+{
+    ChromosomeGenes genes;
+    alias this = genes;
 
-    /// Кроссовер: каждый ген достаётся целиком одному из родителей, так что
-    /// потомок собирает набор признаков из двух особей. Границы и правило
-    /// «ингибитор шире активатора» проверяются на ребёнке.
-    Chromosome crossover(Chromosome mate, ref Random rnd) const
-    {
-        float[geneCount] a = alleles();
-        const auto b = mate.alleles;
-        foreach (i; 0 .. geneCount)
-            if (uniform(0.0f, 1.0f, rnd) < 0.5f)
-                a[i] = b[i];
-        return ofAlleles(a).normalized();
-    }
+    float[geneCount] array;
 }
 
-/// Хромосома из набора аллелей (порядок — как в `alleles`).
-Chromosome ofAlleles(const float[geneCount] a)
+/// Границы аллелей — те же гены в том же порядке, что и `array`. Это свойства
+/// вида, а не гены: выход за границу означает «не такая машина», а не другой
+/// организм.
+enum Chromosome geneLo = {array: [
+    0.20f, 0.05f, 0.10f, 0.30f, 0.02f, -0.40f,
+    0.02f, 0.10f, -200.0f, 0.08f, 0.02f, 0.10f, 2.00f,
+]};
+
+enum Chromosome geneHi = {array: [
+    4.00f, 1.00f, 0.80f, 4.00f, 1.50f, 0.40f,
+    0.08f, 0.40f, 200.0f, 0.45f, 2.00f, 3.00f, 64.00f,
+]};
+
+// Границы обязаны быть заданы у каждого гена и быть конечными: список короче
+// geneCount D дополняет NaN, а вырожденный диапазон намертво замораживает ген
+// в нормализации. Ловим это здесь, а не в эволюции, потерявшей ген.
+static foreach (i; 0 .. geneCount)
 {
-    Chromosome c;
-    c.actProduction = a[0];
-    c.inhProduction = a[1];
-    c.actDiffusion = a[2];
-    c.inhDiffusion = a[3];
-    c.threshold = a[4];
-    c.flowStrength = a[5];
-    c.beamRadius = a[6];
-    c.wheelRadius = a[7];
-    c.motorPower = a[8];
-    c.stepLength = a[9];
-    c.motorProduction = a[10];
-    c.motorDiffusion = a[11];
-    c.beamBudget = a[12];
+    static assert(geneHi.array[i] > geneLo.array[i],
+        "у гена вырожденный диапазон: не заданы границы");
+    static assert(isFinite(geneLo.array[i]) && isFinite(geneHi.array[i]),
+        "границы гена не конечны: список короче geneCount");
+}
+
+/// Хромосома в допустимых диапазонах: значения зажаты по генам, а ингибитор
+/// оставлен шире активатора. Правило держит и мутацию, и кроссовер — иначе
+/// особь с негодным соотношением радиусов просто не вырастет.
+Chromosome normalized(Chromosome c)
+{
+    foreach (i; 0 .. geneCount)
+        c.array[i] = clamp(c.array[i], geneLo.array[i], geneHi.array[i]);
+    c.inhDiffusion = max(c.inhDiffusion, c.actDiffusion * inhSpreadFloor);
     return c;
+}
+
+/// Мутация: гауссов шум по каждому гену, шум измеряется долей диапазона гена.
+/// Одна мутация меняет все гены разом, но слабо: организм остаётся собой.
+Chromosome mutated(Chromosome c, float rate, ref Random rnd)
+{
+    foreach (i; 0 .. geneCount)
+        c.array[i] += rate * (geneHi.array[i] - geneLo.array[i])
+            * cast(float) gaussian(rnd);
+    return normalized(c);
+}
+
+/// Кроссовер: каждый ген достаётся целиком одному из родителей, так что
+/// потомок собирает набор признаков из двух особей. Границы и правило
+/// «ингибитор шире активатора» проверяются на ребёнке.
+Chromosome crossover(Chromosome c, Chromosome mate, ref Random rnd)
+{
+    foreach (i; 0 .. geneCount)
+        if (uniform(0.0f, 1.0f, rnd) < 0.5f)
+            c.array[i] = mate.array[i];
+    return normalized(c);
+}
+
+/// Аллели по генам, для сравнения хромосом целиком.
+const(float[geneCount]) alleles(const Chromosome c)
+{
+    return c.array;
 }
 
 /// Случайная хромосома вида: равномерно по диапазонам, правило радиусов
 /// проверяется сразу.
 Chromosome randomChromosome(ref Random rnd)
 {
-    float[geneCount] a;
+    Chromosome c;
     foreach (i; 0 .. geneCount)
-        a[i] = uniform(geneLo[i], geneHi[i], rnd);
-    return ofAlleles(a).normalized();
+        c.array[i] = uniform(geneLo.array[i], geneHi.array[i], rnd);
+    return normalized(c);
 }
 
 /// Стандартная нормаль по Боксу–Мюллеру: в Phobos нет `stdNormal`.
@@ -172,24 +175,35 @@ private double gaussian(ref Random rnd)
     return sqrt(-2.0 * log(u1)) * cos(2.0 * PI * uniform(0.0, 1.0, rnd));
 }
 
+/// Каждый ген конечен и лежит в своих границах.
+private void assertGenesOk(Chromosome g)
+{
+    foreach (i; 0 .. geneCount)
+    {
+        assert(isFinite(g.array[i]), "аллель не конечен");
+        assert(g.array[i] >= geneLo.array[i] - 1e-6f
+            && g.array[i] <= geneHi.array[i] + 1e-6f, "аллель вне диапазона");
+    }
+}
+
 unittest
 {
     // Хромосома основателя — полный набор генов, все значения конечны:
     // плавающие поля D инициализируются NaN, а молчаливый NaN в гене
     // выглядел бы как «машина не выросла».
     const Chromosome founder;
-    foreach (i, v; founder.alleles)
-    {
-        assert(isFinite(v), "аллель не конечен");
-        assert(v >= geneLo[i] && v <= geneHi[i], "аллель вне диапазона");
-    }
+    assertGenesOk(founder);
+
+    // Имя и индекс — одна и та же память, а не две копии.
+    static assert(Chromosome.actProduction.offsetof == Chromosome.array.offsetof);
+    assert(founder.actProduction == founder.array[0]);
 
     // Правило «ингибитор шире активатора» держится на нормализации: даже
     // заведомо вырожденная хромосома даёт годную.
     Chromosome degenerate;
     degenerate.actDiffusion = 0.8f;
     degenerate.inhDiffusion = 0.3f;
-    const auto fixed = degenerate.normalized;
+    const auto fixed = normalized(degenerate);
     assert(fixed.inhDiffusion >= fixed.actDiffusion * inhSpreadFloor,
         "ингибитор обязан быть шире активатора");
     assert(fixed.actDiffusion == 0.8f, "нормализация не должна двигать годные гены");
@@ -197,8 +211,6 @@ unittest
 
 unittest
 {
-    import std.random : Random;
-
     auto rnd = Random(42);
     foreach (_; 0 .. 2000)
     {
@@ -206,23 +218,16 @@ unittest
 
         // Каждый ген случайной хромосомы внутри своего диапазона, и правило
         // радиусов выполнено.
-        foreach (i, v; c.alleles)
-            assert(v >= geneLo[i] - 1e-6f && v <= geneHi[i] + 1e-6f,
-                "случайный аллель вне диапазона");
+        assertGenesOk(c);
         assert(c.inhDiffusion >= c.actDiffusion * inhSpreadFloor,
             "случайная хромосома нарушает правило радиусов");
 
         // Мутация и кроссовер не выводят потомка за диапазоны — ни один ген
         // не должен «уехать» в мусор, иначе эволюция слепа.
-        const auto mutant = c.mutated(0.1f, rnd);
-        const auto child = c.crossover(randomChromosome(rnd), rnd);
+        const auto mutant = mutated(c, 0.1f, rnd);
+        const auto child = crossover(c, randomChromosome(rnd), rnd);
         foreach (g; [mutant, child])
-            foreach (i, v; g.alleles)
-            {
-                assert(v >= geneLo[i] - 1e-6f && v <= geneHi[i] + 1e-6f,
-                    "потомок вне диапазона");
-                assert(v == v, "потомок с NaN в гене");
-            }
+            assertGenesOk(g);
         assert(mutant.inhDiffusion >= mutant.actDiffusion * inhSpreadFloor);
         assert(child.inhDiffusion >= child.actDiffusion * inhSpreadFloor);
     }
@@ -230,8 +235,6 @@ unittest
 
 unittest
 {
-    import std.random : Random;
-
     // Кроссовер — обмен генами: каждый аллель ребёнка взят у одного из
     // родителей, ничего не смешивается наполовину.
     auto rnd = Random(7);
@@ -245,7 +248,7 @@ unittest
     size_t mixed;
     foreach (_; 0 .. 500)
     {
-        const auto child = a.crossover(b, rnd);
+        const auto child = crossover(a, b, rnd);
         const float ap = child.actProduction;
         const float ip = child.inhProduction;
         assert(ap == 1.0f || ap == 3.0f, "аллель actProduction не из родителей");
@@ -258,8 +261,6 @@ unittest
 
 unittest
 {
-    import std.random : Random;
-
     // Мутация сильнее слабой: у одного и того же основателя больший шаг
     // уводит признаки дальше. Иначе «темп эволюции» нечем регулировать.
     auto rnd = Random(3);
@@ -269,9 +270,9 @@ unittest
     foreach (_; 0 .. trials)
     {
         nearSum += abs(founder.actProduction
-            - founder.mutated(0.01f, rnd).actProduction);
+            - mutated(founder, 0.01f, rnd).actProduction);
         farSum += abs(founder.actProduction
-            - founder.mutated(0.2f, rnd).actProduction);
+            - mutated(founder, 0.2f, rnd).actProduction);
     }
     assert(farSum > nearSum, "шаг мутации должен управлять величиной изменения");
 }

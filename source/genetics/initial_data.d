@@ -2,7 +2,7 @@ module genetics.initial_data;
 
 // Стартовая хромосома эволюции — откалиброванный основатель вида.
 
-import genetics.chromosome : Chromosome;
+import genetics.chromosome : Chromosome, alleles;
 
 /**
  * Хромосома основателя: значения по умолчанию `Chromosome`. С ними химия роста

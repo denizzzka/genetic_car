@@ -104,7 +104,7 @@ void main(string[] args)
         defaultEngine(PhysicsEngine.newton);
     if (args.canFind("-viab"))
     {
-        import genetics.chromosome : Chromosome;
+        import genetics.chromosome : Chromosome, mutated;
         import genetics.growth : develop;
         import genetics.fitness : buggyFitness;
         import std.stdio : writefln;
@@ -116,7 +116,7 @@ void main(string[] args)
         size_t[8] hist;
         foreach (_; 0 .. 20)
         {
-            const auto trial = founder.mutated(0.05f, rnd);
+            const auto trial = mutated(founder, 0.05f, rnd);
             const auto grown = develop(trial);
             if (grown.isNull) { ++nullFrames; continue; }
             const auto f = grown.get;
@@ -144,7 +144,7 @@ void main(string[] args)
     }
     if (args.canFind("-diag"))
     {
-        import genetics.chromosome : Chromosome;
+        import genetics.chromosome : Chromosome, mutated;
         import genetics.growth : develop;
         import genetics.fitness : buggyFitness;
         import frame.frame : AnchorKind;

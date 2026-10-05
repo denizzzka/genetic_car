@@ -8,7 +8,7 @@ import std.random;
 import std.typecons : Nullable;
 
 import frame.frame : Frame;
-import genetics.chromosome : Chromosome, geneCount;
+import genetics.chromosome : Chromosome, alleles, crossover, geneCount, mutated;
 import genetics.fitness : buggyFitness;
 import genetics.growth : Organism, develop;
 import genetics.selection;
@@ -44,7 +44,7 @@ Organism tryCreateViableMutant(const Chromosome base, const EvolutionConfig p,
 
     foreach (_; 0 .. maxMutationAttempts)
     {
-        auto trial = base.mutated(p.mutationRate, rnd);
+        auto trial = mutated(base, p.mutationRate, rnd);
         // Одна проба — один вырост: и годность, и число якорей берём из него же.
         auto grownFrame = develop(trial);
         if (grownFrame.isNull)
@@ -110,7 +110,7 @@ Organism[] buildNextGeneration(Individual[] pop, const EvolutionConfig p,
         {
             auto base = pool[parentIdx];
             const mate = ranked[tournament(ranked, p.tournamentSize, rnd)].chromosome;
-            kids[k] = base.chromosome.crossover(mate, rnd);
+            kids[k] = crossover(base.chromosome, mate, rnd);
             baseFrames[k] = base.frame;
             kidsRnd[k] = Random(uniform!uint(rnd));
             parentIdx = (parentIdx + 1) % pool.length;
