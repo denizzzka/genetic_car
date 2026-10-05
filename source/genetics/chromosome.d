@@ -78,10 +78,10 @@ struct Chromosome
     float stepLength = 0.18f;
 
     /// Скорость роста активатора моторного поля.
-    float motorProduction = 0.5f;
+    float motorProduction = 0.2f;
 
     /// Радиус действия активатора моторного поля.
-    float motorDiffusion = 1.5f;
+    float motorDiffusion = 2.5f;
 
     /// Аллели по генам в порядке полей `Chromosome`.
 
