@@ -53,7 +53,7 @@ enum float respondGate = 1.0f;
 /// Во сколько раз поле мотора должно превосходить порог, чтобы колесо
 /// начало крутить. Порог выше единицы: ведущие колёса — редкость, иначе
 /// привод появился бы у каждого конца ветви.
-enum float motorGate = 2.0f;
+enum float motorGate = 0.5f;
 
 /// Потолок числа колёс на машину: больше — уже не средство передвижения,
 /// а коллекция.
@@ -289,6 +289,17 @@ private struct Growth
     {
         float act = 0.0f;
         float inh = 0.0f;
+    }
+
+    float rawMotor(const vec3 p) const
+    {
+        float r = 0.0f;
+        foreach (n; f.nodes)
+        {
+            const float d = distance(n.pos, p);
+            r += expf(-d / c.motorDiffusion);
+        }
+        return r * c.motorProduction;
     }
 
     Fields raw(const vec3 p) const
@@ -644,7 +655,7 @@ private void placeWheels(ref Growth g)
             + wheelAxleShare * axleShare(g, i);
         if (wheel <= respondGate || wheelHitsCabin(g.f, p, g.c.wheelRadius))
             continue;
-        spots ~= WheelSpot(i, wheel, g.response(p, motorTissue));
+        spots ~= WheelSpot(i, wheel, g.rawMotor(p));
     }
     sort!((a, b) => a.wheel > b.wheel)(spots);
 
