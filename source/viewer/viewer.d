@@ -1077,9 +1077,16 @@ class BuggyScene: Scene
 
 class MyGame: Game
 {
+    /// Частота кадров на экране, Гц. Половина частоты физики: два шага
+    /// движка на кадр. Это симуляция, а не игра, — если система не
+    /// укладывается, физика отстаёт, и пользователь смотрит слайд-шоу.
+    enum uint renderRate = 30;
+
     this(uint w, uint h, bool fullscreen, string title, string[] args)
     {
         super(w, h, fullscreen, title, args);
+        updatesPerSecond = renderRate;
+        cadencer.setFrequency(renderRate);
         currentScene = New!BuggyScene(this);
     }
 }
