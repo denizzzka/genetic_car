@@ -265,7 +265,7 @@ unittest
     // уводит признаки дальше. Иначе «темп эволюции» нечем регулировать.
     auto rnd = Random(3);
     const Chromosome founder;
-    float nearSum, farSum;
+    float nearSum = 0.0f, farSum = 0.0f;
     enum size_t trials = 400;
     foreach (_; 0 .. trials)
     {

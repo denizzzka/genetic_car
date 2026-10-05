@@ -1487,6 +1487,7 @@ unittest
 unittest
 {
     import std.math : isFinite;
+    import physics_world.engineselect : engineHasSteerJoint;
 
     // Руль: передняя центральная нода (узел 1) + листовая балка от неё со
     // свободным концом, несущим собственное колесо — рычаг получает шарнир.
@@ -1562,9 +1563,13 @@ unittest
 
     const double dt = 1.0 / 60.0;
 
-    // Руль под нагрузкой: носовая балка с колесом — боевой случай эволюции;
-    // достаточно, чтобы рычаг продавил сцепление покрышки и дошёл до границы.
+    // Дальше — угол самого руля. У Jolt шарнир руля заглушка: угла нет,
+    // читается ноль, и проверять нечего.
+    if (engineHasSteerJoint)
     {
+        // Руль под нагрузкой: носовая балка с колесом — боевой случай
+        // эволюции; достаточно, чтобы рычаг продавил сцепление покрышки
+        // и дошёл до границы.
         auto physics = new BuggyPhysics(new Buggy(placedFrame(noseFrame())));
         scope (exit) physics.dispose();
         assert(physics.isSteered,
@@ -1576,24 +1581,20 @@ unittest
         physics.settle(dt, 360);
         assert(abs(physics.steerYaw) <= steerLimitRad + 0.15f,
             "рычаг вышел за предел руля");
-        // Известный дефект: с покрышкой на конце листа первый шаг уводит мастер
-        // и колёса в NaN, и steerYaw читается нулём; без покрышки кадр устойчив.
         assert(abs(physics.steerYaw) > 0.6f,
             "рычаг не дошёл до предела под нагрузкой покрышки");
-    }
 
-    // Свободная ненагруженная балка: без покрышки на конце рычаг не должен
-    // раскрутиться в воронку — предел держит и шарнир.
-    {
-        auto physics = new BuggyPhysics(new Buggy(placedFrame(noseArmFrame())));
-        scope (exit) physics.dispose();
-        assert(physics.isSteered,
+        // Свободная ненагруженная балка: без покрышки на конце рычаг не
+        // должен раскрутиться в воронку — предел держит и шарнир.
+        auto bare = new BuggyPhysics(new Buggy(placedFrame(noseArmFrame())));
+        scope (exit) bare.dispose();
+        assert(bare.isSteered,
             "листовая балка без колеса тоже даёт рычаг");
-        physics.settle(dt, 60);
-        physics.autoSteer = false;
-        physics.steerJoint.targetYaw = 8.0f;
-        physics.settle(dt, 120);
-        assert(abs(physics.steerYaw) <= steerLimitRad + 0.15f,
+        bare.settle(dt, 60);
+        bare.autoSteer = false;
+        bare.steerJoint.targetYaw = 8.0f;
+        bare.settle(dt, 120);
+        assert(abs(bare.steerYaw) <= steerLimitRad + 0.15f,
             "ненагруженный рычаг ушёл за предел руля");
     }
 

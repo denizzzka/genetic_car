@@ -254,5 +254,7 @@ unittest
 
     auto body = newBoundaryBody(model, world);
     assert(body.role == BodyRole.obstacle, "граница — препятствие");
-    assert(body.worldPosition == Vector3f(origin), "граница стоит в origin");
+    // Не `==` по компонентам: у вектора dlib равенство побитовое, и мир
+    // возвращает −0.0 там, где ставили +0.0.
+    assert(isAlmostZero(body.worldPosition - origin), "граница стоит в origin");
 }
