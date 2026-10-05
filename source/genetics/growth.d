@@ -735,8 +735,8 @@ private void placeWheels(ref Growth g)
 ///
 /// Три ограничения, и все они — геометрия, а не договорённость:
 ///   - обод не наезжает на уже поставленные колёса;
-///   - ни одна чужая балка не задевает покрышку (свою несущую не считаем: ось
-///     колеса легитимно проходит через ступицу, это и есть подвеска);
+///   - ни одна балка не задевает покрышку, своя несущая included: ось через
+///     ступицу полосу не режет, а наклонная балка режет резину;
 ///   - ось колеса выше земли хотя бы на половину радиуса, иначе колесо сразу
 ///     уходит под грунт.
 private bool wheelFits(const Growth g, size_t node)
@@ -765,14 +765,57 @@ private float axleShare(const Growth g, size_t tip)
     return 0.0f;
 }
 
-/// Задевает ли чужая балка покрышку.
+/// Задевает ли отрезок полосу покрышки: поперечный радиус от оси лежит между
+/// ступицей и ободом, и точка попадает в ширину покрышки.
 ///
-/// Покрышка — труба вокруг поперечной оси (оси колеса всегда поперечные, см.
-/// `wheelAxle`), поэтому у точки есть «внутрь-от-оси» и «вдоль оси». Задевает
-/// ровно то, что попало в радиальную полосу между ступицей и ободом И в
-/// ширину покрышки. Балка, идущая вдоль оси, в полосу не попадает: она идёт
-/// внутри ступицы, поэтому подвеска, зашедшая сбоку, резину не трогает, а
-/// зашедшая сверху проходит через неё.
+/// Радиус вдоль отрезка — выпуклая функция, поэтому максимум берётся на концах
+/// оставшегося интервала, а минимум — в вершине параболы. Точная проверка
+/// нужна потому, что у наклонной балки полосу пересекает не та точка, где
+/// радиус минимален: минимум там, где `x` проходит через ось, а полосу
+/// балка режет ближе к краю покрышки.
+private bool segmentHitsTyreBand(const vec3 pa, const vec3 pb,
+    const float inner, const float outer, const float halfWidth)
+{
+    // Ось колеса уходит в x, поэтому поперечный радиус — это sqrt(y² + z²).
+    const float dx = pb.x - pa.x;
+    float lo = 0.0f, hi = 1.0f;
+    if (abs(dx) < 1e-7f)
+    {
+        if (abs(pa.x) > halfWidth)
+            return false;
+    }
+    else
+    {
+        // Интервал, где |x| не выходит за половину ширины покрышки.
+        const float ta = (-halfWidth - pa.x) / dx;
+        const float tb = (halfWidth - pa.x) / dx;
+        lo = max(lo, min(ta, tb));
+        hi = min(hi, max(ta, tb));
+        if (lo > hi)
+            return false;
+    }
+
+    // Квадратичный радиус: A t² + B t + C с ведущим коэффициентом A ≥ 0.
+    const float dy = pb.y - pa.y, dz = pb.z - pa.z;
+    const float A = dy * dy + dz * dz;
+    const float B = 2.0f * (pa.y * dy + pa.z * dz);
+    const float C = pa.y * pa.y + pa.z * pa.z;
+    float minR2, maxR2;
+    if (A < 1e-12f)
+        minR2 = maxR2 = C;
+    else
+    {
+        const float tv = clamp(-B / (2.0f * A), lo, hi);
+        minR2 = A * tv * tv + B * tv + C;
+        maxR2 = max(A * lo * lo + B * lo + C, A * hi * hi + B * hi + C);
+    }
+    return minR2 <= outer * outer && maxR2 >= inner * inner;
+}
+
+/// Задевает ли балка покрышку колеса на этом конце. Своя несущая балка
+/// проверяется наравне с чужими: ось, идущая через ступицу, полосу не режет
+/// (там радиус нулевой), а наклонная балка режет резину, и подвеска такой
+/// машины ломается о покрышку.
 private bool beamHitsTyre(const Growth g, size_t node)
 {
     const vec3 hub = g.f.nodes[node].pos;
@@ -781,30 +824,12 @@ private bool beamHitsTyre(const Growth g, size_t node)
     const float outer = g.c.wheelRadius + g.c.beamRadius;
     const float halfWidth = 0.5f * wheelWidth * scale + g.c.beamRadius;
 
-    bool hits(const vec3 q)
-    {
-        // Радиус до оси колеса: поперечная составляющая, ось уходит в x.
-        const float radial = sqrt(q.y * q.y + q.z * q.z);
-        return abs(q.x) <= halfWidth && radial >= inner && radial <= outer;
-    }
-
     foreach (b; g.f.beams)
     {
-        if (b.a == node || b.b == node)
-            continue;
         const vec3 pa = g.f.nodes[b.a].pos - hub;
         const vec3 pb = g.f.nodes[b.b].pos - hub;
-        if (hits(pa) || hits(pb))
+        if (segmentHitsTyreBand(pa, pb, inner, outer, halfWidth))
             return true;
-        // Точка балки, ближайшая к оси: у неё радиус минимален, и если она
-        // в полосе, то в полосе и вся балка.
-        const float dx = pb.x - pa.x;
-        if (abs(dx) > 1e-6f)
-        {
-            const float t = clamp(-pa.x / dx, 0.0f, 1.0f);
-            if (hits(pa + (pb - pa) * t))
-                return true;
-        }
     }
     return false;
 }
