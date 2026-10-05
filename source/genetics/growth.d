@@ -171,6 +171,16 @@ private uint mixIndex(uint x) pure nothrow @nogc
     return x;
 }
 
+/// Зеркально-каноничный ключ точки: `x` берётся по модулю, иначе точки,
+/// зеркальные друг другу, получили бы разные ключи и разные углы.
+private uint positionSeed(const vec3 p) pure nothrow @nogc
+{
+    uint h = cast(uint) cast(int) (p.x * 1000.0f + 0.5f);
+    h += cast(uint) cast(int) (p.y * 1000.0f + 0.5f) * 2654435761u;
+    h += cast(uint) cast(int) (p.z * 1000.0f + 0.5f) * 40503u;
+    return mixIndex(h);
+}
+
 /// Точка сферы по двум равномерным координатам: `z` задаёт высоту, `phi` —
 /// азимут. Раскладка равномерная, соседние пробы не слипаются в полюсах.
 private vec3 spherePoint(uint seed) pure nothrow @nogc
@@ -573,10 +583,13 @@ private bool growRound(ref Growth g, size_t round)
     foreach (tip; tips)
     {
         const vec3 from = g.f.nodes[tip].pos;
-        // Пробы нумеруются от узла и от числа израсходованных почек: каждый
-        // конец ветви обстреливается своей серией углов.
-        const uint base = mixIndex(cast(uint) tip * 2654435761u
-            + cast(uint) g.sprouts[tip] * 40503u + cast(uint) round * 2246822519u);
+        // Пробы нумеруются от положения конца, а не от его индекса: у
+        // зеркальных концов индексы разные, а поле вокруг них одинаковое, и
+        // сеять надо так, чтобы они получили одну и ту же серию углов.
+        // Иначе симметрия поля тут же рассыпается на первом же такте.
+        const uint base = mixIndex(cast(uint) round * 2246822519u
+            + cast(uint) g.sprouts[tip] * 40503u
+            + positionSeed(from));
         foreach (k; 0 .. directionProbes)
         {
             const vec3 d = spherePoint(base + cast(uint) k * 97u);
