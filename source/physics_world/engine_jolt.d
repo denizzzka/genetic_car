@@ -743,6 +743,10 @@ private final class SteerJoint : PhysSteerJoint
 
 final class JoltPhysWorld : PhysWorld
 {
+    /// Collision steps внутри одного `step`. Два дешевле двух вызовов — накладных
+    /// расходов на вызов нет, — но не равны им, см. updateRate.
+    enum int innerSteps = 2;
+
     private JPH_PhysicsSystem* system_;
     /// Интерфейс тел: наружу не выходит, тела ходят по нему отсюда.
     JPH_BodyInterface* bodyInterface_;
@@ -926,14 +930,15 @@ final class JoltPhysWorld : PhysWorld
     {
         ctx_.log.clear();
         synchronized (updateLock_)
-            JPH_PhysicsSystem_Update(system_, cast(float) dt, 1, jobs_);
+            JPH_PhysicsSystem_Update(system_, cast(float) dt, innerSteps, jobs_);
         foreach (b; bodiesOwned_)
             b.readBackPose();
     }
 
-    /// Jolt просит 60 Гц: ровно столько он рекомендует на шаг collision
-    /// solver, и мы зовём его с одним collision step на вызов.
-    override double updateRate() @property { return 60.0; }
+    /// 30 Гц наружу — столько мы зовём мир. Два collision steps разрешают
+    /// контакты чаще, но 60 вызовам в секунду не равны: за вызов тело
+    /// интегрируется один раз, а не два.
+    override double updateRate() @property { return 30.0; }
 
     override const(ContactPair)[] contacts() const { return ctx_.log.pairs; }
 

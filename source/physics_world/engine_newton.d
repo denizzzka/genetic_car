@@ -618,6 +618,10 @@ private final class SteerJoint : NewtonUserConstraint, PhysSteerJoint
 /// С++-колбэков, car-координаты вместо осей Newton.
 final class NewtonPhysWorld : PhysWorld
 {
+    /// Подшагов внутри одного `step`. Два дешевле двух вызовов — накладных
+    /// расходов на вызов нет, — но не равны им, см. updateRate.
+    enum int innerSteps = 2;
+
     SoilWorld newton;
     ContactLog log_;
 
@@ -634,6 +638,7 @@ final class NewtonPhysWorld : PhysWorld
     {
         ensureNewtonLoaded();
         newton = New!SoilWorld(cast(EventManager) null, cast(Owner) null);
+        NewtonSetNumberOfSubsteps(newton.newtonWorld, innerSteps);
     }
 
     override immutable vec3 right() @property
@@ -699,9 +704,10 @@ final class NewtonPhysWorld : PhysWorld
         newton.update(dt);
     }
 
-    /// Newton переваривает `dt` как есть, но 60 раз в секунду — частота,
-    /// на которой его солвер держит устойчивость на наших швах и покрышках.
-    override double updateRate() @property { return 60.0; }
+    /// 30 Гц наружу — столько мы зовём мир. Два подшага разрешают контакты
+    /// чаще, но 60 вызовам в секунду не равны: считаются за один вызов, и
+    /// порядок разведения контактов другой.
+    override double updateRate() @property { return 30.0; }
 
     override const(ContactPair)[] contacts() const { return log_.pairs; }
 
