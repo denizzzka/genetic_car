@@ -158,14 +158,18 @@ private uint mixIndex(uint x) pure nothrow @nogc
     return x;
 }
 
-/// Ключ точки в базисе тела: расстояние до средней линии по модулю, а знак
-/// берётся отдельно — стороной. Так точки по разные стороны средней линии,
-/// но на одинаковом расстоянии от неё, получают один ключ и одну серию углов.
-private uint positionSeed(const vec3 p, const float midX) pure nothrow @nogc
+/// Ключ серии углов для конца: его собственное состояние, а не координата на
+/// каркасе. Направление берётся в базисе тела, поэтому у зеркальных концов
+/// оно совпадает, хотя в мире противоположно, и обе серии углов выходят
+/// зеркальными. Число отростков и номер такта — тоже локальные величины.
+private uint budSeed(size_t round, size_t sprouts, const vec3 bornLocal)
+    pure nothrow @nogc
 {
-    uint h = cast(uint) cast(int) (abs(p.x - midX) * 1000.0f + 0.5f);
-    h += cast(uint) cast(int) (p.y * 1000.0f + 0.5f) * 2654435761u;
-    h += cast(uint) cast(int) (p.z * 1000.0f + 0.5f) * 40503u;
+    uint h = cast(uint) cast(int) (bornLocal.x * 1000.0f + 0.5f);
+    h += cast(uint) cast(int) (bornLocal.y * 1000.0f + 0.5f) * 2654435761u;
+    h += cast(uint) cast(int) (bornLocal.z * 1000.0f + 0.5f) * 40503u;
+    h += cast(uint) sprouts * 2246822519u;
+    h += cast(uint) round * 40503u;
     return mixIndex(h);
 }
 
@@ -184,6 +188,12 @@ private float bodySide(const vec3 p, const float midX) pure nothrow @nogc
 private vec3 toWorld(const vec3 local, const float side) pure nothrow @nogc
 {
     return vec3(local.x * side, local.y, local.z);
+}
+
+/// Обратное к `toWorld`: направление мира в базисе тела.
+private vec3 toLocal(const vec3 world, const float side) pure nothrow @nogc
+{
+    return vec3(world.x * side, world.y, world.z);
 }
 
 /// Точка сферы по двум равномерным координатам: `z` задаёт высоту, `phi` —
@@ -213,6 +223,12 @@ private struct Growth
     /// Родитель каждого узла: у узлов заданного каркаса — `noParent`. По этой
     /// цепочке рост узнаёт свою ветвь.
     size_t[] parent;
+
+    /// Направление балки, которой родился каждый узел: у точек подвески это
+    /// «вниз», дальше — куда пошла предыдущая балка. Мерило того, где конец
+    /// находится в своём сегменте, и единственное состояние, которое нужно
+    /// ему для выбора направления.
+    vec3[] born;
 
     /// Балок выросло всего.
     size_t grown;
@@ -462,6 +478,7 @@ private struct Growth
         f.nodes ~= Node(to);
         parent ~= from;
         const vec3 step = to - f.nodes[from].pos;
+        born ~= step * (1.0f / sqrt(dot(step, step)));
         f.beams ~= new Beam(from, idx, c.beamRadius);
         sprouts ~= 0;
         sprouts[from] += 1;
@@ -551,6 +568,8 @@ Nullable!Frame develop(Chromosome chr)
             g.sprouts[i] = 0;
     g.parent = new size_t[g.scaffoldNodes];
     g.parent[] = noParent;
+    g.born = new vec3[g.scaffoldNodes];
+    g.born[] = vec3(0.0f, 0.0f, -1.0f);
     g.grownMax = min(cast(size_t) c.beamBudget, maxBeamCount - cockpitFrameBeamCount());
 
     foreach (round; 0 .. maxGrowthRounds)
@@ -603,12 +622,13 @@ private bool growRound(ref Growth g, size_t round)
     foreach (tip; tips)
     {
         const vec3 from = g.f.nodes[tip].pos;
-        // Пробы нумеруются от положения конца, а не от его индекса: у
-        // зеркальных концов индексы разные, а поле вокруг них одинаковое.
-        const uint base = mixIndex(cast(uint) round * 2246822519u
-            + cast(uint) g.sprouts[tip] * 40503u
-            + positionSeed(from, midX));
         const float side = bodySide(from, midX);
+        // Серия углов задаётся состоянием самого конца: куда он смотрит в
+        // своём сегменте, сколько отростков выпустил, какой такт. Координаты
+        // на каркасе в ключ не входят — иначе инструкция переписывалась бы по
+        // ходу роста, и каждый шаг зависел бы от всех предыдущих.
+        const uint base = budSeed(round, g.sprouts[tip],
+            toLocal(g.born[tip], side));
         Bud[] buds;
         foreach (k; 0 .. directionProbes)
         {
