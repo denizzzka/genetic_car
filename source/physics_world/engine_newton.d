@@ -699,6 +699,10 @@ final class NewtonPhysWorld : PhysWorld
         newton.update(dt);
     }
 
+    /// Newton переваривает `dt` как есть, но 60 раз в секунду — частота,
+    /// на которой его солвер держит устойчивость на наших швах и покрышках.
+    override double updateRate() @property { return 60.0; }
+
     override const(ContactPair)[] contacts() const { return log_.pairs; }
 
     override PhysShape boxShape(const vec3 halfExtent)

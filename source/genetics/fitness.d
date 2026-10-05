@@ -211,7 +211,6 @@ private RunOutcome frameCabinContact(const Frame f)
     return RunOutcome.none;
 }
 
-enum double physicsDt = 1.0 / 60.0;
 enum double physicsSimSeconds = 120.0; ///< окно заезда, 2 минуты
 enum float physicsNominalSpeed = 4.0f;    ///< м/с фитнеса — дистанция-норма
 enum float physicsSpeedCap = 2.0f;        ///< потолок бонуса за скорость доезда
@@ -275,7 +274,9 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
         return r;
     }
 
-    const size_t steps = cast(size_t)(seconds / physicsDt);
+    // Шаг заезда берём у движка: столько раз в секунду он считает устойчиво.
+    const double dt = 1.0 / physics.updateRate;
+    const size_t steps = cast(size_t)(seconds / dt);
 
     auto wheels = physics.wheelStates();
     r.beams = physics.beamStates().length;
@@ -289,7 +290,7 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
     double reachTime = seconds;
     foreach (i; 0 .. steps)
     {
-        physics.step(physicsDt, 1.0f);
+        physics.step(dt, 1.0f);
 
         const stepFailure = runFailure(physics);
         if (stepFailure != RunOutcome.none)
@@ -314,7 +315,7 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
         if (downhill > farthest)
         {
             farthest = downhill;
-            reachTime = physicsDt * (i + 1);
+            reachTime = dt * (i + 1);
         }
     }
 

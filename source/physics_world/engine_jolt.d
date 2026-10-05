@@ -931,6 +931,10 @@ final class JoltPhysWorld : PhysWorld
             b.readBackPose();
     }
 
+    /// Jolt просит 60 Гц: ровно столько он рекомендует на шаг collision
+    /// solver, и мы зовём его с одним collision step на вызов.
+    override double updateRate() @property { return 60.0; }
+
     override const(ContactPair)[] contacts() const { return ctx_.log.pairs; }
 
     override PhysShape boxShape(const vec3 halfExtent)

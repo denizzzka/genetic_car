@@ -87,6 +87,9 @@ class BuggyScene: Scene
     private Entity[] liveCar;
     private double liveSimTime;
     private double liveRunSeconds;
+    /// Непрочитанный остаток кадра: физика идёт кратными `engineStep`, а
+    /// кадры приходят произвольной длины. Дробь копится и добирает шаг.
+    private double liveTimeDebt;
 
     /// D: дебажное отображение — эфемерные балки красными цилиндрами,
     /// кабина скрыта. Повторное нажатие возвращает обычный вид.
@@ -617,6 +620,7 @@ class BuggyScene: Scene
             liveWorld, sharedTerrain());
 
         liveSimTime = 0.0;
+        liveTimeDebt = 0.0;
         liveFailed_ = false;
         liveFailTime = 0.0;
 
@@ -686,9 +690,28 @@ class BuggyScene: Scene
             return;
         }
 
-        livePhysics.step(physicsDt, 1.0f);
-        liveSimTime += physicsDt;
+        // Кадр несёт 1/renderRate симулированного времени, а шаг движка
+        // мельче: долг копит остаток и добирает его следующим кадром.
+        // Потолка шагов нет — если система не укладывается, каденсер
+        // отдаёт кадры реже, отстаёт физика, и выходит слайд-шоу.
+        const double step = 1.0 / livePhysics.updateRate;
+        liveTimeDebt += dt;
+        while (liveTimeDebt >= step && !liveFailed_)
+        {
+            liveTimeDebt -= step;
+            livePhysics.step(step, 1.0f);
+            liveSimTime += step;
+            checkLiveRun();
+        }
 
+        updateLiveCar();
+    }
+
+    /// Сходимость одного физического шага. Проверяется на каждом шаге
+    /// накопленного времени, а не раз на кадр: покадровая проверка
+    /// пропускала подшаги, на которых машина переворачивалась.
+    private void checkLiveRun()
+    {
         const stepFailure = runFailure(livePhysics);
         if (stepFailure != RunOutcome.none)
         {
@@ -703,8 +726,6 @@ class BuggyScene: Scene
             liveFailTime = 0.0;
             writefln("live: кабина коснулась земли — машина заморожена, ждём N");
         }
-
-        updateLiveCar();
     }
 
     private void setLiveVisible(const bool on)
