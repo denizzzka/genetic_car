@@ -896,23 +896,26 @@ final class JoltPhysWorld : PhysWorld
             // колбэки контактов, читающие ассоциативные массивы мира, ловят
             // сборку памяти под ногами. Вызывающему потоку это не грозит.
             JPH_JobSystemConfig cfg;
-            cfg.queueJob = &runInline;
-            cfg.queueJobs = &runInlineMany;
+            cfg.queueJob = &inlineJob_;
+            cfg.queueJobs = &inlineJobs_;
             cfg.maxConcurrency = 1;
             cfg.maxBarriers = 8;
             jobs_ = JPH_JobSystemCallback_Create(&cfg);
         }
     }
 
-    private static extern(C) void runInline(void* context, JPH_JobFunction job, void* arg)
+    private static JPH_QueueJobCallback inlineJob_ = &runInline;
+    private static JPH_QueueJobsCallback inlineJobs_ = &runInlineMany;
+
+    private static extern(C) void runInline(void* context, JPH_JobFunction* job, void* arg)
     {
-        job(arg);
+        (*job)(arg);
     }
 
-    private static extern(C) void runInlineMany(void* context, JPH_JobFunction job, void** args, uint count)
+    private static extern(C) void runInlineMany(void* context, JPH_JobFunction* job, void** args, uint count)
     {
         foreach (i; 0 .. count)
-            job(args[i]);
+            (*job)(args[i]);
     }
 
     override void useCallingThread()
