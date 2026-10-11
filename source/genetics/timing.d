@@ -7,9 +7,9 @@ import std.format : format;
 /// свои секундомеры), а строку печатает toPhases: формат один на всех.
 struct GenerationTiming
 {
-    double grow;
-    double eval;
-    double physics;
+    double grow = 0.0;
+    double eval = 0.0;
+    double physics = 0.0;
 
     @property double cycle() const
     {
