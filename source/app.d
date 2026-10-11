@@ -20,50 +20,6 @@ version(linux)
     }
 }
 
-import core.runtime;
-import core.stdc.stdio;
-import core.stdc.stdlib;
-import core.sys.posix.signal;
-import core.sys.posix.ucontext;
-import core.demangle;
-import core.thread;
-import std.conv;
-import std.string;
-
-version(Linux)
-{
-    extern(C) void segvHandler(int sig, siginfo_t* info, void* context)
-    {
-        writeln("\n!!! CRASH: signal ", sig);
-        try
-        {
-            auto bt = defaultTraceHandler();
-            writeln(bt);
-        }
-        catch (Exception e)
-        {
-            writeln("no trace");
-        }
-        exit(128 + sig);
-    }
-
-    shared static this()
-    {
-        try
-        {
-            sigaction_t sa;
-            sa.sa_sigaction = &segvHandler;
-            sigemptyset(&sa.sa_mask);
-            sa.sa_flags = SA_SIGINFO;
-            sigaction(SIGSEGV, &sa, null);
-            sigaction(SIGBUS, &sa, null);
-            sigaction(SIGABRT, &sa, null);
-            sigaction(SIGILL, &sa, null);
-        }
-        catch (Exception e) {}
-    }
-}
-
 /// Headless-прогон: тот же отбор, что и по G во вьюере, но без окна —
 /// эволюция стартует сразу и печатает поколения в stdout.
 private struct HeadlessOptions
