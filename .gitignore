@@ -29,3 +29,10 @@ third_party/newton/.cache/
 
 # JPH копируется из dagon:jolt (copyFiles) в корень сборки
 libjoltc.so
+
+# Личные заметки и разовые файлы
+/*!
+.gdb_history
+MEMORY.md
+question.txt
+расхождения на newton.txt
