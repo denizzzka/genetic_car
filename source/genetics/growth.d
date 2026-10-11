@@ -501,22 +501,27 @@ private struct Bud
 /// Проба направления из конца `tip`: если место годится, почка попадает в
 /// список. Габарит проверяется на базовом шаге, поле считаем после него —
 /// отбраковка дешёвая.
-private void addBud(const Growth g, size_t tip, const vec3 from, const vec3 d,
-    ref Bud[] buds)
+private bool addBud(const Growth g, size_t tip, const vec3 from, const vec3 d,
+    ref Bud[] buds, ref size_t budCount)
 {
     const vec3 probe = from + d * g.c.stepLength;
     if (abs(probe.x - g.f.nodes[0].pos.x) > maxHalfWidth)
-        return;
+        return false;
     const float resp = g.response(probe, frameTissue, tip);
     if (resp <= respondGate)
-        return;
+        return false;
     const vec3 to = from + d * g.budLength(resp);
     // Кабина неприкосновенна: сквозь корпус не растём.
     if (beamHitsCabin(g.f, from, to))
-        return;
+        return false;
     if (abs(to.x - g.f.nodes[0].pos.x) > maxHalfWidth)
-        return;
-    buds ~= Bud(tip, to, resp);
+        return false;
+    if (budCount < buds.length)
+    {
+        buds[budCount++] = Bud(tip, to, resp);
+        return true;
+    }
+    return false;
 }
 
 /// Кандидат на колесо: конец ветви с откликом тканей колеса и мотора.
@@ -619,6 +624,7 @@ private bool growRound(ref Growth g, size_t round)
     // раньше, меняет поле для соседнего, и тот отвечает уже на другом поле —
     // расхождение из-за порядка, а не из-за биологии.
     Bud[] chosen;
+    chosen.reserve(tips.length);
     foreach (tip; tips)
     {
         const vec3 from = g.f.nodes[tip].pos;
@@ -629,16 +635,24 @@ private bool growRound(ref Growth g, size_t round)
         // ходу роста, и каждый шаг зависел бы от всех предыдущих.
         const uint base = budSeed(round, g.sprouts[tip],
             toLocal(g.born[tip], side));
-        Bud[] buds;
+        Bud[directionProbes] budsArr;
+        Bud[] buds = budsArr[];
+        size_t budCount = 0;
         foreach (k; 0 .. directionProbes)
         {
             // Углы набираются в базисе тела и разворачиваются по стороне конца,
             // поэтому зеркальные концы обстреливаются зеркальными же углами.
             addBud(g, tip, from, toWorld(spherePoint(base + cast(uint) k * 97u),
-                side), buds);
+                side), buds, budCount);
         }
-        sort!((a2, b2) => a2.resp > b2.resp)(buds);
-        if (buds.length != 0)
+        if (budCount > 1)
+        {
+            Bud[] budsSlice = buds[0 .. budCount];
+            sort!((a2, b2) => a2.resp > b2.resp)(budsSlice);
+            if (budCount > 0)
+                chosen ~= buds[0];
+        }
+        else if (budCount == 1)
             chosen ~= buds[0];
     }
 
