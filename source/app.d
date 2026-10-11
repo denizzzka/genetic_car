@@ -14,9 +14,12 @@ import dlib.math.utils : clamp;
 version(linux)
 {
     import etc.linux.memoryerror;
-    shared static this()
+    version(DigitalMars)
     {
-        registerMemoryAssertHandler();
+        shared static this()
+        {
+            registerMemoryAssertHandler();
+        }
     }
 }
 
