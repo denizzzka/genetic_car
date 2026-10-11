@@ -17,6 +17,7 @@ import frame.frame : frameForward = forward, frameUp = up;
 import frame.cockpit : loadCockpit;
 import frame.objmesh : ObjModel;
 import genetics;
+import genetics.timing;
 import physics_world;
 import physics_world.engine : PhysWorld;
 import viewer.scene : carToScenePos;
@@ -384,6 +385,7 @@ class BuggyScene: Scene
         if (eventManager.keyDown[KEY_D])
             toggleDebugSkeleton();
 
+
         if (jobThread !is null)
         {
             if (atomicLoad(jobDone))
@@ -443,6 +445,8 @@ class BuggyScene: Scene
             stopRequested_ = true;
             return;
         }
+        if (population.length == 0)
+            return;
 
         // Сброс до старта: иначе устаревший true от прошлого задания
         // мгновенно применяет результат и гасит live-заезд.
@@ -674,6 +678,8 @@ class BuggyScene: Scene
 
     private void stepLiveCar(const double dt)
     {
+        if (!visualize_)
+            return;
         if (livePhysics is null)
         {
             if (showNextLiveBuggy())
@@ -699,7 +705,12 @@ class BuggyScene: Scene
         while (liveTimeDebt >= step && !liveFailed_)
         {
             liveTimeDebt -= step;
-            livePhysics.step(step, 1.0f);
+            import physics_world.engineselect: simLock;
+            if (auto lk = simLock)
+                synchronized (lk)
+                    livePhysics.step(step, 1.0f);
+            else
+                livePhysics.step(step, 1.0f);
             liveSimTime += step;
             checkLiveRun();
         }

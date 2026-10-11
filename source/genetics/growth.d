@@ -10,6 +10,7 @@ import core.stdc.math : expf;
 
 import dlib.math.vector : distance, dot, vec3;
 import dlib.math.utils : clamp;
+import core.sync.mutex;
 
 import frame.frame : Anchor, AnchorKind, Beam, Frame, Node,
     alongCourse, right;
@@ -498,30 +499,53 @@ private struct Bud
     float resp;
 }
 
+/// Потокобезопасный буфер для почек
+private class BudBuffer
+{
+    private Bud[] _data;
+    private Mutex _m;
+    
+    this()
+    {
+        _m = new Mutex();
+    }
+    
+    void append(Bud b)
+    {
+        synchronized (_m)
+        {
+            _data ~= b;
+        }
+    }
+    
+    Bud[] extract()
+    {
+        synchronized (_m)
+        {
+            return _data.dup;
+        }
+    }
+}
+
 /// Проба направления из конца `tip`: если место годится, почка попадает в
 /// список. Габарит проверяется на базовом шаге, поле считаем после него —
 /// отбраковка дешёвая.
-private bool addBud(const Growth g, size_t tip, const vec3 from, const vec3 d,
-    ref Bud[] buds, ref size_t budCount)
+private void addBud(const Growth g, size_t tip, const vec3 from, const vec3 d,
+    BudBuffer buds)
 {
     const vec3 probe = from + d * g.c.stepLength;
     if (abs(probe.x - g.f.nodes[0].pos.x) > maxHalfWidth)
-        return false;
+        return;
     const float resp = g.response(probe, frameTissue, tip);
     if (resp <= respondGate)
-        return false;
+        return;
     const vec3 to = from + d * g.budLength(resp);
     // Кабина неприкосновенна: сквозь корпус не растём.
     if (beamHitsCabin(g.f, from, to))
-        return false;
+        return;
     if (abs(to.x - g.f.nodes[0].pos.x) > maxHalfWidth)
-        return false;
-    if (budCount < buds.length)
-    {
-        buds[budCount++] = Bud(tip, to, resp);
-        return true;
-    }
-    return false;
+        return;
+    buds.append(Bud(tip, to, resp));
 }
 
 /// Кандидат на колесо: конец ветви с откликом тканей колеса и мотора.
@@ -624,7 +648,6 @@ private bool growRound(ref Growth g, size_t round)
     // раньше, меняет поле для соседнего, и тот отвечает уже на другом поле —
     // расхождение из-за порядка, а не из-за биологии.
     Bud[] chosen;
-    chosen.reserve(tips.length);
     foreach (tip; tips)
     {
         const vec3 from = g.f.nodes[tip].pos;
@@ -635,25 +658,20 @@ private bool growRound(ref Growth g, size_t round)
         // ходу роста, и каждый шаг зависел бы от всех предыдущих.
         const uint base = budSeed(round, g.sprouts[tip],
             toLocal(g.born[tip], side));
-        Bud[directionProbes] budsArr;
-        Bud[] buds = budsArr[];
-        size_t budCount = 0;
+        auto budsBuf = new BudBuffer();
         foreach (k; 0 .. directionProbes)
         {
             // Углы набираются в базисе тела и разворачиваются по стороне конца,
             // поэтому зеркальные концы обстреливаются зеркальными же углами.
             addBud(g, tip, from, toWorld(spherePoint(base + cast(uint) k * 97u),
-                side), buds, budCount);
+                side), budsBuf);
         }
-        if (budCount > 1)
+        auto buds = budsBuf.extract();
+        if (buds.length != 0)
         {
-            Bud[] budsSlice = buds[0 .. budCount];
-            sort!((a2, b2) => a2.resp > b2.resp)(budsSlice);
-            if (budCount > 0)
-                chosen ~= buds[0];
-        }
-        else if (budCount == 1)
+            sort!((a2, b2) => a2.resp > b2.resp)(buds);
             chosen ~= buds[0];
+        }
     }
 
     foreach (bud; chosen)
