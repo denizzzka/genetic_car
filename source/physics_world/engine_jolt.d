@@ -749,9 +749,9 @@ private final class SteerJoint : PhysSteerJoint, JoltJoint
         physB_ = jm;
         limit_ = limit;
 
-        // Ось шарнира — вертикаль рамы, нуль угла — её курс: и то и другое берём
-        // из позы рамы, а не каркаса: её могло уже повернуть.
-        const vec3 upCar = jm.pose().rot.rotate(Vector3f(0.0f, 0.0f, 1.0f));
+        // Ось шарнира — продольная ось рычага (`armUp` в его осях), а не
+        // вертикаль рамы: поворот идёт вокруг самой стойки при любом её
+        // наклоне. Нуль угла — курс рамы.
         const vec3 frontCar = jm.pose().rot.rotate(Vector3f(0.0f, -1.0f, 0.0f));
         const vec3 armUpCar = js.pose().rot.rotate(armUp);
         const vec3 pivotCar = jm.pose().pos + jm.pose().rot.rotate(pivotMaster);
@@ -765,8 +765,8 @@ private final class SteerJoint : PhysSteerJoint, JoltJoint
         st.space = JPH_ConstraintSpace.WorldSpace;
         st.point1 = jm.world_.toEnginePos(pivotCar);
         st.point2 = st.point1;
-        st.hingeAxis1 = jm.world_.toEngineDir(upCar);
-        st.hingeAxis2 = jm.world_.toEngineDir(armUpCar);
+        st.hingeAxis1 = jm.world_.toEngineDir(armUpCar);
+        st.hingeAxis2 = st.hingeAxis1;
         st.normalAxis1 = jm.world_.toEngineDir(frontCar);
         st.normalAxis2 = st.normalAxis1;
         st.limitsMin = -limit;

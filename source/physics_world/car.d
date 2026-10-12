@@ -1128,6 +1128,10 @@ final class BuggyPhysics
             steerBuildQuat = qBeam;
             const vec3 mid = (a + c) * 0.5f;
 
+            // Ось руля — продольная ось стойки (локальная Y рычага): поворот
+            // идёт вокруг самой балки, как бы та ни была наклонена в раме.
+            // Вертикаль рамы годилась лишь приблизительно и на наклонной стойке
+            // (носовая вилка спускается к земле) уводила ось от стойки.
             steer = world.createBody(BodyRole.master, BodyMotion.dynamicBody,
                 world.cylinderShape(stem.radius, stem.radius, len), 0.0f);
             steer.collidable = false; // везёт шарнир и носовые колёса
@@ -1148,12 +1152,13 @@ final class BuggyPhysics
             steer.syncPose();
 
             const vec3 pivot = frame.nodes[steerNodeIndex].pos;
-            // Ось шарнира — вертикаль рамы в осях рычага: у обоих тел она одна,
-            // поэтому нулевой угол совпадает и на наклонной стойке.
+            // Ось шарнира — продольная ось стойки, то есть локальная Y рычага.
+            // В осях рычага это просто (0, 1, 0), и та же ось, переведённая в
+            // оси мастера, задаёт ось на второй стороне шарнира.
             steerJoint_ = world.newSteerJoint(steer, master,
                 qBeam.conj.rotate(pivot - steer.worldPosition),
                 pivot - master.worldPosition,
-                qBeam.conj.rotate(frameUp),
+                Vector3f(0.0f, 1.0f, 0.0f),
                 steerLimitRad);
         }
 

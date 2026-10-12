@@ -529,8 +529,9 @@ private final class SteerJoint : NewtonUserConstraint, PhysSteerJoint
     private NewtonRigidBody master_;
     private vec3 pivotSteerLocal_;
     private vec3 pivotMasterLocal_;
-    private vec3 masterUpLocal_;
-    private vec3 armUpLocal_;
+    /// Ось рыскания рычага: его же продольная ось, но выраженная в осях
+    /// мастера — обе стороны шарнира держат одну и ту же ось.
+    private vec3 axisMasterLocal_;
 
     private PhysBody physA_, physB_;
 
@@ -548,8 +549,13 @@ private final class SteerJoint : NewtonUserConstraint, PhysSteerJoint
         master_ = m.body_;
         pivotSteerLocal_ = pivotSteer;
         pivotMasterLocal_ = s.world_.toEnginePos(pivotMaster);
-        armUpLocal_ = armUp;
-        masterUpLocal_ = Vector3f(0.0f, 1.0f, 0.0f);
+        // Ось рычага дана в его осях — переводим в оси мастера, чтобы обе
+        // стороны шарнира крутились вокруг одной и той же мировой прямой.
+        Matrix4x4f ms, mm;
+        NewtonBodyGetMatrix(steer_.newtonBody, ms.arrayof.ptr);
+        NewtonBodyGetMatrix(master_.newtonBody, mm.arrayof.ptr);
+        const vec3 axisWorld = ms.rotate(armUp);
+        axisMasterLocal_ = Quaternionf.fromMatrix(mm).conj.rotate(axisWorld);
         limit_ = limit;
         super(master_.world, steer_, master_, 8);
     }
@@ -565,10 +571,10 @@ private final class SteerJoint : NewtonUserConstraint, PhysSteerJoint
         Matrix4x4f m0, m1;
         NewtonBodyGetMatrix(steer_.newtonBody, m0.arrayof.ptr);
         NewtonBodyGetMatrix(master_.newtonBody, m1.arrayof.ptr);
-        const vec3 up = m1.rotate(masterUpLocal_);
-        const vec3 front = m1.rotate(Vector3f(0.0f, 0.0f, 1.0f));
+        const vec3 axis = unitOrZero(m1.rotate(axisMasterLocal_));
         const vec3 steerFront = m0.rotate(Vector3f(0.0f, 0.0f, 1.0f));
-        return calculateAngle(steerFront, front, up);
+        const vec3 masterFront = m1.rotate(Vector3f(0.0f, 0.0f, 1.0f));
+        return calculateAngle(steerFront, masterFront, axis);
     }
 
     override void submit(float timestep, int threadIndex)
@@ -580,30 +586,29 @@ private final class SteerJoint : NewtonUserConstraint, PhysSteerJoint
         const vec3 pivot0 = pivotSteerLocal_ * m0;
         const vec3 pivot1 = pivotMasterLocal_ * m1;
 
-        const vec3 up = m1.rotate(masterUpLocal_);
-        const vec3 front = m1.rotate(Vector3f(0.0f, 0.0f, 1.0f));
-        const vec3 right = m1.rotate(Vector3f(1.0f, 0.0f, 0.0f));
+        // Ось рыскания — продольная ось рычага; в мировых осях она одна у
+        // обеих сторон шарнира. Перпендикуляры к ней выбираем сами.
+        const vec3 axis = unitOrZero(m1.rotate(axisMasterLocal_));
+        const vec3 hint = fabs(axis.y) < 0.9f
+            ? Vector3f(0.0f, 1.0f, 0.0f) : Vector3f(1.0f, 0.0f, 0.0f);
+        const vec3 t1 = unitOrZero(cross(axis, hint));
+        const vec3 t2 = unitOrZero(cross(axis, t1));
 
-        addLinearRow(pivot0, pivot1, front);
+        addLinearRow(pivot0, pivot1, t1);
         setRowStiffness(1.0f);
-        addLinearRow(pivot0, pivot1, up);
+        addLinearRow(pivot0, pivot1, t2);
         setRowStiffness(1.0f);
-        addLinearRow(pivot0, pivot1, right);
-        setRowStiffness(1.0f);
-
-        const vec3 armUp = m0.rotate(armUpLocal_);
-        addAngularRow(calculateAngle(armUp, up, front), front);
-        setRowStiffness(1.0f);
-        addAngularRow(calculateAngle(armUp, up, right), right);
+        addLinearRow(pivot0, pivot1, axis);
         setRowStiffness(1.0f);
 
         const vec3 steerFront = m0.rotate(Vector3f(0.0f, 0.0f, 1.0f));
-        const float yaw = calculateAngle(steerFront, front, up);
+        const vec3 masterFront = m1.rotate(Vector3f(0.0f, 0.0f, 1.0f));
+        const float yaw = calculateAngle(steerFront, masterFront, axis);
         // Ряд по углу — целевой угол рычага, а не ошибка. Клиппим цель к пределу
         // и всегда используем моторный ряд: он сам держит предел без жёсткой
         // блокировки, которая вызывает осцилляции под нагрузкой.
         const float target = clamp(targetYaw_, -limit_, limit_);
-        addAngularRow(target, up);
+        addAngularRow(target, axis);
         const float err = fabs(target - yaw);
         float k = 0.25f + err / (limit_ + 1e-4f) * 0.35f;
         if (k > 0.6f) k = 0.6f;
