@@ -258,11 +258,12 @@ interface PhysWorld
     void destroyShape(PhysShape shape);
 
     PhysAxleJoint newAxleJoint(PhysBody wheel, PhysBody master, const vec3 pivotMaster);
-    /// `limit` — предел хода рыскания, `errorCap` — потолок подпитки ряда:
-    /// без него ненагруженная балка раскручивает сама себя.
+    /// `limit` — предел хода рычага. Мотор и предел — два разных ряда, каждый
+    /// со своим целевым углом: ряд-подпитка ошибкой раскручивала балку сама
+    /// себя, поэтому от неё отказались в пользу цели.
     PhysSteerJoint newSteerJoint(PhysBody steer, PhysBody master,
         const vec3 pivotSteer, const vec3 pivotMaster, const vec3 armUp,
-        float limit, float errorCap);
+        float limit);
 
     void setInteraction(in Interaction rule);
 

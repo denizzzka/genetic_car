@@ -16,6 +16,7 @@ import std.exception : enforce;
 import std.math : PI;
 
 import dlib.core.memory;
+import dlib.math.utils : clamp;
 import dlib.math.vector;
 import dlib.math.quaternion;
 import dlib.math.matrix;
@@ -48,6 +49,13 @@ Object joltLock() @property
 /// Радиус скругления формы Jolt. Меньше нуля Jolt не берёт, а большой съедает
 /// габариты тонких балок.
 private enum float convexRadius = 0.005f;
+
+/// Мотор руля: частота и затухание позиционного сервопривода и потолок момента.
+/// Частота вместо жёсткости — единственный масштаб, который не зависит от
+/// массы рычага, а без затухания ненагруженная балка раскручивается сама.
+private enum float steerMotorFrequency = 4.0f;
+private enum float steerMotorDamping = 1.0f;
+private enum float steerMotorTorque = 60.0f;
 
 /* ------------------------------------------------------------------ *
  * Загрузка библиотеки
@@ -654,11 +662,19 @@ final class JoltPhysBody : PhysBody
  * Шарниры
  * ------------------------------------------------------------------ */
 
+/// Общее для шарниров мира: снять ограничение со сцены раньше тел.
+private interface JoltJoint
+{
+    PhysBody bodyA() @property;
+    PhysBody bodyB() @property;
+    void dispose();
+}
+
 /// Ось колеса: ступица держится на раме и свободно вращается вокруг своей оси.
 /// Hinge Jolt держит точку стыка и ось — ровно то, что дают три линейных и
 /// два угловых ряда шарнира Newton, но решается это штатно, а не
 /// пользовательским ограничением.
-private final class AxleJoint : PhysAxleJoint
+private final class AxleJoint : PhysAxleJoint, JoltJoint
 {
     private PhysBody physA_, physB_;
     private JPH_HingeConstraint* constraint_;
@@ -713,28 +729,89 @@ private final class AxleJoint : PhysAxleJoint
     }
 }
 
-/// TODO: рулевой шарнир. У Jolt это `HingeConstraint` с приводом и пределом
-/// хода между балкой и рамой, но модель требует ряд с потолком ошибки
-/// подпитки (без него ненагруженная балка раскручивает сама себя), а такого
-/// ряда в Jolt нет. Пока заглушка: руль не удерживает курс, `yawNow` честно
-/// отдаёт ноль, и тесты руля для этого бэкенда отключены.
-private final class SteerJoint : PhysSteerJoint
+/// Рулевой рычаг: `HingeConstraint` вокруг вертикали с пределом хода и мотором
+/// в позицию. Пять рядов Newton (три линейных и два угловых) Jolt собирает сам,
+/// а потолок ошибки подпитки заменяет затухание мотора: без него ненагруженная
+/// балка раскручивалась бы воронкой.
+private final class SteerJoint : PhysSteerJoint, JoltJoint
 {
     private PhysBody physA_, physB_;
-    private float targetYaw_;
+    private JPH_HingeConstraint* constraint_;
+    private float targetYaw_ = 0.0f;
+    private float limit_;
 
     this(PhysBody steer, PhysBody master, const vec3 pivotSteer,
-        const vec3 pivotMaster, const vec3 armUp, float limit, float errorCap)
+        const vec3 pivotMaster, const vec3 armUp, float limit)
     {
-        physA_ = steer;
-        physB_ = master;
+        auto js = cast(JoltPhysBody) steer;
+        auto jm = cast(JoltPhysBody) master;
+        physA_ = js;
+        physB_ = jm;
+        limit_ = limit;
+
+        // Ось шарнира — вертикаль рамы, нуль угла — её курс: и то и другое берём
+        // из позы рамы, а не каркаса: её могло уже повернуть.
+        const vec3 upCar = jm.pose().rot.rotate(Vector3f(0.0f, 0.0f, 1.0f));
+        const vec3 frontCar = jm.pose().rot.rotate(Vector3f(0.0f, -1.0f, 0.0f));
+        const vec3 armUpCar = js.pose().rot.rotate(armUp);
+        const vec3 pivotCar = jm.pose().pos + jm.pose().rot.rotate(pivotMaster);
+
+        JPH_HingeConstraintSettings st;
+        // D инициализирует float в NaN, а Jolt строит по нормали базис угла и
+        // берёт из мотора настройки по умолчанию: без штатных значений решатель
+        // выдаёт NaN-скорости тел.
+        JPH_HingeConstraintSettings_Init(&st);
+        st.base.enabled = true;
+        st.space = JPH_ConstraintSpace.WorldSpace;
+        st.point1 = jm.world_.toEnginePos(pivotCar);
+        st.point2 = st.point1;
+        st.hingeAxis1 = jm.world_.toEngineDir(upCar);
+        st.hingeAxis2 = jm.world_.toEngineDir(armUpCar);
+        st.normalAxis1 = jm.world_.toEngineDir(frontCar);
+        st.normalAxis2 = st.normalAxis1;
+        st.limitsMin = -limit;
+        st.limitsMax = limit;
+        st.maxFrictionTorque = 0.0f;
+        st.motorSettings.springSettings.mode = JPH_SpringMode.FrequencyAndDamping;
+        st.motorSettings.springSettings.frequencyOrStiffness = steerMotorFrequency;
+        st.motorSettings.springSettings.damping = steerMotorDamping;
+        st.motorSettings.minTorqueLimit = -steerMotorTorque;
+        st.motorSettings.maxTorqueLimit = steerMotorTorque;
+        constraint_ = JPH_HingeConstraint_Create(&st, jm.body_, js.body_);
+        jm.world_.addConstraint(cast(JPH_Constraint*) constraint_);
+        JPH_HingeConstraint_SetMotorState(constraint_, JPH_MotorState.Position);
+        jm.jointed_ = true;
+        js.jointed_ = true;
     }
 
     override PhysBody bodyA() @property { return physA_; }
     override PhysBody bodyB() @property { return physB_; }
-    override void targetYaw(float yaw) @property { targetYaw_ = yaw; }
+
+    /// Знак угла у Jolt обратен принятому в модели: Jolt отсчитывает поворот
+    /// рычага от нормали вправо, а `courseYaw` модели — влево. Переворот знака
+    /// живёт здесь, чтобы дальше обе физики читались одинаково.
+    override void targetYaw(float yaw) @property
+    {
+        targetYaw_ = clamp(yaw, -limit_, limit_);
+        JPH_HingeConstraint_SetTargetAngle(constraint_, -targetYaw_);
+    }
+
     override float targetYaw() @property const { return targetYaw_; }
-    override float yawNow() @property const { return 0.0f; }
+
+    override float yawNow() @property const
+    {
+        auto c = cast(JPH_HingeConstraint*) constraint_;
+        return -JPH_HingeConstraint_GetCurrentAngle(c);
+    }
+
+    void dispose()
+    {
+        if (constraint_ is null)
+            return;
+        auto m = cast(JoltPhysBody) physB_;
+        m.world_.destroyConstraint(cast(JPH_Constraint*) constraint_);
+        constraint_ = null;
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -764,7 +841,7 @@ final class JoltPhysWorld : PhysWorld
     private JPH_Body[] bodies_;
     private JPH_BodyID[] bodyIds_;
     private JoltPhysBody[] bodiesOwned_;
-    private AxleJoint[] joints_;
+    private JoltJoint[] joints_;
     private void*[] constraints_;
     private BodyPose[JPH_BodyID] poses_;
 
@@ -1120,10 +1197,12 @@ final class JoltPhysWorld : PhysWorld
 
     override PhysSteerJoint newSteerJoint(PhysBody steer, PhysBody master,
         const vec3 pivotSteer, const vec3 pivotMaster, const vec3 armUp,
-        float limit, float errorCap)
+        float limit)
     {
-        return New!SteerJoint(steer, master, pivotSteer, pivotMaster, armUp,
-            limit, errorCap);
+        auto j = New!SteerJoint(steer, master, pivotSteer, pivotMaster, armUp,
+            limit);
+        joints_ ~= j;
+        return j;
     }
 
     override void setInteraction(in Interaction rule)

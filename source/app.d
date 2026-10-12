@@ -111,6 +111,182 @@ private void runHeadless(const HeadlessOptions opt)
 void main(string[] args)
 {
     args = selectEngine(args);
+    if (args.canFind("-probe"))
+    {
+        import physics_world.engineselect : defaultEngine, PhysicsEngine;
+        import physics_world.worldpool : acquireWorld, releaseWorld;
+        import frame.frame : Frame, Node, Beam, Anchor, AnchorKind,
+            initialMotorPower, origin, frameUp = up, frameForward = forward,
+            frameRight = right;
+        import physics_world.physics : RunOutcome, steerNodeIndex;
+        import frame.frame : heightOf;
+        import physics_world.engineselect : selectedEngineName;
+        import dlib.math.vector : vec3;
+        Frame fork()
+        {
+            Frame frame;
+            size_t node(vec3 pos)
+            {
+                frame.nodes ~= Node(pos);
+                return frame.nodes.length - 1;
+            }
+            const c = node(vec3(0.0f, 0.3f, 0.35f));
+            const nose = node(vec3(0.0f, -0.9f, 0.35f));
+            const hub = node(vec3(0.0f, -1.5f, 0.35f));
+            const fl = node(vec3(0.7f, -0.55f, 0.35f));
+            const fr = node(vec3(-0.7f, -0.55f, 0.35f));
+            const rl = node(vec3(0.7f, 0.4f, 0.35f));
+            const rr = node(vec3(-0.7f, 0.4f, 0.35f));
+            const nl = node(vec3(0.6f, -1.5f, 0.35f));
+            const nr = node(vec3(-0.6f, -1.5f, 0.35f));
+            frame.beams ~= new Beam(fl, fr, 0.045f);
+            frame.beams ~= new Beam(rl, rr, 0.05f);
+            frame.beams ~= new Beam(c, fl, 0.045f);
+            frame.beams ~= new Beam(c, fr, 0.045f);
+            frame.beams ~= new Beam(c, rl, 0.05f);
+            frame.beams ~= new Beam(c, rr, 0.05f);
+            frame.beams ~= new Beam(c, nose, 0.045f);
+            frame.beams ~= new Beam(nose, hub, 0.05f);
+            frame.beams ~= new Beam(hub, nl, 0.05f);
+            frame.beams ~= new Beam(hub, nr, 0.05f);
+            frame.anchors ~= Anchor(fl, AnchorKind.wheel);
+            frame.anchors ~= Anchor(fr, AnchorKind.wheel);
+            frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
+            frame.anchors ~= Anchor(rr, AnchorKind.motorWheel);
+            frame.anchors ~= Anchor(nl, AnchorKind.wheel);
+            frame.anchors ~= Anchor(nr, AnchorKind.wheel);
+            frame.motorPower = initialMotorPower;
+            return frame;
+        }
+        Frame box()
+        {
+            Frame frame;
+            size_t node(vec3 pos)
+            {
+                frame.nodes ~= Node(pos);
+                return frame.nodes.length - 1;
+            }
+            const c = node(vec3(0.0f, 0.3f, 0.35f));
+            const fl = node(vec3(0.7f, -0.55f, 0.35f));
+            const fr = node(vec3(-0.7f, -0.55f, 0.35f));
+            const rl = node(vec3(0.7f, 0.4f, 0.35f));
+            const rr = node(vec3(-0.7f, 0.4f, 0.35f));
+            frame.beams ~= new Beam(fl, fr, 0.045f);
+            frame.beams ~= new Beam(rl, rr, 0.05f);
+            frame.beams ~= new Beam(c, fl, 0.045f);
+            frame.beams ~= new Beam(c, fr, 0.045f);
+            frame.beams ~= new Beam(c, rl, 0.05f);
+            frame.beams ~= new Beam(c, rr, 0.05f);
+            frame.anchors ~= Anchor(fl, AnchorKind.wheel);
+            frame.anchors ~= Anchor(fr, AnchorKind.wheel);
+            frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
+            frame.anchors ~= Anchor(rr, AnchorKind.motorWheel);
+            frame.motorPower = initialMotorPower;
+            return frame;
+        }
+        foreach (engine; [PhysicsEngine.jolt, PhysicsEngine.newton])
+        {
+            defaultEngine(engine);
+            auto p = new BuggyPhysics(new Buggy(placedFrame(fork())));
+            scope (exit) p.dispose();
+            writefln("PROBE %s: isSteered=%s yaw0=%.3f",
+                selectedEngineName, p.isSteered, p.steerYaw);
+            const double dt = 1.0 / p.updateRate;
+            p.autoSteer = false;
+            foreach (i; 0 .. 90)
+            {
+                p.step(dt, 0.0f);
+                if ((i & 7) == 0)
+                    writefln("PROBE %s: settle t=%.2f yaw=%.3f",
+                        selectedEngineName, i * dt, p.steerYaw);
+            }
+            writefln("PROBE %s: settled yaw=%.3f",
+                selectedEngineName, p.steerYaw);
+            p.steerJoint.targetYaw = 0.7f;
+            foreach (i; 0 .. 180)
+            {
+                p.step(dt, 1.0f);
+                if ((i & 15) == 0)
+                    writefln("PROBE %s: t=%.2f yaw=%.3f fail=%s cab=%.3f",
+                        selectedEngineName, i * dt, p.steerYaw,
+                        cast(string) runFailure(p),
+                        heightOf(p.cockpitState.position));
+            }
+        }
+        {
+            Frame forkNoWheels()
+            {
+                Frame frame;
+                size_t node(vec3 pos)
+                {
+                    frame.nodes ~= Node(pos);
+                    return frame.nodes.length - 1;
+                }
+                const c = node(vec3(0.0f, 0.3f, 0.35f));
+                const nose = node(vec3(0.0f, -0.9f, 0.35f));
+                const hub = node(vec3(0.0f, -1.5f, 0.35f));
+                const fl = node(vec3(0.7f, -0.55f, 0.35f));
+                const fr = node(vec3(-0.7f, -0.55f, 0.35f));
+                const rl = node(vec3(0.7f, 0.4f, 0.35f));
+                const rr = node(vec3(-0.7f, 0.4f, 0.35f));
+                const nl = node(vec3(0.6f, -1.5f, 0.35f));
+                const nr = node(vec3(-0.6f, -1.5f, 0.35f));
+                frame.beams ~= new Beam(fl, fr, 0.045f);
+                frame.beams ~= new Beam(rl, rr, 0.05f);
+                frame.beams ~= new Beam(c, fl, 0.045f);
+                frame.beams ~= new Beam(c, fr, 0.045f);
+                frame.beams ~= new Beam(c, rl, 0.05f);
+                frame.beams ~= new Beam(c, rr, 0.05f);
+                frame.beams ~= new Beam(c, nose, 0.045f);
+                frame.beams ~= new Beam(nose, hub, 0.05f);
+                frame.beams ~= new Beam(hub, nl, 0.05f);
+                frame.beams ~= new Beam(hub, nr, 0.05f);
+                frame.anchors ~= Anchor(fl, AnchorKind.wheel);
+                frame.anchors ~= Anchor(fr, AnchorKind.wheel);
+                frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
+                frame.anchors ~= Anchor(rr, AnchorKind.motorWheel);
+                frame.motorPower = initialMotorPower;
+                return frame;
+            }
+            foreach (engine; [PhysicsEngine.jolt, PhysicsEngine.newton])
+            {
+                defaultEngine(engine);
+                auto p = new BuggyPhysics(new Buggy(placedFrame(forkNoWheels())));
+                scope (exit) p.dispose();
+                const double dt = 1.0 / p.updateRate;
+                foreach (i; 0 .. 90)
+                {
+                    p.step(dt, 0.0f);
+                    if ((i & 15) == 0)
+                        writefln("PROBENW %s: settle t=%.2f yaw=%.3f",
+                            selectedEngineName, i * dt, p.steerYaw);
+                }
+                writefln("PROBENW %s: settled yaw=%.3f",
+                    selectedEngineName, p.steerYaw);
+            }
+        }
+        foreach (engine; [PhysicsEngine.jolt, PhysicsEngine.newton])
+        {
+            defaultEngine(engine);
+            auto p = new BuggyPhysics(new Buggy(placedFrame(box())));
+            scope (exit) p.dispose();
+            writefln("PROBEBOX %s: isSteered=%s",
+                selectedEngineName, p.isSteered);
+            const double dt = 1.0 / p.updateRate;
+            p.settle(dt, 90);
+            writefln("PROBEBOX %s: settled cab=%.3f fail=%s",
+                selectedEngineName,
+                heightOf(p.cockpitState.position),
+                cast(string) runFailure(p));
+            foreach (i; 0 .. 180)
+                p.step(dt, 1.0f);
+            writefln("PROBEBOX %s: after drive cab=%.3f fail=%s",
+                selectedEngineName,
+                heightOf(p.cockpitState.position),
+                cast(string) runFailure(p));
+        }
+        return;
+    }
     if (args.canFind("-headless") || args.canFind("--headless"))
         defaultEngine(PhysicsEngine.newton);
     if (args.canFind("-viab"))

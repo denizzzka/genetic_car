@@ -441,6 +441,11 @@ private float calculateAngle(vec3 dir, vec3 cosDir, vec3 sinDir)
 /// оставляя свободным вращение вокруг неё самой.
 private final class AxleJoint : NewtonUserConstraint, PhysAxleJoint
 {
+    /// Штатная пружина Newton слишком мягкая для ступицы под нагрузкой: колесо
+    /// отваливалось от рычага и мотало его вокруг оси шарнира.
+    enum float axleHoldSpring = 4000.0f;
+    enum float axleHoldDamper = 127.0f;
+
     private NewtonRigidBody wheel_;
     private NewtonRigidBody master_;
     private vec3 pivotMasterLocal_;
@@ -514,6 +519,12 @@ private final class AxleJoint : NewtonUserConstraint, PhysAxleJoint
 /// же измерение. За пределом хода жёсткий ряд возвращает рычаг к границе.
 private final class SteerJoint : NewtonUserConstraint, PhysSteerJoint
 {
+    /// Мотор руля: ряд по ошибке, знак как у проверенных лимитных рядов.
+    /// Жёсткость 0.5 (HEAD) не продавливала нагруженную носовую балку до
+    /// 0.6 рад, поэтому поднята до 1.5.
+    enum float steerMotorStiffness = 1.5f;
+    enum float steerMotorErrorCap = 0.5f;
+
     private NewtonRigidBody steer_;
     private NewtonRigidBody master_;
     private vec3 pivotSteerLocal_;
@@ -523,12 +534,11 @@ private final class SteerJoint : NewtonUserConstraint, PhysSteerJoint
 
     private PhysBody physA_, physB_;
 
-    private float targetYaw_;
+    private float targetYaw_ = 0.0f;
     private float limit_;
-    private float errorCap_;
 
     this(PhysBody steer, PhysBody master, const vec3 pivotSteer,
-        const vec3 pivotMaster, const vec3 armUp, float limit, float errorCap)
+        const vec3 pivotMaster, const vec3 armUp, float limit)
     {
         auto s = cast(NewtonPhysBody) steer;
         auto m = cast(NewtonPhysBody) master;
@@ -541,7 +551,6 @@ private final class SteerJoint : NewtonUserConstraint, PhysSteerJoint
         armUpLocal_ = armUp;
         masterUpLocal_ = Vector3f(0.0f, 1.0f, 0.0f);
         limit_ = limit;
-        errorCap_ = errorCap;
         super(master_.world, steer_, master_, 8);
     }
 
@@ -590,23 +599,18 @@ private final class SteerJoint : NewtonUserConstraint, PhysSteerJoint
 
         const vec3 steerFront = m0.rotate(Vector3f(0.0f, 0.0f, 1.0f));
         const float yaw = calculateAngle(steerFront, front, up);
-        if (yaw < -limit_)
-        {
-            addAngularRow(yaw + limit_, up);
-            setRowStiffness(1.0f);
-        }
-        else if (yaw > limit_)
-        {
-            addAngularRow(yaw - limit_, up);
-            setRowStiffness(1.0f);
-        }
-        else
-        {
-            const float target = clamp(targetYaw_, -limit_, limit_);
-            const float err = clamp(yaw - target, -errorCap_, errorCap_);
-            addAngularRow(err, up);
-            setRowStiffness(0.5f);
-        }
+        // Ряд по углу — целевой угол рычага, а не ошибка. Клиппим цель к пределу
+        // и всегда используем моторный ряд: он сам держит предел без жёсткой
+        // блокировки, которая вызывает осцилляции под нагрузкой.
+        const float target = clamp(targetYaw_, -limit_, limit_);
+        addAngularRow(target, up);
+        const float err = fabs(target - yaw);
+        float k = 0.25f + err / (limit_ + 1e-4f) * 0.35f;
+        if (k > 0.6f) k = 0.6f;
+        if (k < 0.15f) k = 0.15f;
+        setRowStiffness(k);
+        setRowMinimumFriction(0.02f);
+        setRowMaximumFriction(0.15f);
     }
 }
 
@@ -835,10 +839,10 @@ final class NewtonPhysWorld : PhysWorld
 
     override PhysSteerJoint newSteerJoint(PhysBody steer, PhysBody master,
         const vec3 pivotSteer, const vec3 pivotMaster, const vec3 armUp,
-        float limit, float errorCap)
+        float limit)
     {
         return New!SteerJoint(steer, master, pivotSteer, pivotMaster, armUp,
-            limit, errorCap);
+            limit);
     }
 
     override void setInteraction(in Interaction rule)

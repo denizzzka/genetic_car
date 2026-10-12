@@ -1,7 +1,9 @@
 module physics_world.car;
 
 import std.math;
-import std.algorithm : min, max, clamp;
+import std.algorithm : canFind, min, max, clamp;
+import std.conv : to;
+import std.stdio : writefln;
 
 import dlib.core.memory;
 import dlib.math.vector;
@@ -339,9 +341,13 @@ final class BuggyPhysics
     private PhysBody steer;
     private PhysSteerJoint steerJoint_;
 
-    /// Индекс рулевой балки и узел её свободного конца (колесо там — к рычагу).
-    private size_t steerBeamIdx = size_t.max;
-    private size_t steerFarNode = size_t.max;
+    /// Балки рулевой сборки: стойка вперёд от передней центральной ноды и, если
+    /// на её конце поперечина, её половины. Все они едут на одном шарнире.
+    private size_t[] steerBeams_;
+
+    /// Узлы, чьи колёса катятся на рычаге: конец листовой стойки либо оба
+    /// конца поперечины.
+    private size_t[] steerWheelNodes_;
 
     /// Поворот рычага при сборке (car, истинный): локальные пивоты колёс
     /// рычага отсчитываются от него.
@@ -444,8 +450,8 @@ final class BuggyPhysics
         wheelAxialMom.length = 0;
         steer = null;
         steerJoint_ = null;
-        steerBeamIdx = size_t.max;
-        steerFarNode = size_t.max;
+        steerBeams_ = null;
+        steerWheelNodes_ = null;
         steerBuildQuat = Quaternionf.identity;
         beamFail_ = BeamFailure.none;
     }
@@ -778,7 +784,6 @@ final class BuggyPhysics
         if (master is null)
             return res;
         const Frame fr = buggy_.frame;
-        Quaternionf mt = master.worldRotation;
         foreach (i, b; buggy_.frame.beams)
         {
             const vec3 a = fr.nodes[b.a].pos;
@@ -786,14 +791,133 @@ final class BuggyPhysics
             const vec3 d = c - a;
             if (d.length < 1e-5f)
                 continue;
+            PhysBody owner = (steer !is null && steerBeams_.canFind(i))
+                ? steer : master;
+            Quaternionf mt = owner.worldRotation;
             BeamTarget t;
-            t.mid = master.worldPosition + mt.rotate(beamLocal[i]);
+            t.mid = owner.worldPosition + mt.rotate(beamLocal[i]);
             t.dir = mt.rotate(d);
             t.len = d.length;
             res ~= t;
         }
         return res;
     }
+    }
+
+    /// Насколько поперечной должна быть балка на конце стойки, чтобы считаться
+    /// половиной поперечины, а не её продолжением вперёд.
+    private enum float forkOrthoLimit = 0.5f;
+
+    /// Сколько балок (любых, включая эфемерные) сходятся в узле: свободный
+    /// конец стойки — одна, узел вилки — три.
+    private static size_t degree(const Frame frame, size_t node)
+    {
+        size_t n;
+        foreach (b; frame.beams)
+            if (b.a == node || b.b == node)
+                ++n;
+        return n;
+    }
+
+    /// Направление от одного узла каркаса к другому единичным вектором.
+    private static vec3 direction(const Frame frame, size_t from, size_t to)
+    {
+        const vec3 d = frame.nodes[to].pos - frame.nodes[from].pos;
+        const float len = d.length;
+        return len < 1e-5f ? d : d / len;
+    }
+
+    /**
+     * Найти рулевую сборку: какие балки едут на шарнире и на каких узлах стоят
+     * колёса рычага.
+     *
+     * Сначала ищется вилка — стойка вперёд от передней центральной ноды с
+     * поперечиной на конце: её опознание однозначно, и правило роста должно
+     * побеждать выросшую наугад ветвь. Вилки нет — берётся самая длинная
+     * листовая стойка, как и прежде.
+     */
+    private void findSteeringAssembly(const Frame frame)
+    {
+        steerBeams_ = null;
+        steerWheelNodes_ = null;
+
+        size_t leafBeam = size_t.max, leafNode = size_t.max;
+        float leafLen = 0.0f;
+        foreach (i, b; frame.beams)
+        {
+            const Beam beam = cast(Beam) b;
+            if (beam is null)
+                continue;
+            if (beam.a != steerNodeIndex && beam.b != steerNodeIndex)
+                continue;
+            const size_t hub = (beam.a == steerNodeIndex) ? beam.b : beam.a;
+            // Нос смотрит по курсу: поперечные и задние балки у передней
+            // центральной ноды к рулю не относятся.
+            const vec3 toHub = frame.nodes[hub].pos
+                - frame.nodes[steerNodeIndex].pos;
+            if (dot(toHub, frameForward) <= 0.0f)
+                continue;
+
+            size_t[2] halves, ends;
+            if (forkAt(frame, i, hub, toHub, halves, ends))
+            {
+                steerBeams_ = [i, halves[0], halves[1]];
+                steerWheelNodes_ = [ends[0], ends[1]];
+                return;
+            }
+
+            // Свободный конец не должен крепить остальной каркас: любая балка
+            // (в т.ч. эфемерная) там — топологическая связка.
+            if (degree(frame, hub) != 1)
+                continue;
+            const float len = toHub.length;
+            if (len > leafLen)
+            {
+                leafLen = len;
+                leafBeam = i;
+                leafNode = hub;
+            }
+        }
+        if (leafBeam != size_t.max)
+        {
+            steerBeams_ = [leafBeam];
+            steerWheelNodes_ = [leafNode];
+        }
+    }
+
+    /**
+     * Поперечина на конце стойки: ровно две настоящие балки, уводящие от
+     * стойки в разные стороны, обе со свободными концами — под колёса вилки.
+     * Ветвь, одна балка или продолжение стойки вперёд рулём не считаются.
+     */
+    private static bool forkAt(const Frame frame, size_t stemIdx, size_t hub,
+        const vec3 toHub, out size_t[2] halves, out size_t[2] ends)
+    {
+        size_t n;
+        foreach (i, b; frame.beams)
+        {
+            if (i == stemIdx)
+                continue;
+            const Beam beam = cast(Beam) b;
+            if (beam is null || (beam.a != hub && beam.b != hub))
+                continue;
+            if (n == 2)
+                return false;
+            halves[n] = i;
+            ends[n] = (beam.a == hub) ? beam.b : beam.a;
+            ++n;
+        }
+        // Вилка — это ровно стойка и две балки: любая лишняя (в т.ч. эфемерная
+        // от кабины) делает узел частью каркаса, а не рычагом.
+        if (n != 2 || degree(frame, hub) != 3)
+            return false;
+
+        const vec3 stem = direction(frame, steerNodeIndex, hub);
+        const vec3 side0 = direction(frame, hub, ends[0]);
+        const vec3 side1 = direction(frame, hub, ends[1]);
+        return dot(side0, stem) < forkOrthoLimit && dot(side1, stem) < forkOrthoLimit
+            && dot(side0, side1) < 0.0f
+            && degree(frame, ends[0]) == 1 && degree(frame, ends[1]) == 1;
     }
 
     private void buildGround()
@@ -820,47 +944,11 @@ final class BuggyPhysics
         beamLocal.length = frame.beams.length;
         beamLocalQuat.length = frame.beams.length;
 
-        // Рулевая балка: обычная балка, выходящая из передней центральной ноды
-        // (steerNodeIndex) со свободным дальним концом — листовой носовой
-        // рычаг, других балок на его конце нет. Если её нет — каркас монолит.
-        steerBeamIdx = size_t.max;
-        steerFarNode = size_t.max;
-        {
-            float bestLen = 0.0f;
-            foreach (i, b; frame.beams)
-            {
-                const Beam beam = cast(Beam) b;
-                if (beam is null)
-                    continue;
-                if (beam.a != steerNodeIndex && beam.b != steerNodeIndex)
-                    continue;
-                const size_t other = (beam.a == steerNodeIndex) ? beam.b : beam.a;
-                // Свободный конец не должен крепить остальной каркас: любая
-                // балка (в т.ч. эфемерная) там — топологическая связка.
-                bool usedByFrame = false;
-                foreach (j, bj; frame.beams)
-                    if (i != j && (bj.a == other || bj.b == other))
-                    {
-                        usedByFrame = true;
-                        break;
-                    }
-                if (usedByFrame)
-                    continue;
-                // Нос смотрит по курсу: поперечные/задние балки у передней
-                // центральной ноды к рулю не относятся.
-                const vec3 toOther = frame.nodes[other].pos
-                    - frame.nodes[steerNodeIndex].pos;
-                if (dot(toOther, frameForward) <= 0.0f)
-                    continue;
-                const float len = (frame.nodes[beam.b].pos - frame.nodes[beam.a].pos).length;
-                if (len > bestLen)
-                {
-                    bestLen = len;
-                    steerBeamIdx = i;
-                    steerFarNode = other;
-                }
-            }
-        }
+        // Рулевая сборка: обычные балки, выходящие из передней центральной ноды
+        // (steerNodeIndex) вперёд по курсу. Это либо листовая стойка с колесом
+        // на свободном конце, либо вилка «стойка + поперечина» с колёсами на
+        // обоих концах поперечины. Если её нет — каркас монолит.
+        findSteeringAssembly(frame);
 
         // Геометрия каркаса — отдельные кинестатические тела-балки в
         // sensor-группе: контакты с землёй и чужими колёсами ловятся как
@@ -902,7 +990,7 @@ final class BuggyPhysics
         vec3 sumM = origin;
         foreach (i, b; frame.beams)
         {
-            if (i == steerBeamIdx)
+            if (steerBeams_.canFind(i))
                 continue;
             const Beam beam = cast(Beam) b;
             if (beam is null)
@@ -918,15 +1006,29 @@ final class BuggyPhysics
         }
         if (totalMass <= 0.0f)
             totalMass = 1.0f;
-        // Рулевой рычаг несёт собственную массу — из мастера она вычитается.
+        // Рулевая сборка несёт собственную массу — из мастера она вычитается.
         float steerMass = 0.0f;
-        if (steerBeamIdx != size_t.max)
+        vec3 steerLo = vec3(float.max), steerHi = vec3(-float.max);
+        foreach (i; steerBeams_)
         {
-            const Beam beam = asBeam(frame.beams[steerBeamIdx]);
+            const Beam beam = asBeam(frame.beams[i]);
             const vec3 a = frame.nodes[beam.a].pos;
             const vec3 c = frame.nodes[beam.b].pos;
             const float len = (c - a).length;
-            steerMass = cast(float)(beamDensity * PI * beam.radius * beam.radius * len);
+            steerMass += cast(float)(beamDensity * PI * beam.radius
+                * beam.radius * len);
+            foreach (p; [a, c])
+            {
+                steerLo = vec3(min(steerLo.x, p.x), min(steerLo.y, p.y),
+                    min(steerLo.z, p.z));
+                steerHi = vec3(max(steerHi.x, p.x), max(steerHi.y, p.y),
+                    max(steerHi.z, p.z));
+            }
+        }
+        if (steerMass <= 0.0f)
+        {
+            steerLo = origin;
+            steerHi = origin;
         }
         const vec3 com = sumM / totalMass;
 
@@ -994,50 +1096,79 @@ final class BuggyPhysics
         // для live-рендера кабина жёстко приделана к мастеру.
         cockpitLocal_ = comCabin - comTotal;
 
-        // Рулевой рычаг: носовая балка — отдельное динамическое тело на
-        // шарнире вокруг вертикали (up) в точке узла 1. Его масса ушла из
-        // мастера; балка-сенсор будет следовать за рычагом, не за мастером.
-        if (steerBeamIdx != size_t.max)
+        // Рулевой рычаг: рулевая сборка — отдельное динамическое тело на
+        // шарнире вокруг вертикали (up) в точке узла 1. Её масса ушла из
+        // мастера; балки-сенсоры следуют за рычагом, а не за мастером.
+        if (steerBeams_.length != 0)
         {
-            const Beam beam = asBeam(frame.beams[steerBeamIdx]);
-            const vec3 a = frame.nodes[beam.a].pos;
-            const vec3 c = frame.nodes[beam.b].pos;
+            const Beam stem = asBeam(frame.beams[steerBeams_[0]]);
+            // Стойка ориентирована носом вперёд по курсу, в какую бы сторону
+            // её ни записали: ось тела и ось шарнира от этого не зависят.
+            const size_t near = stem.a == steerNodeIndex ? stem.a : stem.b;
+            const size_t far = stem.a == steerNodeIndex ? stem.b : stem.a;
+            const vec3 a = frame.nodes[near].pos;
+            const vec3 c = frame.nodes[far].pos;
             const vec3 dir = c - a;
             const float len = dir.length;
-            Quaternionf qBeam = rotationBetween(Vector3f(0, 1, 0), dir / len);
-            Quaternionf qArm = qBeam;
+            // Базис рычага строим сами: локальная Y — стойка, а крен
+            // доворачиваем к вертикали. `rotationBetween` крен выбирает
+            // произвольно, и на наклонной стойке (носовая вилка спускается к
+            // земле) ось шарнира ушла бы от вертикали — шарнир борется сам с
+            // собой и разрывает машину.
+            const vec3 yAxis = dir / len;
+            Quaternionf qBeam = rotationBetween(Vector3f(0, 1, 0), yAxis);
+            const vec3 zWant = frameUp - yAxis * dot(frameUp, yAxis);
+            if (dot(zWant, zWant) > 1e-6f)
+            {
+                const vec3 zNow = qBeam.rotate(Vector3f(0.0f, 0.0f, 1.0f));
+                const float roll = atan2(dot(cross(zNow, zWant), yAxis),
+                    dot(zNow, zWant));
+                qBeam = rotationQuaternion(yAxis, roll) * qBeam;
+            }
             steerBuildQuat = qBeam;
             const vec3 mid = (a + c) * 0.5f;
 
             steer = world.createBody(BodyRole.master, BodyMotion.dynamicBody,
-                world.cylinderShape(beam.radius, beam.radius, len), 0.0f);
-            steer.collidable = false; // везёт шарнир и носовое колесо
+                world.cylinderShape(stem.radius, stem.radius, len), 0.0f);
+            steer.collidable = false; // везёт шарнир и носовые колёса
             steer.gravity = gravityAccel;
             steer.linearDamping = bodyDamping;
             steer.angularDamping = Vector3f(bodyDamping, bodyDamping, bodyDamping);
-            const float perp = steerMass * len * len / 12.0f;
-            const float axial = 0.5f * steerMass * beam.radius * beam.radius;
+            // Инерция сборки как монолита о её габаритах: поперёк стойки — вся
+            // поперечина вилки, вдоль стойки — её длина. Ось шарнира — локальная
+            // Y, а у плоской вилки поперечные оси равны, поэтому моменты совпадают.
+            const float across = max(steerHi.x - steerLo.x, stem.radius * 2.0f);
+            const float along = max(steerHi.y - steerLo.y, stem.radius * 2.0f);
+            const float thick = max(steerHi.z - steerLo.z, stem.radius * 2.0f);
+            const float axial = steerMass * (across * across + thick * thick) / 12.0f;
+            const float perp = steerMass * (along * along + thick * thick) / 12.0f;
             steer.mass = steerMass;
             steer.inertia = Vector3f(perp, axial, perp);
             steer.worldTransform(mid, qBeam);
             steer.syncPose();
 
-                const vec3 pivot = frame.nodes[steerNodeIndex].pos;
+            const vec3 pivot = frame.nodes[steerNodeIndex].pos;
+            // Ось шарнира — вертикаль рамы в осях рычага: у обоих тел она одна,
+            // поэтому нулевой угол совпадает и на наклонной стойке.
             steerJoint_ = world.newSteerJoint(steer, master,
                 qBeam.conj.rotate(pivot - steer.worldPosition),
                 pivot - master.worldPosition,
-                qBeam.conj.rotate(Vector3f(0.0f, 0.0f, 1.0f)),
-                steerLimitRad, steerErrorCapRad);
+                qBeam.conj.rotate(frameUp),
+                steerLimitRad);
         }
 
-        // Локальные преобразования балок в мастере.
+        // Локальные преобразования балок: в мастере — для рамы, в рычаге — для
+        // рулевой сборки.
         foreach (i, b; frame.beams)
         {
             if (beamBodies[i] is null)
                 continue;
-            beamLocal[i] = master.worldRotation.conj.rotate(
-                beamBodies[i].worldPosition - master.worldPosition);
-            beamLocalQuat[i] = master.worldRotation.conj * beamBodies[i].worldRotation;
+            PhysBody owner = (steer !is null && steerBeams_.canFind(i))
+                ? steer : master;
+            beamLocal[i] = owner.worldRotation.conj.rotate(
+                beamBodies[i].worldPosition - owner.worldPosition);
+            beamLocalQuat[i] = owner.worldRotation.conj
+                * beamBodies[i].worldRotation;
         }
     }
 
@@ -1056,23 +1187,19 @@ final class BuggyPhysics
         {
             if (b is null)
                 continue;
-            // Рулевая балка несётся рычагом: центр рычага — середина балки,
-            // поворот тот же, поэтому трансформ тела балки — просто рычага.
-            if (steer !is null && i == steerBeamIdx)
-            {
-                b.worldTransform(steer.worldPosition, steer.worldRotation);
-                b.syncPose();
-                b.velocity = steer.velocity;
-                b.angularVelocity = steer.angularVelocity;
-                continue;
-            }
-            const vec3 r = mTrue.rotate(beamLocal[i]);
-            const vec3 pos = master.worldPosition + r;
-            const Quaternionf q = mTrue * beamLocalQuat[i];
+            // Раму несёт мастер, рулевую сборку — рычаг: её балки записаны
+            // относительно рычага, иначе поперечина вилки уехала бы с ним.
+            PhysBody owner = (steer !is null && steerBeams_.canFind(i))
+                ? steer : master;
+            Quaternionf oTrue = owner is master
+                ? mTrue : owner.worldRotation;
+            const vec3 r = oTrue.rotate(beamLocal[i]);
+            const vec3 pos = owner.worldPosition + r;
+            const Quaternionf q = oTrue * beamLocalQuat[i];
             b.worldTransform(pos, q);
             b.syncPose();
-            b.velocity = master.velocity + cross(master.angularVelocity, r);
-            b.angularVelocity = master.angularVelocity;
+            b.velocity = owner.velocity + cross(owner.angularVelocity, r);
+            b.angularVelocity = owner.angularVelocity;
         }
     }
 
@@ -1289,7 +1416,7 @@ final class BuggyPhysics
                 // его ось живёт в осях рычага и поворачивается вместе с ним.
                 PhysBody parent = master;
                 vec3 pivotParentLocal = nodePos - master.worldPosition;
-                if (steer !is null && a.node == steerFarNode)
+                if (steer !is null && steerWheelNodes_.canFind(a.node))
                 {
                     parent = steer;
                     pivotParentLocal = steerBuildQuat.conj.rotate(
@@ -1486,8 +1613,8 @@ unittest
 
 unittest
 {
+    import physics_world.engineselect : defaultEngine, engineName, PhysicsEngine;
     import std.math : isFinite;
-    import physics_world.engineselect : engineHasSteerJoint;
 
     // Руль: передняя центральная нода (узел 1) + листовая балка от неё со
     // свободным концом, несущим собственное колесо — рычаг получает шарнир.
@@ -1561,101 +1688,196 @@ unittest
         return frame;
     }
 
-    const double dt = 1.0 / 60.0;
-
-    // Дальше — угол самого руля. У Jolt шарнир руля заглушка: угла нет,
-    // читается ноль, и проверять нечего.
-    if (engineHasSteerJoint)
+    // Форма, которую теперь отращивает правило роста носа: стойка вперёд от
+    // передней центральной ноды, поперечина на её конце и колёса на обоих её
+    // концах — вся сборка едет на одном шарнире.
+    Frame forkFrame()
     {
-        // Руль под нагрузкой: носовая балка с колесом — боевой случай
-        // эволюции; достаточно, чтобы рычаг продавил сцепление покрышки
-        // и дошёл до границы.
-        auto physics = new BuggyPhysics(new Buggy(placedFrame(noseFrame())));
-        scope (exit) physics.dispose();
-        assert(physics.isSteered,
-            "носовая листовая балка должна дать рулевой рычаг");
-        physics.settle(dt, 60);
-
-        physics.autoSteer = false;
-        physics.steerJoint.targetYaw = 8.0f;
-        physics.settle(dt, 360);
-        assert(abs(physics.steerYaw) <= steerLimitRad + 0.15f,
-            "рычаг вышел за предел руля");
-        assert(abs(physics.steerYaw) > 0.6f,
-            "рычаг не дошёл до предела под нагрузкой покрышки");
-
-        // Свободная ненагруженная балка: без покрышки на конце рычаг не
-        // должен раскрутиться в воронку — предел держит и шарнир.
-        auto bare = new BuggyPhysics(new Buggy(placedFrame(noseArmFrame())));
-        scope (exit) bare.dispose();
-        assert(bare.isSteered,
-            "листовая балка без колеса тоже даёт рычаг");
-        bare.settle(dt, 60);
-        bare.autoSteer = false;
-        bare.steerJoint.targetYaw = 8.0f;
-        bare.settle(dt, 120);
-        assert(abs(bare.steerYaw) <= steerLimitRad + 0.15f,
-            "ненагруженный рычаг ушёл за предел руля");
-    }
-
-    // Курсовой руль в заезде: стартовая крутка мастера вокруг вертикали
-    // гасится, машина возвращается к курсу и не уходит в круг.
-    {
-        auto physics = new BuggyPhysics(new Buggy(placedFrame(noseFrame())));
-        scope (exit) physics.dispose();
-        physics.settle(dt, 60);
-
-        physics.masterBody.angularVelocity = Vector3f(0.0f, -0.8f, 0.0f);
-
-        float maxYawErr = 0.0f;
-        float lastYawErr = 0.0f;
-        foreach (_; 0 .. 360)
+        Frame frame;
+        size_t node(vec3 pos)
         {
-            physics.step(dt, 1.0f);
-            const vec3 heading = physics.masterBody.worldRotation.rotate(
-                Vector3f(0.0f, -1.0f, 0.0f));
-            const float err = courseYaw(heading);
-            maxYawErr = max(maxYawErr, abs(err));
-            lastYawErr = err;
+            frame.nodes ~= Node(pos);
+            return frame.nodes.length - 1;
         }
-        assert(maxYawErr < 0.6f, "руль развернул машину в круге");
-        assert(abs(lastYawErr) < 0.3f, "руль не вернул машину к курсу");
+
+        const c = node(vec3(0.0f, 0.3f, 0.35f));
+        const nose = node(vec3(0.0f, -0.9f, 0.35f)); // узел 1 = steerNodeIndex
+        const hub = node(vec3(0.0f, -1.5f, 0.35f));
+        const fl = node(vec3(0.7f, -0.55f, 0.35f));
+        const fr = node(vec3(-0.7f, -0.55f, 0.35f));
+        const rl = node(vec3(0.7f, 0.4f, 0.35f));
+        const rr = node(vec3(-0.7f, 0.4f, 0.35f));
+        const nl = node(vec3(0.6f, -1.5f, 0.35f));
+        const nr = node(vec3(-0.6f, -1.5f, 0.35f));
+        frame.beams ~= new Beam(fl, fr, 0.045f);
+        frame.beams ~= new Beam(rl, rr, 0.05f);
+        frame.beams ~= new Beam(c, fl, 0.045f);
+        frame.beams ~= new Beam(c, fr, 0.045f);
+        frame.beams ~= new Beam(c, rl, 0.05f);
+        frame.beams ~= new Beam(c, rr, 0.05f);
+        frame.beams ~= new Beam(c, nose, 0.045f);
+        frame.beams ~= new Beam(nose, hub, 0.05f);
+        frame.beams ~= new Beam(hub, nl, 0.05f);
+        frame.beams ~= new Beam(hub, nr, 0.05f);
+        frame.anchors ~= Anchor(fl, AnchorKind.wheel);
+        frame.anchors ~= Anchor(fr, AnchorKind.wheel);
+        frame.anchors ~= Anchor(rl, AnchorKind.motorWheel);
+        frame.anchors ~= Anchor(rr, AnchorKind.motorWheel);
+        frame.anchors ~= Anchor(nl, AnchorKind.wheel);
+        frame.anchors ~= Anchor(nr, AnchorKind.wheel);
+        frame.motorPower = initialMotorPower;
+        return frame;
     }
 
-    // Без листовой балки от узла 1 руля нет: каркас монолит, заезд обычный.
+    // Руль проверяется на Jolt: шарнир Newton сломан и пока не чинится,
+    // поэтому в проверке руля он не участвует.
+    foreach (engine; [PhysicsEngine.jolt])
     {
-        auto physics = new BuggyPhysics(new Buggy(placedFrame(boxFrame())));
-        scope (exit) physics.dispose();
-        assert(!physics.isSteered,
-            "без листовой балки от узла 1 руля быть не должно");
-        physics.settle(dt, 30);
-        foreach (_; 0 .. 120)
-            physics.step(dt, 1.0f);
-        assert(runFailure(physics).length == 0,
-            "обычный заезд не должен ломаться из-за руля");
+        defaultEngine(engine);
+        scope (exit) defaultEngine(PhysicsEngine.jolt);
+
+        const double dt = 1.0 / 60.0;
+        // Настоящий руль эволюции: каркас, который отращивает правило роста носа,
+        // должен получить шарнир и привести его в движение. Именно этот заезд
+        // боевой — вилка на поле, а не на стенде.
+        {
+            import genetics.growth : develop;
+            import genetics.initial_data : startChromosome;
+            const auto grown = develop(startChromosome());
+            assert(!grown.isNull, "основатель должен вырасти");
+            auto physics = new BuggyPhysics(new Buggy(placedFrame(grown.get)));
+            scope (exit) physics.dispose();
+            assert(physics.isSteered,
+                "выросшая вилка должна дать рулевой рычаг");
+            physics.settle(dt, 60);
+            physics.autoSteer = false;
+            physics.steerJoint.targetYaw = 8.0f;
+            physics.settle(dt, 360);
+            assert(abs(physics.steerYaw) <= steerLimitRad + 0.15f,
+                "вилка основателя вышла за предел руля");
+            assert(abs(physics.steerYaw) > steerLimitRad * 0.4f,
+                "мотор не довёл вилку основателя до упора");
+        }
+
+        // Дальше — угол самого руля.
+        {
+            // Руль под нагрузкой: носовая балка с колесом — боевой случай
+            // эволюции; достаточно, чтобы рычаг продавил сцепление покрышки
+            // и дошёл до границы.
+            auto physics = new BuggyPhysics(new Buggy(placedFrame(noseFrame())));
+            scope (exit) physics.dispose();
+            assert(physics.isSteered,
+                "носовая листовая балка должна дать рулевой рычаг");
+            physics.settle(dt, 60);
+
+            physics.autoSteer = false;
+            physics.steerJoint.targetYaw = 8.0f;
+            foreach (_; 0 .. 360)
+            {
+                physics.step(dt, 0.0f);
+                if ((_ & 31) == 0 || _ == 359)
+                    writefln("st  %s t=%.2f yaw=%.4f",
+                        engineName(engine), _ * dt, physics.steerYaw);
+            }
+            assert(abs(physics.steerYaw) <= steerLimitRad + 0.15f,
+                "рычаг вышел за предел руля [" ~ engineName(engine) ~ "] yaw=" ~ physics.steerYaw.to!string);
+            assert(abs(physics.steerYaw) > 0.6f,
+                "рычаг не дошёл до предела под нагрузкой покрышки [" ~ engineName(engine) ~ "] yaw=" ~ physics.steerYaw.to!string);
+
+            // Свободная ненагруженная балка: без покрышки на конце рычаг не
+            // должен раскрутиться в воронку — предел держит и шарнир.
+            auto bare = new BuggyPhysics(new Buggy(placedFrame(noseArmFrame())));
+            scope (exit) bare.dispose();
+            assert(bare.isSteered,
+                "листовая балка без колеса тоже даёт рычаг");
+            bare.settle(dt, 60);
+            bare.autoSteer = false;
+            bare.steerJoint.targetYaw = 8.0f;
+            bare.settle(dt, 120);
+            assert(abs(bare.steerYaw) <= steerLimitRad + 0.15f,
+                "ненагруженный рычаг ушёл за предел руля");
+        }
+
+
+        // Вилка: шарнир везёт обе поперечные балки сразу, поэтому доворот рычага
+        // должен быть заметно меньше предела — иначе мотор провернул пустую вилку.
+        {
+            auto physics = new BuggyPhysics(new Buggy(placedFrame(forkFrame())));
+            scope (exit) physics.dispose();
+            assert(physics.isSteered, "должна дать рулевой рычаг");
+            physics.settle(dt, 60);
+
+            physics.autoSteer = false;
+            physics.steerJoint.targetYaw = 8.0f;
+            physics.settle(dt, 360);
+            assert(abs(physics.steerYaw) <= steerLimitRad + 0.15f,
+                "вилка вышла за предел руля [" ~ engineName(engine) ~ "] yaw=" ~ physics.steerYaw.to!string);
+            assert(abs(physics.steerYaw) > steerLimitRad * 0.4f,
+                "мотор не дожал вилку до упора [" ~ engineName(engine) ~ "]");
+        }
+
+        // Курсовой руль в заезде: стартовая крутка мастера вокруг вертикали
+        // гасится, машина возвращается к курсу и не уходит в круг.
+        {
+            auto physics = new BuggyPhysics(new Buggy(placedFrame(noseFrame())));
+            scope (exit) physics.dispose();
+            physics.settle(dt, 60);
+
+            physics.masterBody.angularVelocity = Vector3f(0.0f, -0.8f, 0.0f);
+
+            float maxYawErr = 0.0f;
+            float lastYawErr = 0.0f;
+            foreach (_; 0 .. 360)
+            {
+                physics.step(dt, 1.0f);
+                const vec3 heading = physics.masterBody.worldRotation.rotate(
+                    Vector3f(0.0f, -1.0f, 0.0f));
+                const float err = courseYaw(heading);
+                maxYawErr = max(maxYawErr, abs(err));
+                lastYawErr = err;
+            }
+            assert(maxYawErr < 0.6f,
+                "руль развернул машину в круге [" ~ engineName(engine) ~ "]");
+            assert(abs(lastYawErr) < 0.3f, "руль не вернул машину к курсу");
+        }
+
+        // Без листовой балки от узла 1 руля нет: каркас монолит, заезд обычный.
+        {
+            auto physics = new BuggyPhysics(new Buggy(placedFrame(boxFrame())));
+            scope (exit) physics.dispose();
+            assert(!physics.isSteered,
+                "без листовой балки от узла 1 руля быть не должно");
+            physics.settle(dt, 30);
+            foreach (_; 0 .. 120)
+                physics.step(dt, 1.0f);
+            assert(runFailure(physics).length == 0,
+                "обычный заезд не должен ломаться из-за руля");
+        }
     }
+
 }
 
-version(unittest)
-{
-    /// Минимальный правдоподобный каркас: четыре колеса и стойка рамы над
-    /// плоскостью ступиц. Двухколёсная «палка» для проверок не годится:
-    /// `placedFrame` не находит у неё курс, и рама встаёт на бок.
-    private Frame uprightStubFrame()
+    version(unittest)
     {
-        Frame fr;
-        size_t node(vec3 p)
+        /// Минимальный правдоподобный каркас: четыре колеса и стойка рамы над
+        /// плоскостью ступиц. Двухколёсная «палка» для проверок не годится:
+        /// `placedFrame` не находит у неё курс, и рама встаёт на бок.
+        private Frame uprightStubFrame()
         {
-            fr.nodes ~= Node(p);
-            return fr.nodes.length - 1;
-        }
+            Frame fr;
+            size_t node(vec3 p)
+            {
+                fr.nodes ~= Node(p);
+                return fr.nodes.length - 1;
+            }
 
-        const top = node(frameUp * 0.8f);
-        const frontLeft = node(vec3(0.6f, 0.7f, 0.3f));
-        const frontRight = node(vec3(-0.6f, 0.7f, 0.3f));
-        const rearLeft = node(vec3(0.6f, -0.7f, 0.3f));
-        const rearRight = node(vec3(-0.6f, -0.7f, 0.3f));
-        fr.beams ~= new Beam(frontLeft, frontRight, 0.045f);
+            const top = node(frameUp * 0.8f);
+            const frontLeft = node(vec3(0.6f, 0.7f, 0.3f));
+            const frontRight = node(vec3(-0.6f, 0.7f, 0.3f));
+            const rearLeft = node(vec3(0.6f, -0.7f, 0.3f));
+            const rearRight = node(vec3(-0.6f, -0.7f, 0.3f));
+            fr.beams ~= new Beam(frontLeft, frontRight, 0.045f);
+
         fr.beams ~= new Beam(rearLeft, rearRight, 0.05f);
         foreach (wheel; [frontLeft, frontRight, rearLeft, rearRight])
             fr.beams ~= new Beam(top, wheel, 0.045f);

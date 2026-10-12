@@ -156,16 +156,16 @@ struct FrameContext
 enum float initialMotorPower = 100.0f;
 
 /**
- * Связность каркаса: все узлы достижимы из узла 0 по балкам.
+ * Узлы, достижимые из `start` по балкам, пока обход не упрётся в `cut`:
+ * так отделяется хвост, висящий на поворотной ноде, от остальной рамы.
  */
-bool isConnected(const Frame frame)
+bool[] reachableWithout(const Frame frame, size_t start, size_t cut)
 {
-    if (frame.nodes.length == 0)
-        return true;
-
     bool[] visited = new bool[frame.nodes.length];
-    size_t[] stack = [0];
-    visited[0] = true;
+    if (start >= visited.length || start == cut)
+        return visited;
+    visited[start] = true;
+    size_t[] stack = [start];
 
     while (stack.length > 0)
     {
@@ -180,15 +180,24 @@ bool isConnected(const Frame frame)
                 next = b.a;
             else
                 continue;
-            if (next < visited.length && !visited[next])
-            {
-                visited[next] = true;
-                stack ~= next;
-            }
+            if (next == cut || next >= visited.length || visited[next])
+                continue;
+            visited[next] = true;
+            stack ~= next;
         }
     }
+    return visited;
+}
 
-    foreach (v; visited)
+/**
+ * Связность каркаса: все узлы достижимы из узла 0 по балкам.
+ */
+bool isConnected(const Frame frame)
+{
+    if (frame.nodes.length == 0)
+        return true;
+
+    foreach (v; frame.reachableWithout(0, size_t.max))
         if (!v)
             return false;
     return true;

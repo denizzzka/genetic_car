@@ -13,15 +13,15 @@ import dlib.math.utils : clamp;
 import core.sync.mutex;
 
 import frame.frame : Anchor, AnchorKind, Beam, Frame, Node,
-    alongCourse, right;
-import physics_world.physics : wheelInnerRadius, wheelWidth;
+    alongCourse, forward, right, up;
+import physics_world.physics : steerNodeIndex, wheelInnerRadius, wheelWidth;
 import physics_world.wheel : defaultWheelRadius;
 
 import frame.cockpit : beamHitsCabin, cockpitFrameContext,
     cockpitFrameBeamCount, cockpitFrameNodeCount, cockpitGeometry,
     cockpitMountNodes, wheelHitsCabin;
 import genetics.fitness : maxBeamCount;
-import genetics.chromosome : Chromosome, normalized;
+import genetics.chromosome : Chromosome, alleles, normalized;
 
 /*
  * Рост каркаса по Nodal/Lefty.
@@ -566,6 +566,45 @@ struct Organism
     Nullable!Frame frame;   // null — каркас не вырос
 }
 
+/// Длина стойки вилки в радиусах колеса: конец стойки должен выйти вперёд
+/// кабины, иначе колесо нависнет над корпусом.
+enum float steerForkStemShare = 2.0f;
+
+/// Полуразмах поперечины в радиусах колеса: колёса вилки не должны сойтись.
+enum float steerForkTrackShare = 1.5f;
+
+/// Носовая вилка руля: стойка вперёд от передней центральной ноды, поперечина
+/// на её конце и пассивные колёса на концах — вся сборка едет на одном шарнире.
+private void growSteerFork(ref Growth g)
+{
+    if (g.f.anchors.length + 2 > maxWheels)
+        return;
+    const float r = g.c.wheelRadius;
+    const vec3 from = g.f.nodes[steerNodeIndex].pos;
+
+    // Колёса вилки садятся на ту же землю, что и колёса по полю: иначе они
+    // висели бы в воздухе, а руль вышел бы пустым.
+    float ground = g.hangZ;
+    foreach (a; g.f.anchors)
+        ground = min(ground, g.f.nodes[a.node].pos.z);
+    const vec3 nose = from + forward * (steerForkStemShare * r)
+        + up * (ground - from.z);
+    if (wheelHitsCabin(g.f, nose, r))
+        return;
+
+    g.addBeam(steerNodeIndex, nose);
+    const size_t hub = g.f.nodes.length - 1;
+    size_t[2] ends;
+    foreach (side; 0 .. 2)
+    {
+        const float sign = side == 0 ? 1.0f : -1.0f;
+        g.addBeam(hub, nose + right * (steerForkTrackShare * r * sign));
+        ends[side] = g.f.nodes.length - 1;
+    }
+    foreach (end; ends)
+        g.f.anchors ~= Anchor(end, AnchorKind.wheel, r);
+}
+
 /**
  * Вырастить каркас особи: `null`, если колёс вырастить не удалось и машина
  * не поедет принципиально.
@@ -610,9 +649,10 @@ Nullable!Frame develop(Chromosome chr)
 
     placeWheels(g);
 
-    // Машина без колёс не едет: null — сигнал отбору, что хромосома мертва.
-    if (g.f.anchors.length < 2)
-        return Nullable!Frame.init;
+    // Вилка вырастает последней: её колёса должны сесть на землю, выбранную
+    // колёсами по полю.
+    growSteerFork(g);
+
     return Nullable!Frame(g.f);
 }
 
@@ -898,4 +938,51 @@ unittest
     assert(motor, "без ведущего колеса машина не едет");
     assert(f.motorPower == founder.motorPower, "сила мотора — из гена");
     assert(buggyFitness(f) > 0.0f, "основатель обязан быть жизнеспособен");
+
+    // Носовая вилка руля — общее правило роста, а не частный случай: стойка
+    // вперёд от передней центральной ноды с поперечиной на конце и колёсами
+    // на обоих концах поперечины.
+    size_t hub = size_t.max;
+    foreach (i, b; f.beams)
+    {
+        if (b.a != steerNodeIndex && b.b != steerNodeIndex)
+            continue;
+        const size_t far = b.a == steerNodeIndex ? b.b : b.a;
+        size_t degree;
+        foreach (b2; f.beams)
+            if (b2.a == far || b2.b == far)
+                ++degree;
+        if (degree == 3)
+        {
+            hub = far;
+            break;
+        }
+    }
+    assert(hub != size_t.max,
+        "из передней центральной ноды должна вырасти стойка с поперечиной");
+    assert(dot(f.nodes[hub].pos - f.nodes[steerNodeIndex].pos, forward) > 0.0f,
+        "стойка руля растёт по курсу, а не назад");
+    float ground = float.max;
+    foreach (a; f.anchors)
+        ground = min(ground, f.nodes[a.node].pos.z);
+    assert(abs(f.nodes[hub].pos.z - ground) < 1e-4f,
+        "стойка обязана спустить колёса вилки на землю");
+    size_t ends;
+    bool wheelLeft, wheelRight;
+    foreach (b; f.beams)
+        if ((b.a == hub || b.b == hub)
+            && b.a != steerNodeIndex && b.b != steerNodeIndex)
+        {
+            ++ends;
+            foreach (a; f.anchors)
+                if (a.node == (b.a == hub ? b.b : b.a) && a.kind == AnchorKind.wheel)
+                {
+                    if (ends == 1)
+                        wheelLeft = true;
+                    else
+                        wheelRight = true;
+                }
+        }
+    assert(ends == 2, "поперечина вилки — две балки");
+    assert(wheelLeft && wheelRight, "на обоих концах поперечины висят колёса");
 }

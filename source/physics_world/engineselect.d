@@ -116,10 +116,3 @@ Object simLock() @property
 {
     return selected_ == PhysicsEngine.jolt ? joltLock : null;
 }
-
-/// Умеет ли движок рулевую балку по-настоящему. У Jolt рулевой шарнир —
-/// заглушка без угла, поэтому тесты руля на нём не имеют смысла.
-bool engineHasSteerJoint() @property
-{
-    return selected_ == PhysicsEngine.newton;
-}
