@@ -131,14 +131,14 @@ void main(string[] args)
                 return frame.nodes.length - 1;
             }
             const c = node(vec3(0.0f, 0.3f, 0.35f));
-            const nose = node(vec3(0.0f, -0.9f, 0.35f));
-            const hub = node(vec3(0.0f, -1.5f, 0.35f));
+            const nose = node(vec3(0.0f, -0.9f, 0.85f));
+            const hub = node(vec3(0.0f, -1.0f, 0.5f));
             const fl = node(vec3(0.7f, -0.55f, 0.35f));
             const fr = node(vec3(-0.7f, -0.55f, 0.35f));
             const rl = node(vec3(0.7f, 0.4f, 0.35f));
             const rr = node(vec3(-0.7f, 0.4f, 0.35f));
-            const nl = node(vec3(0.6f, -1.5f, 0.35f));
-            const nr = node(vec3(-0.6f, -1.5f, 0.35f));
+            const nl = node(vec3(0.75f, -1.6f, 0.45f));
+            const nr = node(vec3(-0.75f, -1.6f, 0.45f));
             frame.beams ~= new Beam(fl, fr, 0.045f);
             frame.beams ~= new Beam(rl, rr, 0.05f);
             frame.beams ~= new Beam(c, fl, 0.045f);
@@ -202,7 +202,7 @@ void main(string[] args)
             }
             writefln("PROBE %s: settled yaw=%.3f",
                 selectedEngineName, p.steerYaw);
-            p.steerJoint.targetYaw = 0.7f;
+            p.steerJoint.targetYaw = 0.35f;
             foreach (i; 0 .. 180)
             {
                 p.step(dt, 1.0f);
@@ -223,14 +223,14 @@ void main(string[] args)
                     return frame.nodes.length - 1;
                 }
                 const c = node(vec3(0.0f, 0.3f, 0.35f));
-                const nose = node(vec3(0.0f, -0.9f, 0.35f));
-                const hub = node(vec3(0.0f, -1.5f, 0.35f));
+                const nose = node(vec3(0.0f, -0.9f, 0.85f));
+                const hub = node(vec3(0.0f, -1.0f, 0.5f));
                 const fl = node(vec3(0.7f, -0.55f, 0.35f));
                 const fr = node(vec3(-0.7f, -0.55f, 0.35f));
                 const rl = node(vec3(0.7f, 0.4f, 0.35f));
                 const rr = node(vec3(-0.7f, 0.4f, 0.35f));
-                const nl = node(vec3(0.6f, -1.5f, 0.35f));
-                const nr = node(vec3(-0.6f, -1.5f, 0.35f));
+                const nl = node(vec3(0.75f, -1.6f, 0.45f));
+                const nr = node(vec3(-0.75f, -1.6f, 0.45f));
                 frame.beams ~= new Beam(fl, fr, 0.045f);
                 frame.beams ~= new Beam(rl, rr, 0.05f);
                 frame.beams ~= new Beam(c, fl, 0.045f);
@@ -329,12 +329,6 @@ void main(string[] args)
             writefln("гироскутерных проб нет");
         return;
     }
-    if (args.canFind("-sweep"))
-    {
-        import genetics.growth : growthSweep;
-        growthSweep();
-        return;
-    }
     if (args.canFind("-diag"))
     {
         import genetics.chromosome : Chromosome, mutated;
@@ -390,10 +384,6 @@ void main(string[] args)
             wheelLo = min(wheelLo, f.nodes[a.node].pos.z - a.radius);
         writefln("DIAG узлы z=%.2f..%.2f низ колеса=%.2f фитнес=%.4f",
             nodeLo, nodeHi, wheelLo, buggyFitness(f));
-        foreach (ni, n; f.nodes)
-            writefln("DIAGNODE %d (%.3f,%.3f,%.3f)", ni, n.pos.x, n.pos.y, n.pos.z);
-        foreach (bi, b; f.beams)
-            writefln("DIAGBEAM %d %d-%d", bi, b.a, b.b);
         import physics_world : Buggy, BuggyPhysics, placedFrame;
         import physics_world.wheel : steerLimitRad;
         auto bp = new BuggyPhysics(new Buggy(placedFrame(f)));

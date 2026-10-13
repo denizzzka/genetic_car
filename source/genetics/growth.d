@@ -12,8 +12,6 @@ import dlib.math.vector : distance, dot, vec3;
 import dlib.math.utils : clamp;
 import core.sync.mutex;
 
-debug import std.stdio : writeln;
-
 import frame.frame : Anchor, AnchorKind, Beam, Frame, Node, forward, up,
     alongCourse, right;
 import physics_world.physics : wheelInnerRadius, wheelWidth;
@@ -280,17 +278,6 @@ private struct Growth
         const float dx = abs(p.x - f.nodes[0].pos.x);
         return cur.midlineShare * (1.0f
             - expf(-(dx * dx) / (midlineDepth * midlineDepth)));
-    }
-
-    debug string parts(const vec3 p, size_t tip) const
-    {
-        import std.format : format;
-        const auto ai = raw(p);
-        return format("act=%.3f inh=%.3f flow=%.3f grav=%.3f mid=%.3f "
-            ~ "crowd=%.3f",
-            tissueGain[frameTissue] * cur.actProduction * ai.act,
-            -cur.inhProduction * ai.inh, flowAt(p), gravityAt(p), midlineAt(p),
-            -crowdShare * crowding(p, tip));
     }
 
     /// Длина новой балки: базовый шаг гена плюс вытяжка, которую даёт
@@ -628,15 +615,7 @@ Nullable!Frame develop(const Chromosome chr)
         foreach (round; 0 .. maxGrowthRounds)
             if (!growRound(g, round))
                 break;
-        debug writeln("PHASE ", phase, " done grown=", g.grown, "/",
-            g.grownMax, " beams=", g.f.beams.length);
     }
-
-    debug foreach (i, b; g.f.beams)
-        if (i >= cockpitFrameBeamCount())
-            writeln("GBEAM ", b.a, "-", b.b, " phase=",
-                g.nodePhase[b.a > b.b ? b.a : b.b],
-                " len=", distance(g.f.nodes[b.a].pos, g.f.nodes[b.b].pos));
 
     placeWheels(g);
 
@@ -778,16 +757,6 @@ private bool growRound(ref Growth g, size_t round)
         }
     }
     sort!((x, y) => x.bestResp > y.bestResp)(pairs);
-    debug foreach (b; chosen)
-        if (b.tip == 1 || b.tip == 12 || b.tip == 10 || b.tip == 6)
-            writeln("CHOSEN ph=", g.phase, " rd=", round, " tip=", b.tip,
-                " resp=", b.resp, " to=(", b.to.x, ",", b.to.y, ",", b.to.z,
-                ") ", g.parts(b.to, b.tip));
-    debug foreach (p; pairs)
-        writeln("PAIR ph=", g.phase, " rd=", round,
-            " A=", p.hasA ? p.a.tip : size_t.max,
-            " B=", p.hasB ? p.b.tip : size_t.max,
-            " resp=", p.bestResp, " grown=", g.grown, "/", g.grownMax);
     foreach (p; pairs)
     {
         if (p.hasA && p.hasB)
@@ -863,10 +832,6 @@ private void placeWheels(ref Growth g)
         // бонус концу, чья несущая балка поперечна.
         const float wheel = g.response(p, wheelTissue)
             + wheelAxleShare * axleShare(g, i);
-        debug writeln("WSPOT node=", i, " phase=", g.nodePhase[i], " tip=",
-            g.isTip(i), " chain=", g.onSingleChain(i), " wheel=", wheel,
-            " motor=", g.rawMotor(p), " cabin=",
-            wheelHitsCabin(g.f, p, g.c.wheelRadius));
         if (!g.isTip(i))
             continue;
         if (wheel <= respondGate || wheelHitsCabin(g.f, p, g.c.wheelRadius))
@@ -1018,6 +983,16 @@ unittest
 {
     import frame.frame : isConnected;
     import genetics.fitness : buggyFitness;
+    import physics_world.physics : steerNodeIndex;
+
+    static size_t degree(ref const Frame fr, size_t n)
+    {
+        size_t d = 0;
+        foreach (b; fr.beams)
+            if (b !is null && (b.a == n || b.b == n))
+                ++d;
+        return d;
+    }
 
     // Основатель вида обязан вырасти в машину, а не в комок: каркас связный,
     // есть колёса и хотя бы одно ведущее.
@@ -1029,122 +1004,67 @@ unittest
     assert(f.beams.length > cockpitFrameBeamCount(), "основатель обязан что-то дорастить");
     assert(isConnected(f), "рост не оставляет висячих узлов");
     assert(f.anchors.length >= 2, "машине нужно хотя бы два колеса");
-    bool motor;
+    size_t motor, passive;
     foreach (a; f.anchors)
         if (a.kind == AnchorKind.motorWheel)
-            motor = true;
-    assert(motor, "без ведущего колеса машина не едет");
+            ++motor;
+        else
+            ++passive;
+    assert(motor >= 1, "без ведущего колеса машина не едет");
+    assert(passive == 2, "ровно два пассивных колеса на концах вилки");
     assert(f.motorPower == founder.motorPower, "сила мотора — из гена");
     assert(buggyFitness(f) > 0.0f, "основатель обязан быть жизнеспособен");
-}
 
-// Временный перебор генов фазы поперечины: ищем вилку от steerNodeIndex.
-debug void growthSweep()
-{
-    import genetics.chromosome : Chromosome, SegmentGenes;
-    import std.stdio : writefln;
-    import physics_world.physics : steerNodeIndex;
-
-    static size_t deg(ref const Frame fr, size_t n)
+    // Симметрия по X: каждый узел имеет зеркальный относительно срединной
+    // плоскости каркаса.
+    foreach (n; f.nodes)
     {
-        size_t d = 0;
-        foreach (bb; fr.beams)
-        {
-            const b = cast(Beam) bb;
-            if (b !is null && (b.a == n || b.b == n))
-                ++d;
-        }
-        return d;
-    }
-
-    const SegmentGenes stem = SegmentGenes(1.2f, 0.10f, 0.32f, 1.20f, 0.42f,
-        2.00f, 0.0f, 0.08f, 1.0f, 0.0f, 2.5f);
-    const SegmentGenes body = SegmentGenes(1.2f, 0.10f, 0.12f, 0.30f, 0.42f,
-        1.00f, 20.0f, 0.10f, 4.0f, 0.2f, 2.5f);
-
-    foreach (ad; [0.10f, 0.20f, 0.32f])
-    foreach (step; [0.20f, 0.30f, 0.40f])
-    foreach (flow; [0.20f, 0.30f, 0.40f])
-    {
-        Chromosome c;
-        c.segments = [
-            stem,
-            body,
-            SegmentGenes(0.20f, 0.10f, ad, 1.20f, 0.10f, flow, 2.0f, step,
-                2.0f, 0.0f, 2.5f),
-        ];
-        const auto grown = develop(c);
-        if (grown.isNull)
-            continue;
-        const auto f = grown.get;
-        bool ok = false;
-        size_t hub;
-        size_t[2] forkEnds;
-        float d01;
-        float whiskLen;
-        foreach (i, bb; f.beams)
-        {
-            const b = cast(Beam) bb;
-            if (b is null)
-                continue;
-            if (b.a != steerNodeIndex && b.b != steerNodeIndex)
-                continue;
-            const h = (b.a == steerNodeIndex) ? b.b : b.a;
-            const vec3 toHub = f.nodes[h].pos - f.nodes[steerNodeIndex].pos;
-            if (dot(toHub, forward) <= 0.0f)
-                continue;
-            size_t[2] halves, ends;
-            size_t nh = 0;
-            foreach (j, b2b; f.beams)
+        bool mirror;
+        foreach (m; f.nodes)
+            if (abs(m.pos.x + n.pos.x) < 1e-4f && abs(m.pos.y - n.pos.y) < 1e-4f
+                && abs(m.pos.z - n.pos.z) < 1e-4f)
             {
-                if (j == i)
-                    continue;
-                const b2 = cast(Beam) b2b;
-                if (b2 is null || (b2.a != h && b2.b != h))
-                    continue;
-                if (nh == 2) { nh = 3; break; }
-                halves[nh] = j;
-                ends[nh] = (b2.a == h) ? b2.b : b2.a;
-                ++nh;
-            }
-            if (nh != 2 || deg(f, h) != 3)
-                continue;
-            const vec3 st = toHub / toHub.length;
-            const vec3 e0 = (f.nodes[ends[0]].pos - f.nodes[h].pos)
-                / (f.nodes[ends[0]].pos - f.nodes[h].pos).length;
-            const vec3 e1 = (f.nodes[ends[1]].pos - f.nodes[h].pos)
-                / (f.nodes[ends[1]].pos - f.nodes[h].pos).length;
-            if (dot(e0, st) < 0.5f && dot(e1, st) < 0.5f && dot(e0, e1) < 0.0f
-                && deg(f, ends[0]) == 1 && deg(f, ends[1]) == 1)
-            {
-                ok = true;
-                hub = h;
-                d01 = dot(e0, e1);
-                forkEnds = ends;
-                whiskLen = distance(f.nodes[h].pos, f.nodes[ends[0]].pos);
+                mirror = true;
                 break;
             }
-        }
-        size_t pas = 0, mot = 0;
-        foreach (a; f.anchors)
-            if (a.kind == AnchorKind.motorWheel)
-                ++mot;
-            else
-                ++pas;
-        if (ok)
-        {
-            const bool e0w = f.anchors.canFind!((a) => a.node == forkEnds[0]);
-            const bool e1w = f.anchors.canFind!((a) => a.node == forkEnds[1]);
-            string ek;
-            foreach (a; f.anchors)
-                if (a.node == forkEnds[0] || a.node == forkEnds[1])
-                    ek ~= (a.kind == AnchorKind.motorWheel ? "M" : "w");
-            writefln("FORK ad=%.2f step=%.2f flow=%.2f "
-                ~ "hubZ=%.2f dot01=%.2f whisk=%.2f e0=(%.2f,%.2f) pas=%d mot=%d "
-                ~ "wheeled=%d,%d %s",
-                ad, step, flow, f.nodes[hub].pos.z, d01, whiskLen,
-                f.nodes[forkEnds[0]].pos.y, f.nodes[forkEnds[0]].pos.z,
-                pas, mot, e0w, e1w, ek);
-        }
+        assert(mirror, "каркас не симметричен по X");
     }
+
+    // Вилка: стойка от узла руля спускается к ступице степени 3, из которой
+    // растут два конца степени 1 с пассивными колёсами.
+    size_t hub = size_t.max;
+    foreach (b; f.beams)
+    {
+        if (b is null || (b.a != steerNodeIndex && b.b != steerNodeIndex))
+            continue;
+        const h = (b.a == steerNodeIndex) ? b.b : b.a;
+        if (f.nodes[h].pos.z < f.nodes[steerNodeIndex].pos.z
+            && dot(f.nodes[h].pos - f.nodes[steerNodeIndex].pos, forward) > 0.0f)
+            hub = h;
+    }
+    assert(hub != size_t.max, "стойка руля должна спускаться вперёд вниз");
+    assert(degree(f, hub) == 3, "ступица вилки должна иметь степень 3");
+    size_t[2] ends;
+    size_t nEnds;
+    foreach (b; f.beams)
+    {
+        if (b is null || (b.a != hub && b.b != hub))
+            continue;
+        const e = (b.a == hub) ? b.b : b.a;
+        if (e == steerNodeIndex)
+            continue;
+        assert(nEnds < 2, "у ступицы не должно быть лишних концов");
+        ends[nEnds] = e;
+        ++nEnds;
+    }
+    assert(nEnds == 2, "из ступицы должно расти ровно два конца степени 1");
+    foreach (end; ends)
+        assert(degree(f, end) == 1, "конец поперечины должен быть листом");
+    bool[2] wheeled;
+    foreach (e, end; ends)
+        foreach (a; f.anchors)
+            if (a.node == end)
+                wheeled[e] = a.kind == AnchorKind.wheel;
+    assert(wheeled[0] && wheeled[1],
+        "концы поперечины должны нести пассивные колёса");
 }
