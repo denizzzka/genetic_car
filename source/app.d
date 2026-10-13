@@ -395,9 +395,15 @@ void main(string[] args)
         foreach (bi, b; f.beams)
             writefln("DIAGBEAM %d %d-%d", bi, b.a, b.b);
         import physics_world : Buggy, BuggyPhysics, placedFrame;
+        import physics_world.wheel : steerLimitRad;
         auto bp = new BuggyPhysics(new Buggy(placedFrame(f)));
         scope (exit) bp.dispose();
         writefln("DIAG isSteered=%s steerYaw=%.3f", bp.isSteered, bp.steerYaw);
+        bp.settle(1.0 / 60.0, 60);
+        bp.autoSteer = false;
+        bp.steerJoint.targetYaw = 8.0f;
+        bp.settle(1.0 / 60.0, 360);
+        writefln("DIAG steered yaw=%.4f (limit=%.4f)", bp.steerYaw, steerLimitRad);
         return;
     }
     if (args.canFind("-headless") || args.canFind("--headless"))
