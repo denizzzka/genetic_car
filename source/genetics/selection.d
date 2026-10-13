@@ -57,7 +57,7 @@ Chromosome[] seedPopulation(size_t n)
     pop.reserve(n);
     const base = startChromosome;
     foreach (_; 0 .. n)
-        pop ~= base;
+        pop ~= base.clone;
     return pop;
 }
 

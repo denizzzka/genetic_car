@@ -11,7 +11,7 @@ import genetics.chromosome : Chromosome, alleles;
  */
 Chromosome startChromosome()
 {
-    return Chromosome.init;
+    return Chromosome.init.clone;
 }
 
 unittest

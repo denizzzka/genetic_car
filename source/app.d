@@ -321,12 +321,18 @@ void main(string[] args)
     {
         import genetics.founder_tuning : FounderProbe, report, scanFounder,
             bestGyroscooter;
-        const auto probes = scanFounder();
+        auto probes = scanFounder();
         FounderProbe best;
         if (bestGyroscooter(probes, best))
             writefln("лучший гироскутер: %s", report(best));
         else
             writefln("гироскутерных проб нет");
+        return;
+    }
+    if (args.canFind("-sweep"))
+    {
+        import genetics.growth : growthSweep;
+        growthSweep();
         return;
     }
     if (args.canFind("-diag"))
@@ -373,7 +379,7 @@ void main(string[] args)
         }
         writefln("DIAG балки=%d длина min=%.3f avg=%.3f max=%.3f (шаг=%.3f)",
             cast(int) f.beams.length, lo, sum / f.beams.length, hi,
-            founder.stepLength);
+            founder.segments[0].stepLength);
         float nodeLo = float.max, nodeHi = -float.max, wheelLo = float.max;
         foreach (n; f.nodes)
         {
@@ -384,6 +390,14 @@ void main(string[] args)
             wheelLo = min(wheelLo, f.nodes[a.node].pos.z - a.radius);
         writefln("DIAG узлы z=%.2f..%.2f низ колеса=%.2f фитнес=%.4f",
             nodeLo, nodeHi, wheelLo, buggyFitness(f));
+        foreach (ni, n; f.nodes)
+            writefln("DIAGNODE %d (%.3f,%.3f,%.3f)", ni, n.pos.x, n.pos.y, n.pos.z);
+        foreach (bi, b; f.beams)
+            writefln("DIAGBEAM %d %d-%d", bi, b.a, b.b);
+        import physics_world : Buggy, BuggyPhysics, placedFrame;
+        auto bp = new BuggyPhysics(new Buggy(placedFrame(f)));
+        scope (exit) bp.dispose();
+        writefln("DIAG isSteered=%s steerYaw=%.3f", bp.isSteered, bp.steerYaw);
         return;
     }
     if (args.canFind("-headless") || args.canFind("--headless"))

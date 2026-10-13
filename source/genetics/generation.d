@@ -8,7 +8,7 @@ import std.random;
 import std.typecons : Nullable;
 
 import frame.frame : Frame;
-import genetics.chromosome : Chromosome, alleles, crossover, geneCount, mutated;
+import genetics.chromosome : Chromosome, alleleCount, alleles, crossover, mutated;
 import genetics.fitness : buggyFitness;
 import genetics.growth : Organism, develop;
 import genetics.selection;
@@ -38,7 +38,7 @@ private enum size_t maxParentCycles = 3;
 Organism tryCreateViableMutant(const Chromosome base, const EvolutionConfig p,
     ref Random rnd, Nullable!Frame baseFrame = Nullable!Frame.init)
 {
-    Chromosome best = base;
+    Chromosome best = base.clone;
     Nullable!Frame bestFrame = baseFrame;
     size_t bestAnchors = baseFrame.isNull ? 0 : baseFrame.get.anchors.length;
 
@@ -144,19 +144,19 @@ unittest
 
     // Мёртвый родитель не роняет эволюцию: вместо аварии возвращается лучшее
     // из виденного, а отбор такое поколение вычистит по нулевому фитнесу.
-    Chromosome dead;
-    dead.actProduction = 0.01f;
-    dead.inhProduction = 1.0f;
-    dead.threshold = 0.02f;
+    Chromosome dead = Chromosome.init.clone;
+    dead.segments[0].actProduction = 0.01f;
+    dead.segments[0].inhProduction = 1.0f;
+    dead.segments[0].threshold = 0.02f;
     const auto rescue = tryCreateViableMutant(dead, EvolutionConfig.init, rnd);
-    assert(rescue.chromosome.alleles.length == geneCount,
+    assert(rescue.chromosome.alleles.length == rescue.chromosome.alleleCount,
         "спасённый ребёнок — тоже хромосома");
 
     // buildNextGeneration: все слоты заполнены, гены целы.
     auto next = buildNextGeneration(pop, EvolutionConfig.init, rnd);
     assert(next.length == EvolutionConfig.populationSize, "поколение целиком заполнено");
     foreach (org; next)
-        assert(org.chromosome.alleles.length == geneCount,
+        assert(org.chromosome.alleles.length == org.chromosome.alleleCount,
             "кроссовер и мутации сохраняют число генов");
 
     // Элита: лучший родитель переходит в следующее поколение без изменений.

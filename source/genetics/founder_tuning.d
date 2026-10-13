@@ -82,7 +82,7 @@ struct FounderProbe
 FounderProbe probe(const Chromosome chr)
 {
     FounderProbe p;
-    p.chr = chr;
+    p.chr = chr.clone;
 
     const auto grown = develop(chr);
     if (grown.isNull)
@@ -180,11 +180,14 @@ FounderProbe[] scanFounder(Chromosome founder = Chromosome.init,
     foreach (actProduction; scanActProduction)
     foreach (inhProduction; scanInhProduction)
     {
-        Chromosome chr = founder;
-        chr.flowStrength = flow;
-        chr.actProduction = actProduction;
-        chr.inhProduction = inhProduction;
-        const auto p = probe(chr);
+        Chromosome chr = founder.clone;
+        foreach (ref seg; chr.segments)
+        {
+            seg.flowStrength = flow;
+            seg.actProduction = actProduction;
+            seg.inhProduction = inhProduction;
+        }
+        auto p = probe(chr);
         probes ~= p;
         if (print)
             writeln(format("flow=%+.2f actP=%.1f inhP=%.2f -> %s",
@@ -195,7 +198,7 @@ FounderProbe[] scanFounder(Chromosome founder = Chromosome.init,
 
 /// Лучшая гироскутерная проба из набора: с максимальным фитнесом среди тех,
 /// что действительно гироскутер.
-bool bestGyroscooter(const FounderProbe[] probes, out FounderProbe best)
+bool bestGyroscooter(FounderProbe[] probes, out FounderProbe best)
 {
     bool found;
     foreach (p; probes)

@@ -1,6 +1,6 @@
 module genetics.growth;
 
-import std.algorithm : max, min, sort;
+import std.algorithm : canFind, max, min, sort;
 import std.math : PI, abs, cos, sin, sqrt;
 import std.typecons : Nullable;
 
@@ -12,31 +12,33 @@ import dlib.math.vector : distance, dot, vec3;
 import dlib.math.utils : clamp;
 import core.sync.mutex;
 
-import frame.frame : Anchor, AnchorKind, Beam, Frame, Node,
-    alongCourse, forward, right, up;
-import physics_world.physics : steerNodeIndex, wheelInnerRadius, wheelWidth;
-import physics_world.wheel : defaultWheelRadius;
+debug import std.stdio : writeln;
+
+import frame.frame : Anchor, AnchorKind, Beam, Frame, Node, forward, up,
+    alongCourse, right;
+import physics_world.physics : wheelInnerRadius, wheelWidth;
+import physics_world.wheel : defaultWheelRadius, isOwnWheel, wheelAxle;
 
 import frame.cockpit : beamHitsCabin, cockpitFrameContext,
     cockpitFrameBeamCount, cockpitFrameNodeCount, cockpitGeometry,
     cockpitMountNodes, wheelHitsCabin;
 import genetics.fitness : maxBeamCount;
-import genetics.chromosome : Chromosome, alleles, normalized;
+import genetics.chromosome : Chromosome, SegmentGenes, normalized;
 
 /*
  * Рост каркаса по Nodal/Lefty.
  *
- * Особи нет никакого плана строения: есть десять генов и правило. Правило
- * такое: в каждом узле каркаса живёт активатор, он тиражирует себя с
- * заданной скоростью и расходится на радиус `actDiffusion`; рядом живёт
- * ингибитор, он тиражируется с `inhProduction`, расходится гораздо дальше
- * (`inhDiffusion`) и гасит всё, до чего дотягивается. Активатор работает
- * локально, ингибитор глобально — в этом весь смысл системы: локально
- * «расти», глобально «не мешать соседям», и получается ветвление, а не шар.
+ * Особи нет никакого плана строения: есть гены и правило. Правило такое: в
+ * каждом узле каркаса живёт активатор, он тиражирует себя с заданной скоростью
+ * и расходится на радиус `actDiffusion`; рядом живёт ингибитор, он тиражируется
+ * с `inhProduction`, расходится гораздо дальше (`inhDiffusion`) и гасит всё, до
+ * чего дотягивается. Активатор работает локально, ингибитор глобально — в этом
+ * весь смысл системы: локально «расти», глобально «не мешать соседям», и
+ * получается ветвление, а не шар.
  *
- * Точка, где разность полей превышает порог, получает новую балку. Новая
- * балка сама становится источником, поэтому рост — цепная реакция: каждое
- * поколение балок усиливает поле вокруг себя.
+ * Гены поля читаются пофазно: хромосома — список фаз, и каждая доращивает
+ * каркас своим полем. Стойка руля, поперечина и корпус — не частные случаи
+ * кода, а последовательные фазы одного правила.
  */
 
 /**
@@ -117,15 +119,9 @@ enum float wheelAxleShare = 0.5f;
 
 /// Доля потока, уходящая по курсу.
 enum float flowCourseShare = 1.0f;
-/// Организатор средней линии: ткань расходится от срединной плоскости.
-/// Это и есть тот сигнал, который тянет ветви от кабины в стороны: без него
-/// поле самое сильное там, где тело уже есть, и ветви завираются внутрь, а
-/// колесо не влезает в промежуток между ними. Симметричен по построению —
-/// зависит от расстояния до плоскости, а не от знака.
-enum float midlineShare = 16.0f;
 
 /// Ширина, на которой отход от средней линии выходит на насыщение, м.
-enum float midlineDepth = 0.5f;
+enum float midlineDepth = 0.15f;
 
 /// Длина балки сверх базового шага: насколько её вытягивает локальное поле.
 /// Измеряется радиусом действия активатора — это масштаб паттерна, и он же
@@ -212,6 +208,16 @@ private vec3 spherePoint(uint seed) pure nothrow @nogc
 private struct Growth
 {
     Chromosome c;
+
+    /// Гены активной фазы роста — подменяются по ходу `develop`.
+    SegmentGenes cur;
+
+    /// Номер активной фазы.
+    size_t phase;
+
+    /// Фаза, в которой родился узел: по ней колесо берёт моторный ген.
+    size_t[] nodePhase;
+
     Frame f;
 
     /// Узлы заданного каркаса кабины — ниже этого порога ничего не считается
@@ -243,7 +249,7 @@ private struct Growth
     /// локальное торможение роста перестаёт его останавливать.
     float scale() const
     {
-        return grown > 0 ? max(c.stepLength, grownLen / grown) : c.stepLength;
+        return grown > 0 ? max(cur.stepLength, grownLen / grown) : cur.stepLength;
     }
 
     /// Потолок для этого организма: общий счётчик каркаса из фитнеса.
@@ -261,10 +267,10 @@ private struct Growth
     float response(const vec3 p, size_t tissue, size_t tip = noParent) const
     {
         const auto ai = raw(p);
-        const float score = tissueGain[tissue] * c.actProduction * ai.act
-            - c.inhProduction * ai.inh + flowAt(p) + gravityAt(p)
+        const float score = tissueGain[tissue] * cur.actProduction * ai.act
+            - cur.inhProduction * ai.inh + flowAt(p) + gravityAt(p)
             + midlineAt(p) - crowdShare * crowding(p, tip);
-        return score / c.threshold;
+        return score / cur.threshold;
     }
 
     /// Отход от срединной плоскости: чем дальше от неё, тем сильнее ткань
@@ -272,8 +278,19 @@ private struct Growth
     float midlineAt(const vec3 p) const
     {
         const float dx = abs(p.x - f.nodes[0].pos.x);
-        return midlineShare * (1.0f
+        return cur.midlineShare * (1.0f
             - expf(-(dx * dx) / (midlineDepth * midlineDepth)));
+    }
+
+    debug string parts(const vec3 p, size_t tip) const
+    {
+        import std.format : format;
+        const auto ai = raw(p);
+        return format("act=%.3f inh=%.3f flow=%.3f grav=%.3f mid=%.3f "
+            ~ "crowd=%.3f",
+            tissueGain[frameTissue] * cur.actProduction * ai.act,
+            -cur.inhProduction * ai.inh, flowAt(p), gravityAt(p), midlineAt(p),
+            -crowdShare * crowding(p, tip));
     }
 
     /// Длина новой балки: базовый шаг гена плюс вытяжка, которую даёт
@@ -282,7 +299,7 @@ private struct Growth
     float budLength(const float resp) const
     {
         const float excess = max(0.0f, resp - respondGate);
-        return min(c.stepLength + stretchShare * c.actDiffusion * excess,
+        return min(cur.stepLength + stretchShare * cur.actDiffusion * excess,
             maxBeamLength);
     }
 
@@ -339,9 +356,9 @@ private struct Growth
         foreach (n; f.nodes)
         {
             const float d = distance(n.pos, p);
-            r += expf(-d / c.motorDiffusion);
+            r += expf(-d / cur.motorDiffusion);
         }
-        return r * c.motorProduction;
+        return r * cur.motorProduction;
     }
 
     Fields raw(const vec3 p) const
@@ -350,8 +367,8 @@ private struct Growth
         foreach (n; f.nodes)
         {
             const float d = distance(n.pos, p);
-            r.act += expf(-d / c.actDiffusion);
-            r.inh += expf(-d / c.inhDiffusion);
+            r.act += expf(-d / cur.actDiffusion);
+            r.inh += expf(-d / cur.inhDiffusion);
         }
         return r;
     }
@@ -363,12 +380,12 @@ private struct Growth
     /// задаётся снаружи — зеркальным корпусом или стартовой формой.
     float flowAt(const vec3 p) const
     {
-        if (c.flowStrength == 0.0f)
+        if (cur.flowStrength == 0.0f)
             return 0.0f;
         // Только вдоль курса: поперечная составляющая была антисимметричной
         // (пропорциональной `rel.x`) и ломала зеркальность поля. Отход в
         // стороны теперь задаёт organizer средней линии, он симметричен.
-        return c.flowStrength * flowCourseShare * alongCourse(p - f.nodes[0].pos);
+        return cur.flowStrength * flowCourseShare * alongCourse(p - f.nodes[0].pos);
     }
 
     /// Провисание в точке: вверх от подвески беднее, вниз — богате, но не
@@ -478,6 +495,7 @@ private struct Growth
         const size_t idx = f.nodes.length;
         f.nodes ~= Node(to);
         parent ~= from;
+        nodePhase ~= phase;
         const vec3 step = to - f.nodes[from].pos;
         born ~= step * (1.0f / sqrt(dot(step, step)));
         f.beams ~= new Beam(from, idx, c.beamRadius);
@@ -504,12 +522,12 @@ private class BudBuffer
 {
     private Bud[] _data;
     private Mutex _m;
-    
+
     this()
     {
         _m = new Mutex();
     }
-    
+
     void append(Bud b)
     {
         synchronized (_m)
@@ -517,7 +535,7 @@ private class BudBuffer
             _data ~= b;
         }
     }
-    
+
     Bud[] extract()
     {
         synchronized (_m)
@@ -533,7 +551,7 @@ private class BudBuffer
 private void addBud(const Growth g, size_t tip, const vec3 from, const vec3 d,
     BudBuffer buds)
 {
-    const vec3 probe = from + d * g.c.stepLength;
+    const vec3 probe = from + d * g.cur.stepLength;
     if (abs(probe.x - g.f.nodes[0].pos.x) > maxHalfWidth)
         return;
     const float resp = g.response(probe, frameTissue, tip);
@@ -566,52 +584,13 @@ struct Organism
     Nullable!Frame frame;   // null — каркас не вырос
 }
 
-/// Длина стойки вилки в радиусах колеса: конец стойки должен выйти вперёд
-/// кабины, иначе колесо нависнет над корпусом.
-enum float steerForkStemShare = 2.0f;
-
-/// Полуразмах поперечины в радиусах колеса: колёса вилки не должны сойтись.
-enum float steerForkTrackShare = 1.5f;
-
-/// Носовая вилка руля: стойка вперёд от передней центральной ноды, поперечина
-/// на её конце и пассивные колёса на концах — вся сборка едет на одном шарнире.
-private void growSteerFork(ref Growth g)
-{
-    if (g.f.anchors.length + 2 > maxWheels)
-        return;
-    const float r = g.c.wheelRadius;
-    const vec3 from = g.f.nodes[steerNodeIndex].pos;
-
-    // Колёса вилки садятся на ту же землю, что и колёса по полю: иначе они
-    // висели бы в воздухе, а руль вышел бы пустым.
-    float ground = g.hangZ;
-    foreach (a; g.f.anchors)
-        ground = min(ground, g.f.nodes[a.node].pos.z);
-    const vec3 nose = from + forward * (steerForkStemShare * r)
-        + up * (ground - from.z);
-    if (wheelHitsCabin(g.f, nose, r))
-        return;
-
-    g.addBeam(steerNodeIndex, nose);
-    const size_t hub = g.f.nodes.length - 1;
-    size_t[2] ends;
-    foreach (side; 0 .. 2)
-    {
-        const float sign = side == 0 ? 1.0f : -1.0f;
-        g.addBeam(hub, nose + right * (steerForkTrackShare * r * sign));
-        ends[side] = g.f.nodes.length - 1;
-    }
-    foreach (end; ends)
-        g.f.anchors ~= Anchor(end, AnchorKind.wheel, r);
-}
-
 /**
  * Вырастить каркас особи: `null`, если колёс вырастить не удалось и машина
  * не поедет принципиально.
  */
-Nullable!Frame develop(Chromosome chr)
+Nullable!Frame develop(const Chromosome chr)
 {
-    const auto c = normalized(chr);
+    auto c = normalized(chr);
     Growth g;
     g.c = c;
     g.f = cockpitFrameContext().frame;
@@ -627,32 +606,43 @@ Nullable!Frame develop(Chromosome chr)
         }
     g.hangZ = hangN > 0 ? hangSum / cast(float) hangN : g.f.nodes[0].pos.z;
     g.scaffoldNodes = g.f.nodes.length;
-    // Бюджет балок есть только у бортовых точек подвески; хребет кабины —
-    // уже готовый каркас, из него ничего не растёт.
+    // Зачаток — любой узел каркаса кабины: форма машины обязана быть
+    // следствием генов, а не выбора «отсюда расти можно, а отсюда нет».
     g.sprouts = new size_t[g.scaffoldNodes];
-    g.sprouts[] = maxNewBeamsPerNode;
-    foreach (i; cockpitMountNodes())
-        if (i < g.sprouts.length)
-            g.sprouts[i] = 0;
+    g.sprouts[] = 0;
     g.parent = new size_t[g.scaffoldNodes];
     g.parent[] = noParent;
     g.born = new vec3[g.scaffoldNodes];
     g.born[] = vec3(0.0f, 0.0f, -1.0f);
-    g.grownMax = min(cast(size_t) c.beamBudget, maxBeamCount - cockpitFrameBeamCount());
+    g.nodePhase = new size_t[g.scaffoldNodes];
 
-    foreach (round; 0 .. maxGrowthRounds)
+    // Фазы роста идут одна за другой: геном — список полей, и каждое
+    // доращивает каркас по-своему. Бюджет фазы — прибавка к размеру, поэтому
+    // поздние фазы строят поверх ранних.
+    const size_t frameCap = maxBeamCount - cockpitFrameBeamCount();
+    foreach (phase, seg; c.segments)
     {
-        const bool grew = growRound(g, round);
-        if (!grew)
-            break;
+        g.cur = seg;
+        g.phase = phase;
+        g.grownMax = min(g.grown + cast(size_t) seg.beamBudget, frameCap);
+        foreach (round; 0 .. maxGrowthRounds)
+            if (!growRound(g, round))
+                break;
+        debug writeln("PHASE ", phase, " done grown=", g.grown, "/",
+            g.grownMax, " beams=", g.f.beams.length);
     }
+
+    debug foreach (i, b; g.f.beams)
+        if (i >= cockpitFrameBeamCount())
+            writeln("GBEAM ", b.a, "-", b.b, " phase=",
+                g.nodePhase[b.a > b.b ? b.a : b.b],
+                " len=", distance(g.f.nodes[b.a].pos, g.f.nodes[b.b].pos));
 
     placeWheels(g);
 
-    // Вилка вырастает последней: её колёса должны сесть на землю, выбранную
-    // колёсами по полю.
-    growSteerFork(g);
-
+    // Машина без колёс не едет: null — сигнал отбору, что хромосома мертва.
+    if (g.f.anchors.length < 2)
+        return Nullable!Frame.init;
     return Nullable!Frame(g.f);
 }
 
@@ -682,6 +672,11 @@ private bool growRound(ref Growth g, size_t round)
 
     const float midX = g.f.nodes[0].pos.x;
 
+    // Узел считается лежащим на плоскости симметрии, если он ближе этого
+    // зазора к срединной плоскости: там почка либо остаётся в плоскости, либо
+    // отражается парой.
+    const float planeEps = foldShare * g.scale();
+
     // Такт идёт в две фазы. Сначала каждый конец выбирает направление по полю,
     // каким оно было до такта, и решения не пишутся в каркас; затем выбранное
     // выращивается. Выбирать и растить вперемешку нельзя: конец, обработанный
@@ -699,12 +694,24 @@ private bool growRound(ref Growth g, size_t round)
         const uint base = budSeed(round, g.sprouts[tip],
             toLocal(g.born[tip], side));
         auto budsBuf = new BudBuffer();
+        const bool onPlane = abs(from.x - midX) <= planeEps;
         foreach (k; 0 .. directionProbes)
         {
             // Углы набираются в базисе тела и разворачиваются по стороне конца,
             // поэтому зеркальные концы обстреливаются зеркальными же углами.
-            addBud(g, tip, from, toWorld(spherePoint(base + cast(uint) k * 97u),
-                side), budsBuf);
+            const uint s = base + cast(uint) k * 97u;
+            addBud(g, tip, from, toWorld(spherePoint(s), side), budsBuf);
+            if (onPlane)
+            {
+                // На самой плоскости узел пробует и строго срединные
+                // направления: стойка руля растёт в плоскости и остаётся
+                // собственным зеркалом, а вбок — уже зеркальной парой.
+                const vec3 sp = spherePoint(s ^ 0x9e3779b9u);
+                const vec3 inPlane = vec3(0.0f, sp.y, sp.z);
+                const float len = sqrt(dot(inPlane, inPlane));
+                if (len > 1e-3f)
+                    addBud(g, tip, from, inPlane / len, budsBuf);
+            }
         }
         auto buds = budsBuf.extract();
         if (buds.length != 0)
@@ -714,14 +721,89 @@ private bool growRound(ref Growth g, size_t round)
         }
     }
 
-    foreach (bud; chosen)
+    // Зеркальные почки растут парами: иначе float-шум на границе бюджета
+    // ломает симметрию, хотя поле вокруг зеркальных концов одинаковое.
+    struct Pair
     {
-        // Бюджет тела — единственный ограничитель, общий для всех концов: он
-        // задаёт размер, а не распределяет место.
-        if (g.grown >= g.grownMax)
-            break;
-        if (growBud(g, bud))
-            grew = true;
+        Bud a, b;
+        bool hasA, hasB;
+        float bestResp;
+    }
+    Pair[] pairs;
+    bool[] used = new bool[chosen.length];
+    foreach (i, budA; chosen)
+    {
+        if (used[i])
+            continue;
+        const vec3 fromA = g.f.nodes[budA.tip].pos;
+        const float sideA = bodySide(fromA, midX);
+        // Узел на плоскости симметрии, у которого почка уходит вбок, растёт
+        // зеркальной парой: поперечина руля возникает сама, без правила формы.
+        // Срединная почка (стойка) остаётся одиночной, и узел — своим зеркалом.
+        if (abs(fromA.x - midX) <= planeEps
+            && abs(budA.to.x - midX) > planeEps)
+        {
+            used[i] = true;
+            const vec3 toB = vec3(2.0f * midX - budA.to.x, budA.to.y,
+                budA.to.z);
+            pairs ~= Pair(budA, Bud(budA.tip, toB, budA.resp), true, true,
+                budA.resp);
+            continue;
+        }
+        const vec3 localA = toLocal(budA.to - fromA, sideA);
+        bool paired;
+        foreach (j, budB; chosen)
+        {
+            if (j <= i || used[j])
+                continue;
+            const vec3 fromB = g.f.nodes[budB.tip].pos;
+            const float sideB = bodySide(fromB, midX);
+            if (sideA * sideB >= 0.0f)
+                continue;
+            const vec3 localB = toLocal(budB.to - fromB, sideB);
+            if (distance(localA, vec3(-localB.x, localB.y, localB.z)) < 1e-3f)
+            {
+                used[i] = true;
+                used[j] = true;
+                pairs ~= Pair(budA, budB, true, true,
+                    max(budA.resp, budB.resp));
+                paired = true;
+                break;
+            }
+        }
+        if (!paired)
+        {
+            used[i] = true;
+            pairs ~= Pair(budA, Bud.init, true, false, budA.resp);
+        }
+    }
+    sort!((x, y) => x.bestResp > y.bestResp)(pairs);
+    debug foreach (b; chosen)
+        if (b.tip == 1 || b.tip == 12 || b.tip == 10 || b.tip == 6)
+            writeln("CHOSEN ph=", g.phase, " rd=", round, " tip=", b.tip,
+                " resp=", b.resp, " to=(", b.to.x, ",", b.to.y, ",", b.to.z,
+                ") ", g.parts(b.to, b.tip));
+    debug foreach (p; pairs)
+        writeln("PAIR ph=", g.phase, " rd=", round,
+            " A=", p.hasA ? p.a.tip : size_t.max,
+            " B=", p.hasB ? p.b.tip : size_t.max,
+            " resp=", p.bestResp, " grown=", g.grown, "/", g.grownMax);
+    foreach (p; pairs)
+    {
+        if (p.hasA && p.hasB)
+        {
+            if (g.grown + 2 > g.grownMax)
+                continue;
+            if (growBud(g, p.a) && growBud(g, p.b))
+                grew = true;
+        }
+        else if (p.hasA)
+        {
+            if (g.grown >= g.grownMax)
+                break;
+            if (growBud(g, p.a))
+                grew = true;
+        }
     }
     return grew;
 }
@@ -772,14 +854,21 @@ private void placeWheels(ref Growth g)
     WheelSpot[] spots;
     foreach (i; g.scaffoldNodes .. g.f.nodes.length)
     {
-        if (!g.isTip(i) || !g.onSingleChain(i))
-            continue;
+        // Колесо слышит поле той фазы, в которой вырос его узел: корпус несёт
+        // моторные гены, вилка — нет, и её колёса выходят пассивными сами.
+        g.cur = g.c.segments[g.nodePhase[i]];
         const vec3 p = g.f.nodes[i].pos;
         // Ось колеса поперечная, и подвеска должна заходить по ней: балка
         // поперёк идёт по оси, внутри ступицы, и резину не трогает. Отсюда
         // бонус концу, чья несущая балка поперечна.
         const float wheel = g.response(p, wheelTissue)
             + wheelAxleShare * axleShare(g, i);
+        debug writeln("WSPOT node=", i, " phase=", g.nodePhase[i], " tip=",
+            g.isTip(i), " chain=", g.onSingleChain(i), " wheel=", wheel,
+            " motor=", g.rawMotor(p), " cabin=",
+            wheelHitsCabin(g.f, p, g.c.wheelRadius));
+        if (!g.isTip(i))
+            continue;
         if (wheel <= respondGate || wheelHitsCabin(g.f, p, g.c.wheelRadius))
             continue;
         spots ~= WheelSpot(i, wheel, g.rawMotor(p));
@@ -820,7 +909,9 @@ private bool wheelFits(const Growth g, size_t node)
         if (distance(p, g.f.nodes[a.node].pos) < r + a.radius + wheelGap)
             return false;
 
-    return !beamHitsTyre(g, node);
+    if (beamHitsTyre(g, node))
+        return false;
+    return true;
 }
 
 /// Насколько несущая балка конца поперечна: 1 — строго по оси колеса.
@@ -837,57 +928,58 @@ private float axleShare(const Growth g, size_t tip)
     return 0.0f;
 }
 
-/// Задевает ли отрезок полосу покрышки: поперечный радиус от оси лежит между
-/// ступицей и ободом, и точка попадает в ширину покрышки.
+/// Задевает ли отрезок полосу покрышки: радиальный профиль `(радиус, осевая
+/// координата)` пересекается с полосой [inner, outer] по радиусу и
+/// [-halfWidth, halfWidth] по оси. Обе величины линейны вдоль отрезка, поэтому
+/// пересечение полосы — это пересечение двух интервалов параметра.
 ///
-/// Радиус вдоль отрезка — выпуклая функция, поэтому максимум берётся на концах
-/// оставшегося интервала, а минимум — в вершине параболы. Точная проверка
-/// нужна потому, что у наклонной балки полосу пересекает не та точка, где
-/// радиус минимален: минимум там, где `x` проходит через ось, а полосу
-/// балка режет ближе к краю покрышки.
+/// Ступица — начало координат: отрезок, пришедший в неё, имеет нулевой
+/// радиус в самой ступице. Настоящая резина начинается на `inner`, поэтому
+/// глубина проникновения считается от той точки, где отрезок входит в
+/// полосу, и балка, кончающаяся в ступице, резины не режет.
 private bool segmentHitsTyreBand(const vec3 pa, const vec3 pb,
     const float inner, const float outer, const float halfWidth)
 {
-    // Ось колеса уходит в x, поэтому поперечный радиус — это sqrt(y² + z²).
-    const float dx = pb.x - pa.x;
+    // Отрезок, целиком лежащий на оси (обе точки при нулевом радиусе),
+    // полосу не режет: своя несущая балка проходит сквозь ступицу.
+    if (pa.y <= inner && pb.y <= inner)
+        return false;
     float lo = 0.0f, hi = 1.0f;
-    if (abs(dx) < 1e-7f)
-    {
-        if (abs(pa.x) > halfWidth)
-            return false;
-    }
-    else
-    {
-        // Интервал, где |x| не выходит за половину ширины покрышки.
-        const float ta = (-halfWidth - pa.x) / dx;
-        const float tb = (halfWidth - pa.x) / dx;
-        lo = max(lo, min(ta, tb));
-        hi = min(hi, max(ta, tb));
-        if (lo > hi)
-            return false;
-    }
-
-    // Квадратичный радиус: A t² + B t + C с ведущим коэффициентом A ≥ 0.
-    const float dy = pb.y - pa.y, dz = pb.z - pa.z;
-    const float A = dy * dy + dz * dz;
-    const float B = 2.0f * (pa.y * dy + pa.z * dz);
-    const float C = pa.y * pa.y + pa.z * pa.z;
-    float minR2, maxR2;
-    if (A < 1e-12f)
-        minR2 = maxR2 = C;
-    else
-    {
-        const float tv = clamp(-B / (2.0f * A), lo, hi);
-        minR2 = A * tv * tv + B * tv + C;
-        maxR2 = max(A * lo * lo + B * lo + C, A * hi * hi + B * hi + C);
-    }
-    return minR2 <= outer * outer && maxR2 >= inner * inner;
+    if (!clipBand(pa.x, pb.x, -halfWidth, halfWidth, lo, hi))
+        return false;
+    if (!clipBand(pa.y, pb.y, inner, outer, lo, hi))
+        return false;
+    // Радиус на входе в полосу: у отрезка, пришедшего в ступицу, он равен
+    // внутреннему радиусу покрышки — это и есть своя несущая балка.
+    const float radAt = pa.y + (pb.y - pa.y) * lo;
+    return radAt > inner;
 }
 
-/// Задевает ли балка покрышку колеса на этом конце. Своя несущая балка
-/// проверяется наравне с чужими: ось, идущая через ступицу, полосу не режет
-/// (там радиус нулевой), а наклонная балка режет резину, и подвеска такой
-/// машины ломается о покрышку.
+/// Сузить интервал параметра до части отрезка, лежащей внутри полосы
+/// [loV, hiV]. Отрезок, пересекающий полосу, но не удержавшийся в интервале,
+/// отвергается.
+private bool clipBand(const float a, const float b, const float loV, const float hiV,
+    ref float lo, ref float hi)
+{
+    const float d = b - a;
+    if (abs(d) < 1e-7f)
+        return a >= loV && a <= hiV;
+    float t0 = (loV - a) / d, t1 = (hiV - a) / d;
+    if (t0 > t1)
+    {
+        const float t = t0;
+        t0 = t1;
+        t1 = t;
+    }
+    lo = max(lo, t0);
+    hi = min(hi, t1);
+    return lo <= hi;
+}
+
+/// Задевает ли балка покрышку колеса на этом конце. Проверка идёт в системе
+/// колеса: ось диска поперечна курсу, и только тогда радиус от оси — это
+/// расстояние до резины. Балка, идущая по оси (в том числе своя несущая,
+/// кончающаяся в ступице), полосу не режет; наклонная — режет.
 private bool beamHitsTyre(const Growth g, size_t node)
 {
     const vec3 hub = g.f.nodes[node].pos;
@@ -895,25 +987,31 @@ private bool beamHitsTyre(const Growth g, size_t node)
     const float inner = wheelInnerRadius * scale - g.c.beamRadius;
     const float outer = g.c.wheelRadius + g.c.beamRadius;
     const float halfWidth = 0.5f * wheelWidth * scale + g.c.beamRadius;
+    const vec3 axle = wheelAxle(forward, up, hub);
 
     foreach (b; g.f.beams)
     {
-        const vec3 pa = g.f.nodes[b.a].pos - hub;
-        const vec3 pb = g.f.nodes[b.b].pos - hub;
+        // Свою ступицу балка не режет: ось законно проходит через собственное
+        // колесо. Полосу покрышки балка пересекает только когда подходит к
+        // ступице под углом, а не вдоль оси.
+        if (isOwnWheel(node, b.a, b.b))
+            continue;
+        const vec3 pa = projectTyre(g.f.nodes[b.a].pos - hub, axle);
+        const vec3 pb = projectTyre(g.f.nodes[b.b].pos - hub, axle);
         if (segmentHitsTyreBand(pa, pb, inner, outer, halfWidth))
             return true;
     }
     return false;
 }
 
-private float pointSegmentDistance(const vec3 p, const vec3 a, const vec3 b)
+/// Перевести точку в систему колеса: поперёк оси — `x`, радиальное
+/// расстояние от оси раскладывается в `y` (радиус) и `z` (нуль, чтобы
+/// `segmentHitsTyreBand` считала ровно один радиус, а не два).
+private vec3 projectTyre(const vec3 p, const vec3 axle)
 {
-    const vec3 ab = b - a;
-    const float len2 = dot(ab, ab);
-    if (len2 < 1e-12f)
-        return distance(p, a);
-    const float t = clamp(dot(p - a, ab) / len2, 0.0f, 1.0f);
-    return distance(p, a + ab * t);
+    const float axial = dot(p, axle);
+    const vec3 radial = p - axle * axial;
+    return vec3(axial, sqrt(dot(radial, radial)), 0.0f);
 }
 
 unittest
@@ -938,51 +1036,115 @@ unittest
     assert(motor, "без ведущего колеса машина не едет");
     assert(f.motorPower == founder.motorPower, "сила мотора — из гена");
     assert(buggyFitness(f) > 0.0f, "основатель обязан быть жизнеспособен");
+}
 
-    // Носовая вилка руля — общее правило роста, а не частный случай: стойка
-    // вперёд от передней центральной ноды с поперечиной на конце и колёсами
-    // на обоих концах поперечины.
-    size_t hub = size_t.max;
-    foreach (i, b; f.beams)
+// Временный перебор генов фазы поперечины: ищем вилку от steerNodeIndex.
+debug void growthSweep()
+{
+    import genetics.chromosome : Chromosome, SegmentGenes;
+    import std.stdio : writefln;
+    import physics_world.physics : steerNodeIndex;
+
+    static size_t deg(ref const Frame fr, size_t n)
     {
-        if (b.a != steerNodeIndex && b.b != steerNodeIndex)
-            continue;
-        const size_t far = b.a == steerNodeIndex ? b.b : b.a;
-        size_t degree;
-        foreach (b2; f.beams)
-            if (b2.a == far || b2.b == far)
-                ++degree;
-        if (degree == 3)
+        size_t d = 0;
+        foreach (bb; fr.beams)
         {
-            hub = far;
-            break;
+            const b = cast(Beam) bb;
+            if (b !is null && (b.a == n || b.b == n))
+                ++d;
+        }
+        return d;
+    }
+
+    const SegmentGenes stem = SegmentGenes(1.2f, 0.10f, 0.32f, 1.20f, 0.42f,
+        2.00f, 0.0f, 0.08f, 1.0f, 0.0f, 2.5f);
+    const SegmentGenes body = SegmentGenes(1.2f, 0.10f, 0.12f, 0.30f, 0.42f,
+        1.00f, 20.0f, 0.10f, 4.0f, 0.2f, 2.5f);
+
+    foreach (ad; [0.10f, 0.20f, 0.32f])
+    foreach (step; [0.20f, 0.30f, 0.40f])
+    foreach (flow; [0.20f, 0.30f, 0.40f])
+    {
+        Chromosome c;
+        c.segments = [
+            stem,
+            body,
+            SegmentGenes(0.20f, 0.10f, ad, 1.20f, 0.10f, flow, 2.0f, step,
+                2.0f, 0.0f, 2.5f),
+        ];
+        const auto grown = develop(c);
+        if (grown.isNull)
+            continue;
+        const auto f = grown.get;
+        bool ok = false;
+        size_t hub;
+        size_t[2] forkEnds;
+        float d01;
+        float whiskLen;
+        foreach (i, bb; f.beams)
+        {
+            const b = cast(Beam) bb;
+            if (b is null)
+                continue;
+            if (b.a != steerNodeIndex && b.b != steerNodeIndex)
+                continue;
+            const h = (b.a == steerNodeIndex) ? b.b : b.a;
+            const vec3 toHub = f.nodes[h].pos - f.nodes[steerNodeIndex].pos;
+            if (dot(toHub, forward) <= 0.0f)
+                continue;
+            size_t[2] halves, ends;
+            size_t nh = 0;
+            foreach (j, b2b; f.beams)
+            {
+                if (j == i)
+                    continue;
+                const b2 = cast(Beam) b2b;
+                if (b2 is null || (b2.a != h && b2.b != h))
+                    continue;
+                if (nh == 2) { nh = 3; break; }
+                halves[nh] = j;
+                ends[nh] = (b2.a == h) ? b2.b : b2.a;
+                ++nh;
+            }
+            if (nh != 2 || deg(f, h) != 3)
+                continue;
+            const vec3 st = toHub / toHub.length;
+            const vec3 e0 = (f.nodes[ends[0]].pos - f.nodes[h].pos)
+                / (f.nodes[ends[0]].pos - f.nodes[h].pos).length;
+            const vec3 e1 = (f.nodes[ends[1]].pos - f.nodes[h].pos)
+                / (f.nodes[ends[1]].pos - f.nodes[h].pos).length;
+            if (dot(e0, st) < 0.5f && dot(e1, st) < 0.5f && dot(e0, e1) < 0.0f
+                && deg(f, ends[0]) == 1 && deg(f, ends[1]) == 1)
+            {
+                ok = true;
+                hub = h;
+                d01 = dot(e0, e1);
+                forkEnds = ends;
+                whiskLen = distance(f.nodes[h].pos, f.nodes[ends[0]].pos);
+                break;
+            }
+        }
+        size_t pas = 0, mot = 0;
+        foreach (a; f.anchors)
+            if (a.kind == AnchorKind.motorWheel)
+                ++mot;
+            else
+                ++pas;
+        if (ok)
+        {
+            const bool e0w = f.anchors.canFind!((a) => a.node == forkEnds[0]);
+            const bool e1w = f.anchors.canFind!((a) => a.node == forkEnds[1]);
+            string ek;
+            foreach (a; f.anchors)
+                if (a.node == forkEnds[0] || a.node == forkEnds[1])
+                    ek ~= (a.kind == AnchorKind.motorWheel ? "M" : "w");
+            writefln("FORK ad=%.2f step=%.2f flow=%.2f "
+                ~ "hubZ=%.2f dot01=%.2f whisk=%.2f e0=(%.2f,%.2f) pas=%d mot=%d "
+                ~ "wheeled=%d,%d %s",
+                ad, step, flow, f.nodes[hub].pos.z, d01, whiskLen,
+                f.nodes[forkEnds[0]].pos.y, f.nodes[forkEnds[0]].pos.z,
+                pas, mot, e0w, e1w, ek);
         }
     }
-    assert(hub != size_t.max,
-        "из передней центральной ноды должна вырасти стойка с поперечиной");
-    assert(dot(f.nodes[hub].pos - f.nodes[steerNodeIndex].pos, forward) > 0.0f,
-        "стойка руля растёт по курсу, а не назад");
-    float ground = float.max;
-    foreach (a; f.anchors)
-        ground = min(ground, f.nodes[a.node].pos.z);
-    assert(abs(f.nodes[hub].pos.z - ground) < 1e-4f,
-        "стойка обязана спустить колёса вилки на землю");
-    size_t ends;
-    bool wheelLeft, wheelRight;
-    foreach (b; f.beams)
-        if ((b.a == hub || b.b == hub)
-            && b.a != steerNodeIndex && b.b != steerNodeIndex)
-        {
-            ++ends;
-            foreach (a; f.anchors)
-                if (a.node == (b.a == hub ? b.b : b.a) && a.kind == AnchorKind.wheel)
-                {
-                    if (ends == 1)
-                        wheelLeft = true;
-                    else
-                        wheelRight = true;
-                }
-        }
-    assert(ends == 2, "поперечина вилки — две балки");
-    assert(wheelLeft && wheelRight, "на обоих концах поперечины висят колёса");
 }

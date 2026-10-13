@@ -1661,8 +1661,8 @@ unittest
         }
 
         const c = node(vec3(0.0f, 0.3f, 0.35f));
-        const nose = node(vec3(0.0f, -0.9f, 0.35f)); // узел 1 = steerNodeIndex
-        const tip = node(vec3(0.0f, -1.6f, 0.35f));
+        const nose = node(vec3(0.0f, -0.9f, 0.85f)); // узел 1 = steerNodeIndex
+        const tip = node(vec3(0.0f, -1.0f, 0.35f));
         const fl = node(vec3(0.7f, -0.55f, 0.35f));
         const fr = node(vec3(-0.7f, -0.55f, 0.35f));
         const rl = node(vec3(0.7f, 0.4f, 0.35f));
@@ -1706,14 +1706,14 @@ unittest
         }
 
         const c = node(vec3(0.0f, 0.3f, 0.35f));
-        const nose = node(vec3(0.0f, -0.9f, 0.35f)); // узел 1 = steerNodeIndex
-        const hub = node(vec3(0.0f, -1.5f, 0.35f));
+        const nose = node(vec3(0.0f, -0.9f, 0.85f)); // узел 1 = steerNodeIndex
+        const hub = node(vec3(0.0f, -1.0f, 0.35f));
         const fl = node(vec3(0.7f, -0.55f, 0.35f));
         const fr = node(vec3(-0.7f, -0.55f, 0.35f));
         const rl = node(vec3(0.7f, 0.4f, 0.35f));
         const rr = node(vec3(-0.7f, 0.4f, 0.35f));
-        const nl = node(vec3(0.6f, -1.5f, 0.35f));
-        const nr = node(vec3(-0.6f, -1.5f, 0.35f));
+        const nl = node(vec3(0.6f, -1.0f, 0.35f));
+        const nr = node(vec3(-0.6f, -1.0f, 0.35f));
         frame.beams ~= new Beam(fl, fr, 0.045f);
         frame.beams ~= new Beam(rl, rr, 0.05f);
         frame.beams ~= new Beam(c, fl, 0.045f);
