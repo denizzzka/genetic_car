@@ -272,13 +272,11 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
     const double dt = 1.0 / physics.updateRate;
     const size_t steps = cast(size_t)(seconds / dt);
 
-    auto wheels = physics.wheelStates();
     r.beams = physics.beamStates().length;
 
-    double startY = 0.0;
-    foreach (s; wheels)
-        startY += s.position.y;
-    startY /= wheels.length;
+    // Прогресс — дуговая координата фокуса машины, спроецированного на
+    // фиксированный маршрут. Вне коридора прогресс замирает (см. routeProgress).
+    const route = fixedRoute();
 
     double farthest = 0.0;
     double reachTime = seconds;
@@ -300,15 +298,11 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
             break;
         }
 
-        wheels = physics.wheelStates();
-        double curY = 0.0;
-        foreach (s; wheels)
-            curY += s.position.y;
-        curY /= wheels.length;
-        const double downhill = startY - curY;   // +Y — вверх по склону
-        if (downhill > farthest)
+        const double progress = routeProgress(route, physics.surfaceFocus(),
+            cast(float) farthest);
+        if (progress > farthest)
         {
-            farthest = downhill;
+            farthest = progress;
             reachTime = dt * (i + 1);
         }
     }
@@ -318,7 +312,7 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
     // Зачёт — дожившим и остановившимся (переворот, застревание, кабина
     // коснулась земли) по пройденной дистанции; развалившийся каркас — 0.
     if (!structuralFailure(r.why))
-        r.score = finishScore(farthest, seconds, reachTime);
+        r.score = finishScore(farthest, route.totalLength, seconds, reachTime);
     if (r.why != RunOutcome.none)
         return r;
 
@@ -326,10 +320,11 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
     return r;
 }
 
-/// Счёт заезда: доля полной дистанции × средняя скорость доезда (в долях номинала).
-private float finishScore(double farthest, double seconds, double reachTime)
+/// Счёт заезда: доля маршрута × средняя скорость доезда (в долях номинала).
+private float finishScore(double farthest, double routeLength, double seconds,
+    double reachTime)
 {
-    const double distanceFrac = farthest / (physicsNominalSpeed * seconds);
+    const double distanceFrac = farthest / routeLength;
     const double speedRatio = farthest / (physicsNominalSpeed * reachTime);
     return clamp(cast(float)(distanceFrac * speedRatio), 0.0f, physicsSpeedCap);
 }
@@ -348,15 +343,15 @@ unittest
 
 unittest
 {
-    // finishScore: и общая дистанция, и скорость доезда влияют на счёт
+    // finishScore: и доля маршрута, и скорость доезда влияют на счёт
     // мультипликативно; быстрее и дальше — выше.
     const float eps = 1e-5f;
-    assert(abs(finishScore(12.0, 3.0, 3.0) - 1.0f) < eps);
-    assert(abs(finishScore(6.0, 3.0, 3.0) - 0.25f) < eps);
-    assert(abs(finishScore(6.0, 3.0, 1.5) - 0.5f) < eps);
-    assert(abs(finishScore(12.0, 3.0, 1.5) - physicsSpeedCap) < eps);
-    assert(abs(finishScore(24.0, 3.0, 1.5) - physicsSpeedCap) < eps);
-    assert(abs(finishScore(0.0, 3.0, 3.0) - 0.0f) < eps);
+    assert(abs(finishScore(12.0, 12.0, 3.0, 3.0) - 1.0f) < eps);
+    assert(abs(finishScore(6.0, 12.0, 3.0, 3.0) - 0.25f) < eps);
+    assert(abs(finishScore(6.0, 12.0, 3.0, 1.5) - 0.5f) < eps);
+    assert(abs(finishScore(12.0, 12.0, 3.0, 1.5) - physicsSpeedCap) < eps);
+    assert(abs(finishScore(24.0, 12.0, 3.0, 1.5) - physicsSpeedCap) < eps);
+    assert(abs(finishScore(0.0, 12.0, 3.0, 3.0) - 0.0f) < eps);
 }
 
 /// Доля узлов, у которых есть зеркальный партнёр через плоскость X=0.

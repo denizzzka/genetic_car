@@ -7,4 +7,5 @@ public import physics_world.wheel;
 public import physics_world.engineselect;
 public import physics_world.worldpool;
 public import physics_world.terrain;
+public import physics_world.route;
 public import physics_world.terrainworld;
