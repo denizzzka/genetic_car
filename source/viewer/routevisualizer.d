@@ -57,8 +57,8 @@ final class RouteVisualizer
         mesh_.indices = New!(uint[3][])(routeMeshCap);
 
         material_ = scene.addMaterial();
-        material_.baseColorFactor = Color4f(0.95f, 0.35f, 0.12f, 0.3f);
-        material_.emissionFactor = Color4f(0.25f, 0.08f, 0.02f, 0.3f);
+        material_.baseColorFactor = Color4f(0.85f, 0.85f, 0.85f, 0.2f);
+        material_.emissionFactor = Color4f(0.12f, 0.12f, 0.12f, 0.2f);
         material_.roughnessFactor = 0.6f;
         material_.metallicFactor = 0.0f;
         // Непрозрачный материал идёт в отложенный проход, где Geometry.frag
