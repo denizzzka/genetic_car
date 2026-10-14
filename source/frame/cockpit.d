@@ -68,21 +68,18 @@ ObjModel loadCockpit()
     return loadObjText(cockpitObjText, opt);
 }
 
-// Геометрия кабины — константа дизайна: меш вшит в бинарник, поэтому она
-// вычисляется из меша один раз при старте программы (static this) и дальше
-// не меняется; массивы внутри просто не трогаются после инициализации.
-private static CockpitGeometry cockpitGeom_;
+// Геометрия кабины — константа дизайна: считается из меша один раз за процесс.
+// immutable-значение модуля живёт в общей памяти, потокам доступно без лока.
+private immutable(CockpitGeometry) cockpitGeom_;
 
-static this()
+shared static this()
 {
     auto model = loadCockpit();
     scope (exit) Delete(model.asset);
-    cockpitGeom_ = cockpitGeometry(model);
+    cockpitGeom_ = cast(immutable) cockpitGeometry(model);
 }
 
-/// Геометрия кабины (кэш: вычислена из меша на старте программы).
-// TODO: кэш должен быть static immutable (вернёт настоящую immutable копию), но
-// сейчас структура с динамическими массивами не даёт вернуть её по значению.
+/// Геометрия кабины (кэш: из меша, один раз за процесс).
 const(CockpitGeometry) cockpitGeometry()
 {
     return cockpitGeom_;
