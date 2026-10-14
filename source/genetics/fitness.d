@@ -300,7 +300,7 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
             break;
         }
 
-        const focus = wheelFocus(physics);
+        const focus = physics.wheelFocus();
         const progress = routeProgress(route, focus, farthest);
         if (progress > farthest)
         {
@@ -321,19 +321,6 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
 
     r.survived = true;
     return r;
-}
-
-/// Среднее положение колёс — центр колесного footprint машины.
-private vec3 wheelFocus(BuggyPhysics physics)
-{
-    const wheels = physics.wheelStates();
-    if (wheels.length == 0)
-        return physics.surfaceFocus();
-
-    vec3 p = vec3(0.0f, 0.0f, 0.0f);
-    foreach (s; wheels)
-        p += s.position;
-    return p / wheels.length;
 }
 
 /// Счёт заезда: средний темп продвижения по дуге (в долях номинала),

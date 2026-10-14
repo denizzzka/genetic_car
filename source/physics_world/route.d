@@ -211,6 +211,52 @@ void trimRouteBehind(ref Route route, float s, float keepBehind)
     route.cursor = (route.cursor > drop) ? route.cursor - drop : 0;
 }
 
+/// Найти точку маршрута с дуговой координатой `s`, линейной интерполяцией
+/// между ближайшими точками окна. Если `s` находится за пределами окна,
+/// возвращает первую или последнюю точку соответственно.
+vec3 pointAtArc(ref Route route, float s)
+{
+    const auto arc = route.arc;
+    const auto pts = route.points;
+    if (pts.length == 0)
+        return origin;
+    if (pts.length == 1)
+        return pts[0];
+
+    // Ищем пару: arc[i] <= s <= arc[i+1]. Локальный поиск от курсора по
+    // направлению прогресса/ретроградно — окно небольшое, пиков мало.
+    size_t i = route.cursor;
+    if (i >= arc.length - 1)
+        i = arc.length - 2;
+    if (s < arc[i] && i > 0)
+    {
+        while (i > 0 && s < arc[i])
+            i -= 1;
+    }
+    else
+    {
+        while (i + 1 < arc.length - 1 && s > arc[i + 1])
+            i += 1;
+    }
+
+    // Теперь s лежит между arc[i] и arc[i+1].
+    const float aS = arc[i];
+    const float bS = arc[i + 1];
+    if (s <= aS)
+    {
+        route.cursor = i;
+        return pts[i];
+    }
+    if (s >= bS)
+    {
+        route.cursor = min(i + 1, arc.length - 2);
+        return pts[min(i + 1, arc.length - 1)];
+    }
+    const float t = (s - aS) / (bS - aS);
+    route.cursor = i;
+    return pts[i] + (pts[i + 1] - pts[i]) * t;
+}
+
 /// Мягкий штраф за съезд с коридора: 1 вне ширины, плавно падает к 0.
 /// TODO: подобрать форму и жёсткость по поведению отбора.
 float corridorFactor(float lateral)
@@ -355,4 +401,33 @@ unittest
         assert(r.points.length <= maxWindow);
     }
     assert(prev > refRoute.arc[$ - 1] - 1.0f);
+}
+
+@("route: pointAtArc интерполирует и зажимает края окна")
+unittest
+{
+    Route r;
+    r.baseS = 0.0f;
+    r.tailHeading = frameForward;
+    r.points ~= origin;
+    r.arc ~= 0.0f;
+    ensureRouteAhead(r, 200.0f);
+
+    // На узле дуги точка возвращается точно, поиск идёт от курсора вперёд.
+    foreach (i; 0 .. r.points.length)
+    {
+        const vec3 p = pointAtArc(r, r.arc[i]);
+        assert(distance(p, r.points[i]) < 1e-3f);
+    }
+
+    // Середина сегмента лежит на самом отрезке между соседними узлами.
+    const size_t k = r.points.length / 2;
+    const float mid = (r.arc[k] + r.arc[k + 1]) * 0.5f;
+    const vec3 pm = pointAtArc(r, mid);
+    assert(abs(distance(pm, r.points[k]) + distance(pm, r.points[k + 1])
+        - distance(r.points[k], r.points[k + 1])) < 1e-3f);
+
+    // За окном возвращаются крайние точки.
+    assert(distance(pointAtArc(r, -5.0f), r.points[0]) < 1e-3f);
+    assert(distance(pointAtArc(r, r.arc[$ - 1] + 5.0f), r.points[$ - 1]) < 1e-3f);
 }

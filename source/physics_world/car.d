@@ -26,6 +26,7 @@ import physics_world.physics;
 import physics_world.terrain;
 import physics_world.terrainworld;
 import physics_world.wheel;
+import physics_world.route;
 import frame.cockpit : CockpitGeometry, cockpitGeometry, cockpitInertia, cockpitMass;
 
 /// Машина: каркас багги вместе с якорями (колёсами). Только данные —
@@ -369,6 +370,10 @@ final class BuggyPhysics
     /// новый рекорд набега сбрасывает `stallTime_`.
     private float forwardBest_ = -float.max;
 
+    /// Собственное окно маршрута для Pure Pursuit. Каждый экземпляр ведёт
+    /// своё окно: общий маршрут гонялся бы между потоками отбора.
+    private Route route_;
+
     /// Машина-основа
     private const Buggy buggy_;
 
@@ -410,6 +415,7 @@ final class BuggyPhysics
         buildFrame();
         buildWheels();
         beamFail_ = BeamFailure.none;
+        route_ = fixedRoute();
     }
 
     ~this()
@@ -563,23 +569,41 @@ final class BuggyPhysics
             }
     }
 
-    /// Курсовой руль: отклонение курса мастера от целевого направления переводится
-    /// в команду угла балки. Целевой курс — направление вперёд рамки на старте
-    /// (car −Y).
+    /// Курсовой руль: Pure Pursuit по маршруту. Ведёт машину за точкой,
+    /// отстоящей вперёд по дуге на lookahead, — он же работает и в прогоне
+    /// отбора, поэтому заезд всегда управляем. Ручной режим (`autoSteer ==
+    /// false`, юнит-тесты) оставляет заданное рыскание, лишь зажимая его.
     private void applySteer()
     {
         if (steerJoint_ is null || steer is null || master is null)
             return;
-        // Курс — направление «−Y» каркаса: каркас собирается единым
-        // поворотом, поэтому его мировая ориентация = мировая мастера.
-        // Курс рамы в car-координатах — её −Y, поэтому ошибка рыскания
-        // считается по нему, а не по +Y.
-        const vec3 heading = master.worldRotation.rotate(
-            Vector3f(0.0f, -1.0f, 0.0f));
-        const float yawErr = courseYaw(heading);
-        const float cmdRaw = autoSteer ? steerGain * yawErr
-            : steerJoint_.targetYaw;
-        steerJoint_.targetYaw = clamp(cmdRaw, -steerLimitRad, steerLimitRad);
+
+        float cmd = steerJoint_.targetYaw;
+        if (autoSteer)
+        {
+            const vec3 focus = wheelFocus();
+            const RouteProjection rp = route_.project(focus);
+            route_.cursor = rp.segment;
+            ensureRouteAhead(route_, cast(float)rp.s + routeWindowHalfLength);
+            trimRouteBehind(route_, cast(float)rp.s, routeWindowHalfLength);
+
+            // Точка прицела — вперёд по дуге; с ростом скорости lookahead
+            // растёт, иначе на быстром ходу руль дёргается по близкой точке.
+            enum float lookaheadBase = 2.0f;
+            enum float lookaheadPerSpeed = 0.15f;
+            const float v = abs(alongCourse(master.velocity));
+            const float L = lookaheadBase + v * lookaheadPerSpeed;
+            const vec3 target = pointAtArc(route_, cast(float)rp.s + L);
+
+            const vec3 toTarget = target - focus;
+            const vec3 heading = master.worldRotation.rotate(
+                Vector3f(0.0f, -1.0f, 0.0f));
+            const float yawHeading = courseYaw(heading);
+            const float yawTarget = atan2(
+                acrossCourse(toTarget), alongCourse(toTarget));
+            cmd = steerGain * (yawTarget - yawHeading);
+        }
+        steerJoint_.targetYaw = clamp(cmd, -steerLimitRad, steerLimitRad);
     }
 
     /// Учёт застоя по курсу: новый рекорд набега вперёд сбрасывает таймер,
@@ -1290,6 +1314,17 @@ final class BuggyPhysics
         return terrain_.heightAt(p);
     }
 
+    vec3 wheelFocus() @property
+    {
+        const wheels = wheelStates();
+        if (wheels.length == 0)
+            return surfaceFocus();
+        vec3 p = vec3(0.0f, 0.0f, 0.0f);
+        foreach (s; wheels)
+            p += s.position;
+        return p / wheels.length;
+    }
+
     /// Фокус поверхности для стриминга окна: мастер, спроецированный на
     /// плоскость каркаса (вдоль `up` = 0).
     vec3 surfaceFocus() @property
@@ -1830,7 +1865,8 @@ unittest
         }
 
         // Курсовой руль в заезде: стартовая крутка мастера вокруг вертикали
-        // гасится, машина возвращается к курсу и не уходит в круг.
+        // не сбивает машину с маршрута — Pure Pursuit гасит её, прогресс
+        // растёт, а лента остаётся в коридоре.
         {
             auto physics = new BuggyPhysics(new Buggy(placedFrame(noseFrame())));
             scope (exit) physics.dispose();
@@ -1838,20 +1874,20 @@ unittest
 
             physics.masterBody.angularVelocity = Vector3f(0.0f, -0.8f, 0.0f);
 
-            float maxYawErr = 0.0f;
-            float lastYawErr = 0.0f;
+            Route route = fixedRoute();
+            double farthest = 0.0;
+            float maxLateral = 0.0f;
             foreach (_; 0 .. 360)
             {
                 physics.step(dt, 1.0f);
-                const vec3 heading = physics.masterBody.worldRotation.rotate(
-                    Vector3f(0.0f, -1.0f, 0.0f));
-                const float err = courseYaw(heading);
-                maxYawErr = max(maxYawErr, abs(err));
-                lastYawErr = err;
+                const focus = physics.wheelFocus();
+                farthest = max(farthest, routeProgress(route, focus, farthest));
+                maxLateral = max(maxLateral, route.project(focus).distance);
             }
-            assert(maxYawErr < 0.6f,
-                "руль развернул машину в круге [" ~ engineName(engine) ~ "]");
-            assert(abs(lastYawErr) < 0.3f, "руль не вернул машину к курсу");
+            assert(farthest > 5.0,
+                "руль не повёл машину по маршруту [" ~ engineName(engine) ~ "]");
+            assert(maxLateral < routeCorridorHalfWidth * 2.0f,
+                "машина ушла с маршрута [" ~ engineName(engine) ~ "]");
         }
 
         // Без листовой балки от узла 1 руля нет: каркас монолит, заезд обычный.
