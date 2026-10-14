@@ -61,6 +61,10 @@ final class RouteVisualizer
         material_.emissionFactor = Color4f(0.25f, 0.08f, 0.02f, 0.3f);
         material_.roughnessFactor = 0.6f;
         material_.metallicFactor = 0.0f;
+        // Непрозрачный материал идёт в отложенный проход, где Geometry.frag
+        // отсекает фрагменты по alphaTestThreshold (0.5), и alpha 0.3 стирает
+        // ленту целиком. Transparent уводит её в forward-проход с блендингом.
+        material_.blendMode = Transparent;
 
         entity_ = scene_.addEntity();
         entity_.drawable = mesh_;
