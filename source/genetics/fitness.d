@@ -220,7 +220,8 @@ struct PhysicsResult
     RunOutcome why = RunOutcome.none;
 }
 
-/// Счёт — доля полной дистанции × средняя скорость доезда (в долях номинала).
+/// Счёт — средний темп продвижения по дуге маршрута (в долях номинала),
+/// ослабленный мягким штрафом за съезд с коридора.
 PhysicsResult physicsFitness(const Buggy buggy, double seconds)
 {
     import physics_world.engineselect: simLock;
@@ -276,10 +277,11 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
 
     // Прогресс — дуговая координата фокуса машины, спроецированного на
     // фиксированный маршрут. Вне коридора прогресс замирает (см. routeProgress).
-    const route = fixedRoute();
+    Route route = fixedRoute();
 
     double farthest = 0.0;
     double reachTime = seconds;
+    float lateral = 0.0f;
     foreach (i; 0 .. steps)
     {
         physics.step(dt, 1.0f);
@@ -298,13 +300,14 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
             break;
         }
 
-        const double progress = routeProgress(route, physics.surfaceFocus(),
-            cast(float) farthest);
+        const focus = wheelFocus(physics);
+        const progress = routeProgress(route, focus, farthest);
         if (progress > farthest)
         {
             farthest = progress;
             reachTime = dt * (i + 1);
         }
+        lateral = route.project(focus).distance;
     }
 
     r.distance = farthest;
@@ -312,7 +315,7 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
     // Зачёт — дожившим и остановившимся (переворот, застревание, кабина
     // коснулась земли) по пройденной дистанции; развалившийся каркас — 0.
     if (!structuralFailure(r.why))
-        r.score = finishScore(farthest, route.totalLength, seconds, reachTime);
+        r.score = finishScore(farthest, seconds, reachTime, lateral);
     if (r.why != RunOutcome.none)
         return r;
 
@@ -320,13 +323,27 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
     return r;
 }
 
-/// Счёт заезда: доля маршрута × средняя скорость доезда (в долях номинала).
-private float finishScore(double farthest, double routeLength, double seconds,
-    double reachTime)
+/// Среднее положение колёс — центр колесного footprint машины.
+private vec3 wheelFocus(BuggyPhysics physics)
 {
-    const double distanceFrac = farthest / routeLength;
+    const wheels = physics.wheelStates();
+    if (wheels.length == 0)
+        return physics.surfaceFocus();
+
+    vec3 p = vec3(0.0f, 0.0f, 0.0f);
+    foreach (s; wheels)
+        p += s.position;
+    return p / wheels.length;
+}
+
+/// Счёт заезда: средний темп продвижения по дуге (в долях номинала),
+/// ослабленный мягким штрафом за съезд с коридора.
+private float finishScore(double farthest, double seconds, double reachTime,
+    float lateral)
+{
     const double speedRatio = farthest / (physicsNominalSpeed * reachTime);
-    return clamp(cast(float)(distanceFrac * speedRatio), 0.0f, physicsSpeedCap);
+    return clamp(cast(float)(speedRatio * corridorFactor(lateral)),
+        0.0f, physicsSpeedCap);
 }
 
 unittest
@@ -343,15 +360,16 @@ unittest
 
 unittest
 {
-    // finishScore: и доля маршрута, и скорость доезда влияют на счёт
-    // мультипликативно; быстрее и дальше — выше.
+    // finishScore: темп продвижения по дуге и штраф за съезд влияют на счёт
+    // мультипликативно; быстрее — выше, вне коридора — слабее.
     const float eps = 1e-5f;
-    assert(abs(finishScore(12.0, 12.0, 3.0, 3.0) - 1.0f) < eps);
-    assert(abs(finishScore(6.0, 12.0, 3.0, 3.0) - 0.25f) < eps);
-    assert(abs(finishScore(6.0, 12.0, 3.0, 1.5) - 0.5f) < eps);
-    assert(abs(finishScore(12.0, 12.0, 3.0, 1.5) - physicsSpeedCap) < eps);
-    assert(abs(finishScore(24.0, 12.0, 3.0, 1.5) - physicsSpeedCap) < eps);
-    assert(abs(finishScore(0.0, 12.0, 3.0, 3.0) - 0.0f) < eps);
+    assert(abs(finishScore(12.0, 3.0, 3.0, 0.0f) - 1.0f) < eps);
+    assert(abs(finishScore(6.0, 3.0, 3.0, 0.0f) - 0.5f) < eps);
+    assert(abs(finishScore(6.0, 3.0, 1.5, 0.0f) - 1.0f) < eps);
+    assert(abs(finishScore(12.0, 3.0, 1.5, 0.0f) - physicsSpeedCap) < eps);
+    assert(abs(finishScore(24.0, 3.0, 1.5, 0.0f) - physicsSpeedCap) < eps);
+    assert(abs(finishScore(0.0, 3.0, 3.0, 0.0f) - 0.0f) < eps);
+    assert(finishScore(12.0, 3.0, 3.0, 100.0f) < 0.01f);
 }
 
 /// Доля узлов, у которых есть зеркальный партнёр через плоскость X=0.

@@ -22,6 +22,7 @@ import physics_world;
 import physics_world.engine : PhysWorld;
 import viewer.scene : carToScenePos;
 import viewer.startaxes : buildStartAxes;
+import viewer.routevisualizer;
 import viewer.terrainvisualizer;
 import viewer.meshes;
 
@@ -142,6 +143,9 @@ class BuggyScene: Scene
 
     /// Визуализатор процедурной поверхности (общий shared-кэш с фитнесом).
     private TerrainVisualizer terrainVis;
+
+    /// Второй слой поверх поверхности: лента бесконечного маршрута.
+    private RouteVisualizer routeVis;
 
     /// ОТЛАДКА: виртуальная багги вместо физической — фокус окна со смещением
     /// едет вперёд-влево. Переключение клавишей F отключено; чтобы включить,
@@ -265,6 +269,7 @@ class BuggyScene: Scene
         // Плоская «земля» больше не нужна: её рисует процедурная поверхность
         // TerrainVisualizer (общий shared-кэш с фитнесом).
         terrainVis = new TerrainVisualizer(this, sharedTerrain());
+        routeVis = new RouteVisualizer(this, sharedTerrain());
 
         buildStartAxes(this, sharedTerrain());
 
@@ -434,6 +439,16 @@ class BuggyScene: Scene
             }
             else
                 terrainVis.update(livePhysics);
+        }
+
+        if (routeVis !is null)
+        {
+            // Лента следует за тем же фокусом, что и окно рельефа: скользящее
+            // окно маршрута продолжается вперёд, за машиной не хранится.
+            if (fakeCarMode_)
+                routeVis.updateFocus(fakeFocus_);
+            else
+                routeVis.update(livePhysics);
         }
     }
 
@@ -622,6 +637,11 @@ class BuggyScene: Scene
         liveWorld = acquireWorld();
         livePhysics = new BuggyPhysics(new Buggy(placedFrame(frame)),
             liveWorld, sharedTerrain());
+
+        // Заезд начинается со старта: окно маршрута возвращаем к началу,
+        // иначе лента осталась бы у места, где закончил прошлый заезд.
+        if (routeVis !is null)
+            routeVis.reset();
 
         liveSimTime = 0.0;
         liveTimeDebt = 0.0;
