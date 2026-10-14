@@ -92,9 +92,9 @@ void ensureJoltLoaded()
             // В этом C API таблица виртуальных вызовов слушателя одна на
             // процесс, поэтому ставится один раз; различать миры будет
             // `userData` у каждого слушателя.
-            // SetProcs хранит переданный указатель, а не копию: структура
-            // должна пережить инициализацию.
-            static JPH_ContactListener_Procs procs;
+            // SetProcs хранит указатель, а не копию, и он должен жить весь
+            // процесс: __gshared, а не thread-local static.
+            __gshared JPH_ContactListener_Procs procs;
             procs.OnContactValidate = &joltOnContactValidate;
             procs.OnContactAdded = &joltOnContactAdded;
             procs.OnContactPersisted = null;
