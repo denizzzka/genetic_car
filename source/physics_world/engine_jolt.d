@@ -973,10 +973,8 @@ final class JoltPhysWorld : PhysWorld
             // колбэки контактов, читающие ассоциативные массивы мира, ловят
             // сборку памяти под ногами. Вызывающему потоку это не грозит.
             JPH_JobSystemConfig cfg;
-            // Биндинг объявил поля как `JPH_QueueJobCallback*`, но libjoltc
-            // прыгает прямо по значению поля: адрес переменной был бы прыжком в данные.
-            cfg.queueJob = cast(JPH_QueueJobCallback*) &runInline;
-            cfg.queueJobs = cast(JPH_QueueJobsCallback*) &runInlineMany;
+            cfg.queueJob = &runInline;
+            cfg.queueJobs = &runInlineMany;
             cfg.maxConcurrency = 1;
             cfg.maxBarriers = 8;
             jobs_ = JPH_JobSystemCallback_Create(&cfg);
