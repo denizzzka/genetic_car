@@ -249,6 +249,15 @@ bool canDrive(const Frame f)
     return false;
 }
 
+/// Масса полой покрышки генетического радиуса: кольцо с теми же пропорциями,
+/// что и базовое колесо.
+private float tyreMass(const float r)
+{
+    const float ir = wheelInnerRadius * r / wheelRadius;
+    const float w = wheelWidth * r / wheelRadius;
+    return cast(float)(wheelDensity * PI * (r * r - ir * ir) * w);
+}
+
 /**
  * Физическая модель машины.
  *
@@ -1049,6 +1058,22 @@ final class BuggyPhysics
                     max(steerHi.z, p.z));
             }
         }
+        // Колёса вилки висят на рычаге и двигаются с ним: их инерция — часть
+        // сборки. Без неё лёгкий рычаг не держит тяжёлые диски, и оси
+        // «пружинят» относительно концов поперечины. Вес колёс при этом
+        // остаётся у самих колёс, поэтому рычагу он не начисляется.
+        const float steerBarsMass = steerMass;
+        foreach (a; frame.anchors)
+            if (steerWheelNodes_.canFind(a.node))
+            {
+                steerMass += tyreMass(a.radius);
+                const vec3 p = frame.nodes[a.node].pos;
+                const vec3 e = vec3(a.radius, a.radius, a.radius);
+                steerLo = vec3(min(steerLo.x, p.x - e.x),
+                    min(steerLo.y, p.y - e.y), min(steerLo.z, p.z - e.z));
+                steerHi = vec3(max(steerHi.x, p.x + e.x),
+                    max(steerHi.y, p.y + e.y), max(steerHi.z, p.z + e.z));
+            }
         if (steerMass <= 0.0f)
         {
             steerLo = origin;
@@ -1171,6 +1196,9 @@ final class BuggyPhysics
             const float axial = steerMass * (across * across + thick * thick) / 12.0f;
             const float perp = steerMass * (along * along + thick * thick) / 12.0f;
             steer.mass = steerMass;
+            // Инерция колёс нужна решателю, а вес их несут сами тела колёс.
+            if (steerMass > 0.0f)
+                steer.gravity = gravityAccel * (steerBarsMass / steerMass);
             steer.inertia = Vector3f(perp, axial, perp);
             steer.worldTransform(mid, qBeam);
             steer.syncPose();
@@ -1414,8 +1442,7 @@ final class BuggyPhysics
             const float ir = wheelInnerRadius * r / wheelRadius;
             const float w = wheelWidth * r / wheelRadius;
 
-            float mass = cast(float)(wheelDensity * PI
-                * (r * r - ir * ir) * w);
+            const float mass = tyreMass(r);
             // Покрышка полая: труба, а не диск. Сплошной диск отвергал любой
             // каркас — балка подвески, кроме несущей, попадала внутрь колеса.
             auto wheel = world.createBody(BodyRole.wheel, BodyMotion.dynamicBody,
