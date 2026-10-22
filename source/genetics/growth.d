@@ -1,7 +1,7 @@
 module genetics.growth;
 
 import std.algorithm : canFind, max, min, sort;
-import std.math : PI, abs, cos, sin, sqrt;
+import std.math : PI, abs, cos, round, sin, sqrt;
 import std.typecons : Nullable;
 
 // `std.math.exp` для float считается портабельным полиномом — в цикле поля
@@ -15,7 +15,7 @@ import core.sync.mutex;
 import frame.frame : Anchor, AnchorKind, Beam, Frame, Node, forward, up,
     alongCourse, right;
 import physics_world.physics : wheelInnerRadius, wheelWidth;
-import physics_world.wheel : defaultWheelRadius, isOwnWheel, wheelAxle;
+import physics_world.wheel : defaultWheelRadius, wheelAxle;
 
 import frame.cockpit : beamHitsCabin, cockpitFrameContext,
     cockpitFrameBeamCount, cockpitFrameNodeCount, cockpitGeometry,
@@ -806,6 +806,7 @@ private bool growBud(ref Growth g, const Bud bud)
     if (g.tooClose(bud.to, bud.tip))
         return false;
     g.addBeam(bud.tip, bud.to);
+    growWheelAxle(g, g.f.nodes.length - 1);
     return true;
 }
 
@@ -855,6 +856,27 @@ private void placeWheels(ref Growth g)
     }
     if (!motor && g.f.anchors.length > 0)
         g.f.anchors[0].kind = AnchorKind.motorWheel;
+}
+
+/// Поперечная ось под колесо: конец, который слышит ткань колеса, но несёт
+/// нога под углом, отращивает короткую ось вдоль ступицы. Тогда покрышку
+/// режет только сама нога, а она кончается до резины.
+private void growWheelAxle(ref Growth g, size_t tip)
+{
+    const vec3 p = g.f.nodes[tip].pos;
+    if (g.rawMotor(p) <= motorGate)
+        return;
+    if (g.response(p, wheelTissue) <= respondGate)
+        return;
+    if (axleShare(g, tip) > 0.7f)
+        return;
+
+    const float scale = g.c.wheelRadius / defaultWheelRadius;
+    const float len = 0.5f * wheelWidth * scale + g.c.beamRadius + wheelGap;
+    const vec3 hub = p + wheelAxle(forward, up, p) * len;
+    if (abs(hub.x - g.f.nodes[0].pos.x) > maxHalfWidth)
+        return;
+    g.addBeam(tip, hub);
 }
 
 /// Влезает ли колесо на этот конец.
@@ -956,11 +978,6 @@ private bool beamHitsTyre(const Growth g, size_t node)
 
     foreach (b; g.f.beams)
     {
-        // Свою ступицу балка не режет: ось законно проходит через собственное
-        // колесо. Полосу покрышки балка пересекает только когда подходит к
-        // ступице под углом, а не вдоль оси.
-        if (isOwnWheel(node, b.a, b.b))
-            continue;
         const vec3 pa = projectTyre(g.f.nodes[b.a].pos - hub, axle);
         const vec3 pb = projectTyre(g.f.nodes[b.b].pos - hub, axle);
         if (segmentHitsTyreBand(pa, pb, inner, outer, halfWidth))
