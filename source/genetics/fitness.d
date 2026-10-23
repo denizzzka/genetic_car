@@ -145,6 +145,9 @@ float buggyFitness(const Frame f)
         return 0.0f;
     if (f.beams.length > maxBeamCount)
         return 0.0f;
+    foreach (n; f.nodes)
+        if (!isFinite(n.pos.x) || !isFinite(n.pos.y) || !isFinite(n.pos.z))
+            return 0.0f;
     if (!isConnected(f))
         return 0.0f;
     if (f.anchors.length < 2)
