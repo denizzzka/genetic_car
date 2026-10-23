@@ -21,6 +21,10 @@ import frame.frame : origin, frameForward = forward, frameRight = right;
 /// (boxWidthHalf = 1.25). Вне коридора прогресс не начисляется.
 enum float routeCorridorHalfWidth = 1.5f;
 
+/// Дальше этого бокового отклонения заезд обрывается: вне коридора прогресс
+/// уже не растёт, и ехать поперёк маршрута бесконечно незачем.
+enum float routeMaxLateral = 2.0f * routeCorridorHalfWidth;
+
 /// Шаг разбиения дуг на полилинию, м.
 enum float routeStep = 1.0f;
 

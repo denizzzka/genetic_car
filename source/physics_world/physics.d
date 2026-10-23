@@ -302,6 +302,8 @@ enum RunOutcome : string
     cabinWheel = "колесо заходит в кабину",
     /// Кабина коснулась земли в заезде.
     cabinGround = "кабина касается земли",
+    /// Машина ушла слишком далеко вбок от маршрута.
+    offCourse = "машина ушла с траектории",
 }
 
 /// Разрушение каркаса: балки/колёса оборвались, ударились или ушли в землю.
@@ -312,6 +314,7 @@ bool structuralFailure(RunOutcome o)
     {
         case RunOutcome.stalled:
         case RunOutcome.rolledOver:
+        case RunOutcome.offCourse:
         case RunOutcome.singleWheel:
         case RunOutcome.noDrive:
         case RunOutcome.cabinPierce:

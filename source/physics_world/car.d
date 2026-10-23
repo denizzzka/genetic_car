@@ -1498,6 +1498,14 @@ version (unittest)
         return p / wheels.length;
     }
 
+    /// Боковое расстояние от фокуса машины до маршрута, м.
+    float routeDistance() @property
+    {
+        if (route_.points.length < 2)
+            return 0.0f;
+        return route_.project(wheelFocus()).distance;
+    }
+
     /// Фокус поверхности для стриминга окна: мастер, спроецированный на
     /// плоскость каркаса (вдоль `up` = 0).
     vec3 surfaceFocus() @property
@@ -1654,6 +1662,9 @@ RunOutcome runFailure(BuggyPhysics physics)
     // столько секунд подряд — это тоже сход с дистанции.
     if (physics.stallTime() > stallSeconds)
         return RunOutcome.stalled;
+
+    if (physics.routeDistance() > routeMaxLateral)
+        return RunOutcome.offCourse;
 
     const wheels = physics.wheelStates();
     if (wheels.length == 0)
