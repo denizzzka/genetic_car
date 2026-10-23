@@ -11,7 +11,7 @@ import genetics.chromosome;
 import genetics.growth : Organism, develop;
 import genetics.initial_data;
 import genetics.fitness;
-import genetics.generation : buildNextGeneration;
+import genetics.generation : GenerationStats, buildNextGeneration;
 import physics_world;
 import dlib.math.vector;
 import frame.frame;
@@ -44,6 +44,10 @@ struct EvolutionConfig
     /// (`physicsFitness`) и сводку best/mean по каждому поколению `evolve`.
     /// По умолчанию тихо — включается во вьюере для наблюдения за эволюцией.
     bool logPhysics = false;
+
+    /// Печатать сводку поколения: клоны, годные/негодные мутации, попытки,
+    /// число изменённых генов, уникальные геномы и разброс фитнеса.
+    bool logStats = false;
 }
 
 /// Поколение 0: идентичные копии закодированного дефолтного багги.
@@ -201,11 +205,18 @@ Individual[] evolve(Individual[] pop, size_t generations, ref Random rnd,
     auto cur = pop;
     foreach (gen; 0 .. generations)
     {
-        auto children = buildNextGeneration(cur, params, rnd);
+        GenerationStats stats;
+        auto children = buildNextGeneration(cur, params, rnd,
+            params.logStats ? &stats : null);
         auto batch = evaluateStatic(children, params);
         runPhysics(batch, params, gen + 1);
         cur = batch.res;
-        if (params.logPhysics)
+        if (params.logStats)
+        {
+            stats.addPopulation(cur);
+            writefln("gen %2d: %s", gen + 1, stats.line());
+        }
+        else if (params.logPhysics)
             writefln("gen %2d: best=%.4f mean=%.4f",
                 gen + 1, bestFitness(cur), meanFitness(cur));
     }

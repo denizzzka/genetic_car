@@ -1,6 +1,7 @@
 module genetics.generation;
 
 import std.algorithm : sort, map, min, max;
+import std.format : format;
 import std.array : array;
 import std.exception : enforce;
 import std.range : iota;
@@ -22,6 +23,90 @@ private enum size_t maxMutationAttempts = 30;
 /// незаполненные слоты поколения — повод для `enforce`.
 private enum size_t maxParentCycles = 3;
 
+/// Что дала мутация одного ребёнка. Считается только при включённой
+/// статистике: иначе поля остаются нулями и ничего не стоит.
+struct MutationStats
+{
+    size_t attempts;   // проб развития
+    size_t clones;     // вернулся родитель без изменений
+    size_t viable;     // первый же годный мутант
+    size_t fallback;   // годного нет, взят лучший негодный
+    size_t genes;      // сколько аллелей отличается от родителя
+
+    void add(const MutationStats other)
+    {
+        attempts += other.attempts;
+        clones += other.clones;
+        viable += other.viable;
+        fallback += other.fallback;
+        genes += other.genes;
+    }
+}
+
+/// Сводка поколения: мутации при сборке и фитнес после заездов.
+struct GenerationStats
+{
+    MutationStats mutation;
+    size_t individuals;
+    size_t unique;
+    float best;
+    float mean;
+    float variance;
+
+    void addPopulation(const Individual[] pop)
+    {
+        individuals = pop.length;
+        if (individuals == 0)
+            return;
+
+        best = bestFitness(pop);
+        mean = meanFitness(pop);
+        float sum = 0.0f;
+        foreach (e; pop)
+        {
+            const float d = e.fitness - mean;
+            sum += d * d;
+        }
+        variance = sum / individuals;
+
+        unique = 0;
+        foreach (i, e; pop)
+        {
+            bool seen;
+            foreach (j; 0 .. i)
+                if (alleles(pop[j].chromosome) == alleles(e.chromosome))
+                {
+                    seen = true;
+                    break;
+                }
+            if (!seen)
+                ++unique;
+        }
+    }
+
+    string line() const
+    {
+        const float n = individuals > 0 ? cast(float) individuals : 1.0f;
+        return format("clones=%d viable=%d fallback=%d attempts=%.1f genes=%.1f unique=%d/%d best=%.4f mean=%.4f var=%.5f",
+            mutation.clones, mutation.viable, mutation.fallback,
+            mutation.attempts / n, mutation.genes / n,
+            unique, individuals, best, mean, variance);
+    }
+}
+
+/// Сколько аллелей различаются, включая разницу длин списков фаз.
+private size_t alleleDistance(const Chromosome a, const Chromosome b)
+{
+    const aa = alleles(a);
+    const bb = alleles(b);
+    const size_t n = min(aa.length, bb.length);
+    size_t d = max(aa.length, bb.length) - n;
+    foreach (i; 0 .. n)
+        if (aa[i] != bb[i])
+            ++d;
+    return d;
+}
+
 /**
  * Годный ребёнок `base` для слотов будущей физической симуляции — вместе с
  * уже выращенным каркасом, который отбору незачем растить заново.
@@ -36,14 +121,17 @@ private enum size_t maxParentCycles = 3;
  * нулевому фитнесу, но эволюция не встанет колом.
  */
 Organism tryCreateViableMutant(const Chromosome base, const EvolutionConfig p,
-    ref Random rnd, Nullable!Frame baseFrame = Nullable!Frame.init)
+    ref Random rnd, Nullable!Frame baseFrame = Nullable!Frame.init,
+    MutationStats* stats = null)
 {
     Chromosome best = base.clone;
     Nullable!Frame bestFrame = baseFrame;
     size_t bestAnchors = baseFrame.isNull ? 0 : baseFrame.get.anchors.length;
+    size_t attempts;
 
     foreach (_; 0 .. maxMutationAttempts)
     {
+        ++attempts;
         auto trial = mutated(base, p.mutationRate, rnd);
         // Одна проба — один вырост: и годность, и число якорей берём из него же.
         auto grownFrame = develop(trial);
@@ -51,13 +139,30 @@ Organism tryCreateViableMutant(const Chromosome base, const EvolutionConfig p,
             continue;
         auto frame = grownFrame.get;
         if (buggyFitness(frame) > 0.0f)
+        {
+            if (stats !is null)
+            {
+                stats.attempts = attempts;
+                stats.viable = 1;
+                stats.genes = alleleDistance(trial, base);
+            }
             return Organism(trial, Nullable!Frame(frame));
+        }
         if (frame.anchors.length > bestAnchors)
         {
             best = trial;
             bestFrame = Nullable!Frame(frame);
             bestAnchors = frame.anchors.length;
         }
+    }
+    if (stats !is null)
+    {
+        stats.attempts = attempts;
+        stats.genes = alleleDistance(best, base);
+        if (stats.genes == 0)
+            stats.clones = 1;
+        else
+            stats.fallback = 1;
     }
     return Organism(best, bestFrame);
 }
@@ -68,8 +173,11 @@ Organism tryCreateViableMutant(const Chromosome base, const EvolutionConfig p,
 /// родителям; когда бюджет исчерпан, а слоты не заполнены — `enforce`.
 /// Каждый слот отдаёт `Organism` — каркас выращен попутно с проверкой годности.
 Organism[] buildNextGeneration(Individual[] pop, const EvolutionConfig p,
-    ref Random rnd)
+    ref Random rnd, GenerationStats* stats = null)
 {
+    if (stats !is null)
+        *stats = GenerationStats.init;
+
     assert(pop.length > 0,
         "не из чего строить следующее поколение: родителей нет");
 
@@ -117,8 +225,15 @@ Organism[] buildNextGeneration(Individual[] pop, const EvolutionConfig p,
         }
 
         Organism[] grown = new Organism[batch];
+        MutationStats[] mutStats;
+        if (stats !is null)
+            mutStats = new MutationStats[batch];
         foreach (k; workPool().parallel(iota(0, batch), 1))
-            grown[k] = tryCreateViableMutant(kids[k], p, kidsRnd[k], baseFrames[k]);
+            grown[k] = tryCreateViableMutant(kids[k], p, kidsRnd[k], baseFrames[k],
+                mutStats.length > 0 ? &mutStats[k] : null);
+        if (stats !is null)
+            foreach (s; mutStats)
+                stats.mutation.add(s);
         next ~= grown;
         visited += batch;
     }

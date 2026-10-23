@@ -32,6 +32,7 @@ private struct HeadlessOptions
     double simulateSeconds = physicsSimSeconds;
     size_t threads = 0;
     bool logPhysics = false;
+    bool logStats = false;
 }
 
 private HeadlessOptions parseHeadless(string[] args)
@@ -63,6 +64,9 @@ private HeadlessOptions parseHeadless(string[] args)
             case "-log", "--log":
                 opt.logPhysics = true;
                 break;
+            case "-stats", "--stats":
+                opt.logStats = true;
+                break;
             default:
                 break;
         }
@@ -75,6 +79,7 @@ private void runHeadless(const HeadlessOptions opt)
     EvolutionConfig cfg = EvolutionConfig.init;
     cfg.simulateSeconds = opt.simulateSeconds;
     cfg.logPhysics = opt.logPhysics;
+    cfg.logStats = opt.logStats;
 
     if (opt.threads > 0)
         setWorkPoolSize(opt.threads);
@@ -90,7 +95,9 @@ private void runHeadless(const HeadlessOptions opt)
     size_t prev = sw.peek.total!"msecs";
     foreach (gen; 0 .. opt.generations)
     {
-        auto nextGen = buildNextGeneration(cur, cfg, rnd);
+        GenerationStats stats;
+        auto nextGen = buildNextGeneration(cur, cfg, rnd,
+            cfg.logStats ? &stats : null);
         const size_t growMs = sw.peek.total!"msecs";
         auto batch = evaluateStatic(nextGen, cfg);
         const size_t evalMs = sw.peek.total!"msecs";
@@ -100,9 +107,12 @@ private void runHeadless(const HeadlessOptions opt)
         const size_t now = sw.peek.total!"msecs";
         const GenerationTiming timing = GenerationTiming((growMs - prev) / 1000.0,
             (evalMs - growMs) / 1000.0, (now - evalMs) / 1000.0);
-        writefln("поколение %d: needPhysics=%d best=%.4f mean=%.4f %s всего=%.1fs",
+        if (cfg.logStats)
+            stats.addPopulation(cur);
+        writefln("поколение %d: needPhysics=%d best=%.4f mean=%.4f %s всего=%.1fs%s",
             gen + 1, batch.needPhysics.length, bestFitness(cur), meanFitness(cur),
-            timing.toPhases(), now / 1000.0);
+            timing.toPhases(), now / 1000.0,
+            cfg.logStats ? " | " ~ stats.line() : "");
         prev = now;
     }
     writefln("headless done: %d поколений, seed %d", opt.generations, opt.seed);

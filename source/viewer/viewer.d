@@ -180,6 +180,9 @@ class BuggyScene: Scene
     /// (evaluateStatic) и фоновая физика — печатаются одной строкой.
     private GenerationTiming jobTiming_;
 
+    /// Необязательная сводка поколения: печатается при `runCfg.logStats`.
+    private GenerationStats stats_;
+
     override void afterLoad()
     {
         // BuggyScene создан через New! (dlib): GC не сканирует dlib-память.
@@ -196,6 +199,7 @@ class BuggyScene: Scene
         liveRunSeconds = evolutionConfig.simulateSeconds;
         // Виден ли ход заездов в stdout (по особам и поколениям).
         evolutionConfig.logPhysics = true;
+        evolutionConfig.logStats = true;
 
         // Мир показа берём из пула, поэтому фоновым остаётся на один меньше:
         // пик миров держится на потолке, а вьюер не ждёт освобождения за ними.
@@ -343,6 +347,7 @@ class BuggyScene: Scene
     {
         population = evaluatePopulation(seedPopulation(EvolutionConfig.populationSize));
         generation = 0;
+        stats_ = GenerationStats.init;
     }
 
     override void update(Time t)
@@ -403,6 +408,8 @@ class BuggyScene: Scene
                 cur = batch.res;
                 generation++;
                 population = cur;
+                if (runCfg.logStats)
+                    stats_.addPopulation(population);
                 batchIsPopulation_ = true;
                 if (stopRequested_ || gensDone + 1 >= runGens)
                 {
@@ -552,7 +559,9 @@ class BuggyScene: Scene
     private void startNextGen()
     {
         StopWatch swGen = StopWatch(AutoStart.yes);
-        auto children = buildNextGeneration(cur, runCfg, rnd);
+        stats_ = GenerationStats.init;
+        auto children = buildNextGeneration(cur, runCfg, rnd,
+            runCfg.logStats ? &stats_ : null);
         const double growSec = swGen.peek.total!"seconds";
         batch = evaluateStatic(children, runCfg);
         batchIsPopulation_ = false;   // это следующее поколение, не текущее
@@ -998,6 +1007,8 @@ class BuggyScene: Scene
         writefln("gen %d: best=%.4f mean=%.4f pop=%d %s",
             generation, bestFitness(population), meanFitness(population),
             population.length, jobTiming_.toPhases());
+        if (runCfg.logStats && stats_.individuals > 0)
+            writefln("  %s", stats_.line());
     }
 
     private void removeCar()
