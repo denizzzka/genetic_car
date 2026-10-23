@@ -319,6 +319,11 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
     // фиксированный маршрут. Вне коридора прогресс замирает (см. routeProgress).
     Route route = fixedRoute();
 
+    // Стартовый тайл рельефа: не выехал из него - машина не тронулась.
+    const TerrainConfig tcfg = sharedTerrain().config;
+    const TileIndex startTile = tileIndexAt(physics.wheelFocus(), tcfg);
+    bool leftStartTile = false;
+
     double farthest = 0.0;
     double reachTime = seconds;
     float lateral = 0.0f;
@@ -341,6 +346,9 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
         }
 
         const focus = physics.wheelFocus();
+        const tile = tileIndexAt(focus, tcfg);
+        if (tile.tx != startTile.tx || tile.ty != startTile.ty)
+            leftStartTile = true;
         const progress = routeProgress(route, focus, farthest);
         if (progress > farthest)
         {
@@ -352,6 +360,11 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
 
     r.distance = farthest;
     r.reachTime = reachTime;
+    if (!leftStartTile)
+    {
+        r.score = 0.0f;
+        return r;
+    }
     // Зачёт — дожившим и остановившимся (переворот, застревание, кабина
     // коснулась земли) по пройденной дистанции; развалившийся каркас — 0.
     if (!structuralFailure(r.why))
