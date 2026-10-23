@@ -9,6 +9,7 @@
 		"bindbc-opengl": "1.1.1",
 		"bindbc-sdl": "1.5.2",
 		"bindbc-spirvcross": "0.1.1",
+		"box3d": "1.2.0",
 		"dagon": "1.6.3",
 		"dlib": "1.8.1",
 		"fast_noise": "1.0.5"
