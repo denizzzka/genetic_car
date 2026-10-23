@@ -69,6 +69,75 @@ enum bool symmetryFitnessEnabled = true;
 ///     колёс: узлы за его гранью штрафуются долей;
 ///   - симметрия через плоскость X=0 и баланс ведущих колёс (слой
 ///     `symmetryFitnessEnabled`).
+/// Есть ли чем рулить: реальное поддерево балок от узла руля. Обход
+/// прекращается на других узлах кабины — связь с ними означает сращивание
+/// носа с рамой, и такой каркас уже не рулится.
+private bool hasSteering(const Frame f)
+{
+    import physics_world.physics : steerNodeIndex;
+
+    if (steerNodeIndex >= f.nodes.length)
+        return false;
+
+    bool hasStem;
+    foreach (b; f.beams)
+    {
+        const beam = cast(Beam) b;
+        if (beam is null)
+            continue;
+        if (beam.a != steerNodeIndex && beam.b != steerNodeIndex)
+            continue;
+        const size_t other = beam.a == steerNodeIndex ? beam.b : beam.a;
+        if (other < f.nodes.length
+            && dot(f.nodes[other].pos - f.nodes[steerNodeIndex].pos,
+                forward) > 0.0f)
+            hasStem = true;
+    }
+    if (!hasStem)
+        return false;
+
+    bool[] cabin = new bool[f.nodes.length];
+    foreach (b; f.beams)
+        if (cast(Beam) b is null)
+        {
+            if (b.a < cabin.length) cabin[b.a] = true;
+            if (b.b < cabin.length) cabin[b.b] = true;
+        }
+
+    bool[] seen = new bool[f.nodes.length];
+    size_t[] stack = [steerNodeIndex];
+    seen[steerNodeIndex] = true;
+    while (stack.length)
+    {
+        const size_t n = stack[$ - 1];
+        stack.length--;
+        foreach (b; f.beams)
+        {
+            const beam = cast(Beam) b;
+            if (beam is null)
+                continue;
+            if (beam.a != n && beam.b != n)
+                continue;
+            const size_t other = beam.a == n ? beam.b : beam.a;
+            if (other >= seen.length || seen[other])
+                continue;
+            if (cabin[other] && other != steerNodeIndex)
+                return false;
+            seen[other] = true;
+            stack ~= other;
+        }
+    }
+
+    foreach (b; f.beams)
+    {
+        const beam = cast(Beam) b;
+        if (beam !is null && beam.a < seen.length && beam.b < seen.length
+            && seen[beam.a] && seen[beam.b])
+            return true;
+    }
+    return false;
+}
+
 float buggyFitness(const Frame f)
 {
     // ---- Гейт: физическая выполнимость ----
@@ -108,6 +177,8 @@ float buggyFitness(const Frame f)
     }
     if (nMotor == 0)
         return 0.0f;
+    if (!hasSteering(f))
+        return 0.0f;
 
     // Опора — одно нижнее колесо: земля ложится по его нижней точке
     // (groundZ), все остальные колёса — где угодно: любой высоты, любого
@@ -117,6 +188,24 @@ float buggyFitness(const Frame f)
     // прощает касание, но не проникновение.
     foreach (n; f.nodes)
         if (n.pos.z < groundZ - epsFlat)
+            return 0.0f;
+
+    // Балка не должна зарываться в землю и резать покрышку: оба отказа
+    // в заезде структурные, поэтому отсекаем их ещё до физики.
+    float beamMargin;
+    foreach (b; f.beams)
+    {
+        const beam = cast(Beam) b;
+        if (beam is null)
+            continue;
+        beamMargin = max(beamMargin, beam.radius);
+        const float low = min(f.nodes[beam.a].pos.z, f.nodes[beam.b].pos.z)
+            - beam.radius;
+        if (low < groundZ - beamGroundEps)
+            return 0.0f;
+    }
+    foreach (a; f.anchors)
+        if (beamHitsTyre(f, a.node, a.radius, beamMargin))
             return 0.0f;
 
     // Кабина неприкосновенна: корпуса не касается ни одна балка и ни одно
@@ -279,6 +368,11 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
     // фиксированный маршрут. Вне коридора прогресс замирает (см. routeProgress).
     Route route = fixedRoute();
 
+    // Стартовые два тайла рельефа: не прошёл их - машина не тронулась.
+    const TerrainConfig tcfg = sharedTerrain().config;
+    const TileIndex startTile = tileIndexAt(physics.wheelFocus(), tcfg);
+    bool passedStart = false;
+
     double farthest = 0.0;
     double reachTime = seconds;
     float lateral = 0.0f;
@@ -301,17 +395,25 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
         }
 
         const focus = physics.wheelFocus();
+        const tile = tileIndexAt(focus, tcfg);
+        if (tile.tx >= startTile.tx + 2)
+            passedStart = true;
         const progress = routeProgress(route, focus, farthest);
         if (progress > farthest)
         {
             farthest = progress;
             reachTime = dt * (i + 1);
         }
-        lateral = route.project(focus).distance;
+        lateral = max(lateral, route.project(focus).distance);
     }
 
     r.distance = farthest;
     r.reachTime = reachTime;
+    if (!passedStart)
+    {
+        r.score = 0.0f;
+        return r;
+    }
     // Зачёт — дожившим и остановившимся (переворот, застревание, кабина
     // коснулась земли) по пройденной дистанции; развалившийся каркас — 0.
     if (!structuralFailure(r.why))
@@ -616,9 +718,10 @@ unittest
     assert(buggyFitness(underGround) == 0.0f,
         "балка ниже уровня земли должна отбраковываться");
 
-    // Тот же каркас с узлом, лишь касающимся земли (допуск), — не отбраковка.
+    // Тот же каркас, у которого поверхность балки лишь касается земли
+    // (радиус 0.04 над отметкой -1.045), — не отбраковка.
     Frame boundary = symmetricBuggyFrame();
-    boundary.nodes ~= Node(vec3(1.0f, 0.55f, -1.045f));
+    boundary.nodes ~= Node(vec3(1.0f, 0.55f, -1.005f));
     boundary.beams ~= new Beam(2, boundary.nodes.length - 1, 0.04f);
     assert(buggyFitness(boundary) > 0.0f,
         "касание плоскости земли в пределах допуска не отбраковывается");

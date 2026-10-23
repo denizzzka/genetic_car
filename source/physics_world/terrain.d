@@ -35,7 +35,7 @@ struct TerrainConfig
     /// Радиус плавного наката сложности от старта: за `rampLength` метров
     /// (по hypot вдоль плоскости) амплитуда и частота неровностей доходят до
     /// максимума через smoothstep(0, rampLength, d).
-    float rampLength = 120.0f;
+    float rampLength = 400.0f;
 
     /// Амплитуда неровностей у старта (почти ровно) и вдали от него, м.
     float baseAmplitude = 0.05f;

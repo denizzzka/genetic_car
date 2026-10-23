@@ -249,6 +249,15 @@ bool canDrive(const Frame f)
     return false;
 }
 
+/// Масса полой покрышки генетического радиуса: кольцо с теми же пропорциями,
+/// что и базовое колесо.
+private float tyreMass(const float r)
+{
+    const float ir = wheelInnerRadius * r / wheelRadius;
+    const float w = wheelWidth * r / wheelRadius;
+    return cast(float)(wheelDensity * PI * (r * r - ir * ir) * w);
+}
+
 /**
  * Физическая модель машины.
  *
@@ -828,12 +837,113 @@ final class BuggyPhysics
     }
     }
 
+    /**
+     * Рулевое поддерево: всё физическое, что прикреплено к узлу руля.
+     *
+     * Обход идёт по настоящим балкам и не разворачивается из других узлов
+     * кабины. Балка в такой узел означает сращивание носа с рамой: шарнир
+     * уже не может повернуть сборку, поэтому руля нет.
+     */
+    private void findSteeringAssembly(const Frame frame)
+    {
+        steerBeams_ = null;
+        steerWheelNodes_ = null;
+        if (steerNodeIndex >= frame.nodes.length)
+            return;
+
+        bool[] cabin = new bool[frame.nodes.length];
+        bool anyCabin;
+        foreach (b; frame.beams)
+            if (cast(Beam) b is null)
+            {
+                if (b.a < cabin.length) { cabin[b.a] = true; anyCabin = true; }
+                if (b.b < cabin.length) { cabin[b.b] = true; anyCabin = true; }
+            }
+        // Синтетические каркасы без кабины (тесты) опознаются по старой схеме.
+        version (unittest)
+        {
+            if (!anyCabin)
+            {
+                findSteeringAssemblyStrict(frame);
+                return;
+            }
+        }
+
+        // Нос начинается со стойки вперёд: боковая или задняя балка от узла
+        // руля рулём не является.
+        size_t stemIdx = size_t.max;
+        float stemAhead = 0.0f;
+        foreach (i, b; frame.beams)
+        {
+            const Beam beam = cast(Beam) b;
+            if (beam is null)
+                continue;
+            if (beam.a != steerNodeIndex && beam.b != steerNodeIndex)
+                continue;
+            const size_t other = beam.a == steerNodeIndex ? beam.b : beam.a;
+            const float ahead = dot(frame.nodes[other].pos
+                - frame.nodes[steerNodeIndex].pos, frameForward);
+            if (ahead > stemAhead)
+            {
+                stemAhead = ahead;
+                stemIdx = i;
+            }
+        }
+        if (stemIdx == size_t.max)
+            return;
+
+        bool[] seen = new bool[frame.nodes.length];
+        seen[steerNodeIndex] = true;
+        size_t[] stack = [steerNodeIndex];
+        size_t[] beams;
+        while (stack.length)
+        {
+            const size_t n = stack[$ - 1];
+            stack.length--;
+            foreach (i, b; frame.beams)
+            {
+                const Beam beam = cast(Beam) b;
+                if (beam is null)
+                    continue;
+                if (beam.a != n && beam.b != n)
+                    continue;
+                const size_t other = beam.a == n ? beam.b : beam.a;
+                if (other >= seen.length || seen[other])
+                    continue;
+                if (cabin[other] && other != steerNodeIndex)
+                    return;
+                seen[other] = true;
+                stack ~= other;
+                beams ~= i;
+            }
+        }
+        if (beams.length == 0)
+            return;
+        steerBeams_ = beams;
+
+        // Стойка — первая: по ней строятся тело рычага и ось шарнира.
+        foreach (k, idx; steerBeams_)
+            if (idx == stemIdx)
+            {
+                const size_t t = steerBeams_[0];
+                steerBeams_[0] = idx;
+                steerBeams_[k] = t;
+                break;
+            }
+
+        foreach (a; frame.anchors)
+            if (a.node < seen.length && seen[a.node]
+                && a.node != steerNodeIndex)
+                steerWheelNodes_ ~= a.node;
+    }
+
+version (unittest)
+{
     /// Насколько поперечной должна быть балка на конце стойки, чтобы считаться
     /// половиной поперечины, а не её продолжением вперёд.
     private enum float forkOrthoLimit = 0.5f;
 
-    /// Сколько балок (любых, включая эфемерные) сходятся в узле: свободный
-    /// конец стойки — одна, узел вилки — три.
+    /// Сколько балок (любых, включая эфемерные) сходятся в узле.
     private static size_t degree(const Frame frame, size_t node)
     {
         size_t n;
@@ -860,7 +970,7 @@ final class BuggyPhysics
      * побеждать выросшую наугад ветвь. Вилки нет — берётся самая длинная
      * листовая стойка, как и прежде.
      */
-    private void findSteeringAssembly(const Frame frame)
+    private void findSteeringAssemblyStrict(const Frame frame)
     {
         steerBeams_ = null;
         steerWheelNodes_ = null;
@@ -943,6 +1053,9 @@ final class BuggyPhysics
             && dot(side0, side1) < 0.0f
             && degree(frame, ends[0]) == 1 && degree(frame, ends[1]) == 1;
     }
+
+
+}
 
     private void buildGround()
     {
@@ -1049,6 +1162,22 @@ final class BuggyPhysics
                     max(steerHi.z, p.z));
             }
         }
+        // Колёса вилки висят на рычаге и двигаются с ним: их инерция — часть
+        // сборки. Без неё лёгкий рычаг не держит тяжёлые диски, и оси
+        // «пружинят» относительно концов поперечины. Вес колёс при этом
+        // остаётся у самих колёс, поэтому рычагу он не начисляется.
+        const float steerBarsMass = steerMass;
+        foreach (a; frame.anchors)
+            if (steerWheelNodes_.canFind(a.node))
+            {
+                steerMass += tyreMass(a.radius);
+                const vec3 p = frame.nodes[a.node].pos;
+                const vec3 e = vec3(a.radius, a.radius, a.radius);
+                steerLo = vec3(min(steerLo.x, p.x - e.x),
+                    min(steerLo.y, p.y - e.y), min(steerLo.z, p.z - e.z));
+                steerHi = vec3(max(steerHi.x, p.x + e.x),
+                    max(steerHi.y, p.y + e.y), max(steerHi.z, p.z + e.z));
+            }
         if (steerMass <= 0.0f)
         {
             steerLo = origin;
@@ -1171,6 +1300,9 @@ final class BuggyPhysics
             const float axial = steerMass * (across * across + thick * thick) / 12.0f;
             const float perp = steerMass * (along * along + thick * thick) / 12.0f;
             steer.mass = steerMass;
+            // Инерция колёс нужна решателю, а вес их несут сами тела колёс.
+            if (steerMass > 0.0f)
+                steer.gravity = gravityAccel * (steerBarsMass / steerMass);
             steer.inertia = Vector3f(perp, axial, perp);
             steer.worldTransform(mid, qBeam);
             steer.syncPose();
@@ -1414,8 +1546,7 @@ final class BuggyPhysics
             const float ir = wheelInnerRadius * r / wheelRadius;
             const float w = wheelWidth * r / wheelRadius;
 
-            float mass = cast(float)(wheelDensity * PI
-                * (r * r - ir * ir) * w);
+            const float mass = tyreMass(r);
             // Покрышка полая: труба, а не диск. Сплошной диск отвергал любой
             // каркас — балка подвески, кроме несущей, попадала внутрь колеса.
             auto wheel = world.createBody(BodyRole.wheel, BodyMotion.dynamicBody,

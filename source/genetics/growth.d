@@ -1,7 +1,7 @@
 module genetics.growth;
 
 import std.algorithm : canFind, max, min, sort;
-import std.math : PI, abs, cos, sin, sqrt;
+import std.math : PI, abs, cos, round, sin, sqrt;
 import std.typecons : Nullable;
 
 // `std.math.exp` для float считается портабельным полиномом — в цикле поля
@@ -14,8 +14,8 @@ import core.sync.mutex;
 
 import frame.frame : Anchor, AnchorKind, Beam, Frame, Node, forward, up,
     alongCourse, right;
-import physics_world.physics : wheelInnerRadius, wheelWidth;
-import physics_world.wheel : defaultWheelRadius, isOwnWheel, wheelAxle;
+import physics_world.physics : beamHitsTyre, wheelWidth;
+import physics_world.wheel : defaultWheelRadius, wheelAxle;
 
 import frame.cockpit : beamHitsCabin, cockpitFrameContext,
     cockpitFrameBeamCount, cockpitFrameNodeCount, cockpitGeometry,
@@ -806,6 +806,7 @@ private bool growBud(ref Growth g, const Bud bud)
     if (g.tooClose(bud.to, bud.tip))
         return false;
     g.addBeam(bud.tip, bud.to);
+    growWheelAxle(g, g.f.nodes.length - 1);
     return true;
 }
 
@@ -857,6 +858,27 @@ private void placeWheels(ref Growth g)
         g.f.anchors[0].kind = AnchorKind.motorWheel;
 }
 
+/// Поперечная ось под колесо: конец, который слышит ткань колеса, но несёт
+/// нога под углом, отращивает короткую ось вдоль ступицы. Тогда покрышку
+/// режет только сама нога, а она кончается до резины.
+private void growWheelAxle(ref Growth g, size_t tip)
+{
+    const vec3 p = g.f.nodes[tip].pos;
+    if (g.rawMotor(p) <= motorGate)
+        return;
+    if (g.response(p, wheelTissue) <= respondGate)
+        return;
+    if (axleShare(g, tip) > 0.7f)
+        return;
+
+    const float scale = g.c.wheelRadius / defaultWheelRadius;
+    const float len = 0.5f * wheelWidth * scale + g.c.beamRadius + wheelGap;
+    const vec3 hub = p + wheelAxle(forward, up, p) * len;
+    if (abs(hub.x - g.f.nodes[0].pos.x) > maxHalfWidth)
+        return;
+    g.addBeam(tip, hub);
+}
+
 /// Влезает ли колесо на этот конец.
 ///
 /// Три ограничения, и все они — геометрия, а не договорённость:
@@ -874,7 +896,7 @@ private bool wheelFits(const Growth g, size_t node)
         if (distance(p, g.f.nodes[a.node].pos) < r + a.radius + wheelGap)
             return false;
 
-    if (beamHitsTyre(g, node))
+    if (beamHitsTyre(g.f, node, g.c.wheelRadius, g.c.beamRadius))
         return false;
     return true;
 }
@@ -891,92 +913,6 @@ private float axleShare(const Growth g, size_t tip)
             return len > 0.0f ? abs(dot(other / len, right)) : 0.0f;
         }
     return 0.0f;
-}
-
-/// Задевает ли отрезок полосу покрышки: радиальный профиль `(радиус, осевая
-/// координата)` пересекается с полосой [inner, outer] по радиусу и
-/// [-halfWidth, halfWidth] по оси. Обе величины линейны вдоль отрезка, поэтому
-/// пересечение полосы — это пересечение двух интервалов параметра.
-///
-/// Ступица — начало координат: отрезок, пришедший в неё, имеет нулевой
-/// радиус в самой ступице. Настоящая резина начинается на `inner`, поэтому
-/// глубина проникновения считается от той точки, где отрезок входит в
-/// полосу, и балка, кончающаяся в ступице, резины не режет.
-private bool segmentHitsTyreBand(const vec3 pa, const vec3 pb,
-    const float inner, const float outer, const float halfWidth)
-{
-    // Отрезок, целиком лежащий на оси (обе точки при нулевом радиусе),
-    // полосу не режет: своя несущая балка проходит сквозь ступицу.
-    if (pa.y <= inner && pb.y <= inner)
-        return false;
-    float lo = 0.0f, hi = 1.0f;
-    if (!clipBand(pa.x, pb.x, -halfWidth, halfWidth, lo, hi))
-        return false;
-    if (!clipBand(pa.y, pb.y, inner, outer, lo, hi))
-        return false;
-    // Радиус на входе в полосу: у отрезка, пришедшего в ступицу, он равен
-    // внутреннему радиусу покрышки — это и есть своя несущая балка.
-    const float radAt = pa.y + (pb.y - pa.y) * lo;
-    return radAt > inner;
-}
-
-/// Сузить интервал параметра до части отрезка, лежащей внутри полосы
-/// [loV, hiV]. Отрезок, пересекающий полосу, но не удержавшийся в интервале,
-/// отвергается.
-private bool clipBand(const float a, const float b, const float loV, const float hiV,
-    ref float lo, ref float hi)
-{
-    const float d = b - a;
-    if (abs(d) < 1e-7f)
-        return a >= loV && a <= hiV;
-    float t0 = (loV - a) / d, t1 = (hiV - a) / d;
-    if (t0 > t1)
-    {
-        const float t = t0;
-        t0 = t1;
-        t1 = t;
-    }
-    lo = max(lo, t0);
-    hi = min(hi, t1);
-    return lo <= hi;
-}
-
-/// Задевает ли балка покрышку колеса на этом конце. Проверка идёт в системе
-/// колеса: ось диска поперечна курсу, и только тогда радиус от оси — это
-/// расстояние до резины. Балка, идущая по оси (в том числе своя несущая,
-/// кончающаяся в ступице), полосу не режет; наклонная — режет.
-private bool beamHitsTyre(const Growth g, size_t node)
-{
-    const vec3 hub = g.f.nodes[node].pos;
-    const float scale = g.c.wheelRadius / defaultWheelRadius;
-    const float inner = wheelInnerRadius * scale - g.c.beamRadius;
-    const float outer = g.c.wheelRadius + g.c.beamRadius;
-    const float halfWidth = 0.5f * wheelWidth * scale + g.c.beamRadius;
-    const vec3 axle = wheelAxle(forward, up, hub);
-
-    foreach (b; g.f.beams)
-    {
-        // Свою ступицу балка не режет: ось законно проходит через собственное
-        // колесо. Полосу покрышки балка пересекает только когда подходит к
-        // ступице под углом, а не вдоль оси.
-        if (isOwnWheel(node, b.a, b.b))
-            continue;
-        const vec3 pa = projectTyre(g.f.nodes[b.a].pos - hub, axle);
-        const vec3 pb = projectTyre(g.f.nodes[b.b].pos - hub, axle);
-        if (segmentHitsTyreBand(pa, pb, inner, outer, halfWidth))
-            return true;
-    }
-    return false;
-}
-
-/// Перевести точку в систему колеса: поперёк оси — `x`, радиальное
-/// расстояние от оси раскладывается в `y` (радиус) и `z` (нуль, чтобы
-/// `segmentHitsTyreBand` считала ровно один радиус, а не два).
-private vec3 projectTyre(const vec3 p, const vec3 axle)
-{
-    const float axial = dot(p, axle);
-    const vec3 radial = p - axle * axial;
-    return vec3(axial, sqrt(dot(radial, radial)), 0.0f);
 }
 
 unittest

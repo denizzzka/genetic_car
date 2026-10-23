@@ -128,7 +128,7 @@ struct Chromosome
  */
 enum SegmentGenes[] founderSegments = [
     SegmentGenes(1.2f, 0.10f, 0.32f, 1.20f, 0.42f, 2.00f, 0.0f, 0.08f, 1.0f, 0.0f, 2.5f),
-    SegmentGenes(1.2f, 0.10f, 0.12f, 0.30f, 0.42f, 1.00f, 20.0f, 0.10f, 4.0f, 0.2f, 2.5f),
+    SegmentGenes(1.2f, 0.10f, 0.12f, 0.30f, 0.42f, 0.00f, 20.0f, 0.10f, 4.0f, 0.2f, 2.5f),
     SegmentGenes(0.2f, 0.10f, 0.20f, 1.20f, 0.10f, 0.30f, 2.0f, 0.30f, 2.0f, 0.0f, 2.5f),
 ];
 
