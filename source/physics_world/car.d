@@ -1618,14 +1618,13 @@ RunOutcome runFailure(BuggyPhysics physics)
     if (wheels.length == 0)
         return RunOutcome.noWheels;
 
-    // Переворот — по наклону рамы, а не по высоте ступицы: подъём колеса на
-    // крене, отрыве или бугре переворотом не является. Допускаем до
-    // `maxTiltDegrees` крена (вбок) и тангажа (вперёд/назад).
-    const vec3 up = physics.bodyUp();
-    const float rollDeg = abs(atan2(acrossCourse(up), heightOf(up))) * 180.0f / PI;
-    const float pitchDeg = abs(atan2(alongCourse(up), heightOf(up))) * 180.0f / PI;
-    if (rollDeg > maxTiltDegrees || pitchDeg > maxTiltDegrees)
-        return RunOutcome.rolledOver;
+    // Переворот заезд не обрывает: без финиша машина может встать на колёса
+    // и поехать дальше. Сход дают застой, земля и контакты.
+    // const vec3 up = physics.bodyUp();
+    // const float rollDeg = abs(atan2(acrossCourse(up), heightOf(up))) * 180.0f / PI;
+    // const float pitchDeg = abs(atan2(alongCourse(up), heightOf(up))) * 180.0f / PI;
+    // if (rollDeg > maxTiltDegrees || pitchDeg > maxTiltDegrees)
+    //     return RunOutcome.rolledOver;
 
     foreach (s; wheels)
     {
@@ -1772,14 +1771,13 @@ unittest
     assert(heightOf(physics.bodyUp) > uprightZ,
         "усевшаяся машина стоит вертикально");
 
-    // Кладём раму набок жёстким разворотом: крен переваливает за предел, и
-    // вердикт обязан стать переворотом — хотя ступицы всё ещё ниже рамы.
+    // Кладём раму набок: переворот больше не обрывает заезд сам по себе.
     Quaternionf tilt = rotationBetween(frameUp, frameRight);
     physics.masterBody.worldTransform(
         tilt.rotate(physics.masterBody.worldPosition),
         tilt * physics.masterBody.worldRotation);
-    assert(runFailure(physics) == RunOutcome.rolledOver,
-        "перевёрнутая рама — сход с дистанции, а не ровная езда");
+    assert(runFailure(physics) != RunOutcome.rolledOver,
+        "перевёрнутая рама не обрывает заезд по одному лишь наклону");
 }
 
 unittest
