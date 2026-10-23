@@ -371,6 +371,11 @@ final class BuggyPhysics
     /// копят сюда причину, `beamFailure()` её выдаёт.
     private BeamFailure beamFail_;
 
+    /// Виновники провала: индексы балок в `Frame.beams` и колёс в `anchors`.
+    /// Вьюер оставляет их видимыми, пока моргает остальная машина.
+    private size_t[] failBeams_;
+    private size_t[] failWheels_;
+
     /// Время симуляции без нового продвижения вперёд по курсу (-Y каркаса).
     /// Обнуляется в `updateStall`, выливается в сход через `stallTime`.
     private double stallTime_ = 0.0;
@@ -469,6 +474,8 @@ final class BuggyPhysics
         steerWheelNodes_ = null;
         steerBuildQuat = Quaternionf.identity;
         beamFail_ = BeamFailure.none;
+        failBeams_.length = 0;
+        failWheels_.length = 0;
     }
 
     /// Частота шагов мира: столько раз в секунду движок готов считать.
@@ -489,6 +496,10 @@ final class BuggyPhysics
     {
         if (world is null)
             return;
+
+        beamFail_ = BeamFailure.none;
+        failBeams_.length = 0;
+        failWheels_.length = 0;
 
         applyDrive(throttle);
         applyWheelSpinGovernor(dt);
@@ -1367,6 +1378,24 @@ version (unittest)
     /// Разбор контактов за шаг: балка задела не своё колесо либо два колеса
     /// соприкоснулись — провал. Землю тут игнорируем, её ловит геометрическая
     /// beamUnderground().
+    private void addFailBeam(size_t i)
+    {
+        if (!failBeams_.canFind(i))
+            failBeams_ ~= i;
+    }
+
+    private void addFailWheel(size_t i)
+    {
+        if (!failWheels_.canFind(i))
+            failWheels_ ~= i;
+    }
+
+    /// Балки каркаса, из-за которых заезд оборван (индексы `Frame.beams`).
+    const(size_t)[] failureBeams() @property const { return failBeams_; }
+
+    /// Колёса каркаса, из-за которых заезд оборван (индексы `Frame.anchors`).
+    const(size_t)[] failureWheels() @property const { return failWheels_; }
+
     private void updateContacts()
     {
         foreach (pair; world.contacts())
@@ -1375,9 +1404,13 @@ version (unittest)
                 onBeamContact(pair.a.tag, pair.b);
             else if (pair.b.role == BodyRole.beam && pair.a.role == BodyRole.wheel)
                 onBeamContact(pair.b.tag, pair.a);
-            else if (pair.a.role == BodyRole.wheel && pair.b.role == BodyRole.wheel
-                && beamFail_ == BeamFailure.none)
-                beamFail_ = BeamFailure.wheelWheel;
+            else if (pair.a.role == BodyRole.wheel && pair.b.role == BodyRole.wheel)
+            {
+                if (beamFail_ == BeamFailure.none)
+                    beamFail_ = BeamFailure.wheelWheel;
+                addFailWheel(pair.a.tag);
+                addFailWheel(pair.b.tag);
+            }
         }
     }
 
@@ -1388,7 +1421,11 @@ version (unittest)
             if (w is other)
             {
                 if (!isOwnWheel(wheelNodes[wi], beamNodeA[beamIdx], beamNodeB[beamIdx]))
+                {
                     beamFail_ = BeamFailure.wheel;
+                    addFailBeam(beamIdx);
+                    addFailWheel(wi);
+                }
                 return;
             }
     }
@@ -1423,6 +1460,7 @@ version (unittest)
         if (master is null)
             return false;
         const Frame fr = buggy_.frame;
+        bool bad;
         foreach (i, b; beamBodies)
         {
             if (b is null)
@@ -1431,9 +1469,12 @@ version (unittest)
             const vec3 lowCar = b.worldPosition - dir * (beamLen[i] * 0.5f);
             const float ground = groundHeightAt(lowCar);
             if (heightOf(lowCar) - asBeam(fr.beams[i]).radius < ground - beamGroundEps)
-                return true;
+            {
+                addFailBeam(i);
+                bad = true;
+            }
         }
-        return false;
+        return bad;
     }
 
     /// Высота локальной земли в точке на плоскости каркаса (компоненты вдоль
@@ -1626,7 +1667,7 @@ RunOutcome runFailure(BuggyPhysics physics)
     // if (rollDeg > maxTiltDegrees || pitchDeg > maxTiltDegrees)
     //     return RunOutcome.rolledOver;
 
-    foreach (s; wheels)
+    foreach (wi, s; wheels)
     {
         if (!isFinite(s.position.x) || !isFinite(s.position.y)
             || !isFinite(s.position.z))
@@ -1635,7 +1676,10 @@ RunOutcome runFailure(BuggyPhysics physics)
         // Так колесо не «проваливается» на бугре и не «парит» над ложбиной.
         const float g = physics.groundHeightAt(s.position.xyz);
         if (heightOf(s.position) < g + physicsWheelBelow)
+        {
+            physics.addFailWheel(wi);
             return RunOutcome.wheelUnderground;
+        }
     }
 
     foreach (s; physics.beamStates())

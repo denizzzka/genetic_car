@@ -5,7 +5,7 @@ import dagon.core.keycodes;
 import dagon.core.time;
 import core.thread : Thread;
 import core.atomic : atomicStore, atomicLoad;
-import std.algorithm : min, map, reduce, sort;
+import std.algorithm : canFind, min, map, reduce, sort;
 import std.math : atan2;
 import std.range : evenChunks;
 import std.array : array;
@@ -128,6 +128,9 @@ class BuggyScene: Scene
     /// Камера-орбита; в живом заезде плавно ведёт центр масс машины.
     private FreeviewComponent freeview;
     private bool liveFailed_;
+
+    /// Виновники схода: их не скрывает моргание.
+    private bool[] liveNoBlink_;
     private bool nWasHandled_;
 
     /// V: показывать ли живой заезд текущего поколения (визуализация).
@@ -139,7 +142,7 @@ class BuggyScene: Scene
     /// Секунд реального времени после схода живого заезда: машина моргает
     /// (видима/скрыта) на этой частоте в ожидании переключения по N.
     private double liveFailTime;
-    private enum float liveBlinkHz = 2.0f;
+    private enum float liveBlinkHz = 4.0f;
 
     /// Визуализатор процедурной поверхности (общий shared-кэш с фитнесом).
     private TerrainVisualizer terrainVis;
@@ -647,6 +650,7 @@ class BuggyScene: Scene
         liveTimeDebt = 0.0;
         liveFailed_ = false;
         liveFailTime = 0.0;
+        liveNoBlink_.length = 0;
 
         // Мгновенно садим камеру на нового багги: при старте заезда и при
         // каждом N smoothTarget догонял бы цель несколько секунд с прежней
@@ -748,6 +752,7 @@ class BuggyScene: Scene
         {
             liveFailed_ = true;
             liveFailTime = 0.0;
+            markFailureParts();
             writefln("live: заезд оборван (%s) — машина заморожена, ждём N",
                 cast(string) stepFailure);
         }
@@ -755,14 +760,37 @@ class BuggyScene: Scene
         {
             liveFailed_ = true;
             liveFailTime = 0.0;
+            liveNoBlink_ = new bool[liveCar.length];
+            if (liveCabIdx_ < liveNoBlink_.length)
+                liveNoBlink_[liveCabIdx_] = true;
             writefln("live: кабина коснулась земли — машина заморожена, ждём N");
         }
     }
 
+    /// Виновники схода остаются видимыми: балки и колёса, которые движок
+    /// отметил при обрыве. Остальная машина моргает.
+    private void markFailureParts()
+    {
+        liveNoBlink_ = new bool[liveCar.length];
+        const Frame fr = livePhysics.frame;
+        const auto badBeams = livePhysics.failureBeams();
+        size_t k;
+        foreach (i, b; fr.beams)
+            if (cast(Beam) b !is null)
+            {
+                if (badBeams.canFind(i))
+                    liveNoBlink_[k] = true;
+                ++k;
+            }
+        foreach (wi; livePhysics.failureWheels())
+            if (k + wi < liveNoBlink_.length)
+                liveNoBlink_[k + wi] = true;
+    }
+
     private void setLiveVisible(const bool on)
     {
-        foreach (e; liveCar)
-            e.visible = on;
+        foreach (i, e; liveCar)
+            e.visible = (i < liveNoBlink_.length && liveNoBlink_[i]) || on;
     }
 
     private void removeLiveEntities()
@@ -774,6 +802,7 @@ class BuggyScene: Scene
             carRoot.removeChild(e);
         }
         liveCar.length = 0;
+        liveNoBlink_.length = 0;
         liveCabIdx_ = size_t.max;
     }
 
