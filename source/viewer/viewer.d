@@ -6,7 +6,7 @@ import dagon.core.time;
 import core.thread : Thread;
 import core.atomic : atomicStore, atomicLoad;
 import std.algorithm : canFind, min, map, reduce, sort;
-import std.math : atan2;
+import std.math : atan2, isFinite;
 import std.range : evenChunks;
 import std.array : array;
 import std.random;
@@ -1017,37 +1017,29 @@ class BuggyScene: Scene
 
     private void buildGallery()
     {
+        assert(population.length > 0, "витрина: пустая популяция");
         removeCar();
 
         const size_t strata = min(cast(size_t) galleryTop, population.length);
         Individual[] picks;
         foreach (members; population[0 .. $].evenChunks(strata))
-        {
-            // Особь без выращенного каркаса не рисуется: иначе её полоса
-            // витрины остаётся пустой. Берём лучшую из выращенных.
-            Individual best;
-            bool have;
-            foreach (m; members)
-                if (!m.frame.isNull && (!have || m.fitness > best.fitness))
-                {
-                    best = m;
-                    have = true;
-                }
-            if (have)
-                picks ~= best;
-        }
+            picks ~= members.reduce!((a, b) => a.fitness > b.fitness ? a : b);
 
         const float firstX = (picks.length - 1) * 0.5f * gallerySpacing;
 
         foreach (i, pick; picks)
         {
             auto f = develop(pick.chromosome);
-            if (f.isNull)
-                continue;
+            assert(!f.isNull, "витрина: у выбранной особи не выращен каркас");
+            const fr = f.get;
+            foreach (n; fr.nodes)
+                assert(isFinite(n.pos.x) && isFinite(n.pos.y)
+                    && isFinite(n.pos.z),
+                    "витрина: каркас с неконечными координатами");
             const float laneX = i * gallerySpacing - firstX;
             // Buggy раскладывает каркас сам (центр в нуле, колёса на земле);
             // витрине остаётся только сдвиг в свою полосу по X (display-only).
-            auto buggy = new Buggy(placedFrame(f.get));
+            auto buggy = new Buggy(placedFrame(fr));
             drawBuggy(buggy, vec3(laneX, 0.0f, 0.0f) + backward * galleryBack);
         }
 
