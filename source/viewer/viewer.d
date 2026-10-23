@@ -7,6 +7,7 @@ import core.thread : Thread;
 import core.atomic : atomicStore, atomicLoad;
 import std.algorithm : canFind, min, map, reduce, sort;
 import std.math : atan2, isFinite;
+import std.exception : enforce;
 import std.range : evenChunks;
 import std.array : array;
 import std.random;
@@ -1017,7 +1018,7 @@ class BuggyScene: Scene
 
     private void buildGallery()
     {
-        assert(population.length > 0, "витрина: пустая популяция");
+        enforce(population.length > 0, "витрина: пустая популяция");
         removeCar();
 
         const size_t strata = min(cast(size_t) galleryTop, population.length);
@@ -1030,10 +1031,10 @@ class BuggyScene: Scene
         foreach (i, pick; picks)
         {
             auto f = develop(pick.chromosome);
-            assert(!f.isNull, "витрина: у выбранной особи не выращен каркас");
+            enforce(!f.isNull, "витрина: у выбранной особи не выращен каркас");
             const fr = f.get;
             foreach (n; fr.nodes)
-                assert(isFinite(n.pos.x) && isFinite(n.pos.y)
+                enforce(isFinite(n.pos.x) && isFinite(n.pos.y)
                     && isFinite(n.pos.z),
                     "витрина: каркас с неконечными координатами");
             const float laneX = i * gallerySpacing - firstX;
