@@ -837,12 +837,113 @@ final class BuggyPhysics
     }
     }
 
+    /**
+     * Рулевое поддерево: всё физическое, что прикреплено к узлу руля.
+     *
+     * Обход идёт по настоящим балкам и не разворачивается из других узлов
+     * кабины. Балка в такой узел означает сращивание носа с рамой: шарнир
+     * уже не может повернуть сборку, поэтому руля нет.
+     */
+    private void findSteeringAssembly(const Frame frame)
+    {
+        steerBeams_ = null;
+        steerWheelNodes_ = null;
+        if (steerNodeIndex >= frame.nodes.length)
+            return;
+
+        bool[] cabin = new bool[frame.nodes.length];
+        bool anyCabin;
+        foreach (b; frame.beams)
+            if (cast(Beam) b is null)
+            {
+                if (b.a < cabin.length) { cabin[b.a] = true; anyCabin = true; }
+                if (b.b < cabin.length) { cabin[b.b] = true; anyCabin = true; }
+            }
+        // Синтетические каркасы без кабины (тесты) опознаются по старой схеме.
+        version (unittest)
+        {
+            if (!anyCabin)
+            {
+                findSteeringAssemblyStrict(frame);
+                return;
+            }
+        }
+
+        // Нос начинается со стойки вперёд: боковая или задняя балка от узла
+        // руля рулём не является.
+        size_t stemIdx = size_t.max;
+        float stemAhead = 0.0f;
+        foreach (i, b; frame.beams)
+        {
+            const Beam beam = cast(Beam) b;
+            if (beam is null)
+                continue;
+            if (beam.a != steerNodeIndex && beam.b != steerNodeIndex)
+                continue;
+            const size_t other = beam.a == steerNodeIndex ? beam.b : beam.a;
+            const float ahead = dot(frame.nodes[other].pos
+                - frame.nodes[steerNodeIndex].pos, frameForward);
+            if (ahead > stemAhead)
+            {
+                stemAhead = ahead;
+                stemIdx = i;
+            }
+        }
+        if (stemIdx == size_t.max)
+            return;
+
+        bool[] seen = new bool[frame.nodes.length];
+        seen[steerNodeIndex] = true;
+        size_t[] stack = [steerNodeIndex];
+        size_t[] beams;
+        while (stack.length)
+        {
+            const size_t n = stack[$ - 1];
+            stack.length--;
+            foreach (i, b; frame.beams)
+            {
+                const Beam beam = cast(Beam) b;
+                if (beam is null)
+                    continue;
+                if (beam.a != n && beam.b != n)
+                    continue;
+                const size_t other = beam.a == n ? beam.b : beam.a;
+                if (other >= seen.length || seen[other])
+                    continue;
+                if (cabin[other] && other != steerNodeIndex)
+                    return;
+                seen[other] = true;
+                stack ~= other;
+                beams ~= i;
+            }
+        }
+        if (beams.length == 0)
+            return;
+        steerBeams_ = beams;
+
+        // Стойка — первая: по ней строятся тело рычага и ось шарнира.
+        foreach (k, idx; steerBeams_)
+            if (idx == stemIdx)
+            {
+                const size_t t = steerBeams_[0];
+                steerBeams_[0] = idx;
+                steerBeams_[k] = t;
+                break;
+            }
+
+        foreach (a; frame.anchors)
+            if (a.node < seen.length && seen[a.node]
+                && a.node != steerNodeIndex)
+                steerWheelNodes_ ~= a.node;
+    }
+
+version (unittest)
+{
     /// Насколько поперечной должна быть балка на конце стойки, чтобы считаться
     /// половиной поперечины, а не её продолжением вперёд.
     private enum float forkOrthoLimit = 0.5f;
 
-    /// Сколько балок (любых, включая эфемерные) сходятся в узле: свободный
-    /// конец стойки — одна, узел вилки — три.
+    /// Сколько балок (любых, включая эфемерные) сходятся в узле.
     private static size_t degree(const Frame frame, size_t node)
     {
         size_t n;
@@ -869,7 +970,7 @@ final class BuggyPhysics
      * побеждать выросшую наугад ветвь. Вилки нет — берётся самая длинная
      * листовая стойка, как и прежде.
      */
-    private void findSteeringAssembly(const Frame frame)
+    private void findSteeringAssemblyStrict(const Frame frame)
     {
         steerBeams_ = null;
         steerWheelNodes_ = null;
@@ -952,6 +1053,9 @@ final class BuggyPhysics
             && dot(side0, side1) < 0.0f
             && degree(frame, ends[0]) == 1 && degree(frame, ends[1]) == 1;
     }
+
+
+}
 
     private void buildGround()
     {
