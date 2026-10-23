@@ -380,9 +380,10 @@ final class BuggyPhysics
     /// Обнуляется в `updateStall`, выливается в сход через `stallTime`.
     private double stallTime_ = 0.0;
 
-    /// Самая дальняя достигнутая точка по курсу (car-координата Y мастера);
-    /// новый рекорд набега сбрасывает `stallTime_`.
-    private float forwardBest_ = -float.max;
+    /// Набранный ход вперёд с последнего сброса, м. Маршрут и мировая Y
+    /// не годятся: в повороте и при съезде с ленты машина едет, а проекция
+    /// на маршрут стоит.
+    private double forwardTravel_ = 0.0;
 
     /// Собственное окно маршрута для Pure Pursuit. Каждый экземпляр ведёт
     /// своё окно: общий маршрут гонялся бы между потоками отбора.
@@ -633,17 +634,16 @@ final class BuggyPhysics
     {
         if (master is null)
             return;
-        const float fwd = alongCourse(master.worldPosition);
-        if (fwd > forwardBest_ + stallProgressEps)
+        const vec3 fwd = master.worldFrameRotation.rotate(frameForward);
+        const float v = dot(master.velocity, fwd);
+        forwardTravel_ += max(0.0f, v) * dt;
+        if (forwardTravel_ > stallProgressEps)
         {
-            forwardBest_ = fwd;
+            forwardTravel_ = 0.0;
             stallTime_ = 0.0;
         }
         else
-        {
-            forwardBest_ = max(forwardBest_, fwd);
             stallTime_ += dt;
-        }
     }
 
     /// Успокоить машину: шаги симуляции без движения, чтобы осадка рамы и
