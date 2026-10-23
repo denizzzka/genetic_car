@@ -141,6 +141,24 @@ float buggyFitness(const Frame f)
         if (n.pos.z < groundZ - epsFlat)
             return 0.0f;
 
+    // Балка не должна зарываться в землю и резать покрышку: оба отказа
+    // в заезде структурные, поэтому отсекаем их ещё до физики.
+    float beamMargin;
+    foreach (b; f.beams)
+    {
+        const beam = cast(Beam) b;
+        if (beam is null)
+            continue;
+        beamMargin = max(beamMargin, beam.radius);
+        const float low = min(f.nodes[beam.a].pos.z, f.nodes[beam.b].pos.z)
+            - beam.radius;
+        if (low < groundZ - beamGroundEps)
+            return 0.0f;
+    }
+    foreach (a; f.anchors)
+        if (beamHitsTyre(f, a.node, a.radius, beamMargin))
+            return 0.0f;
+
     // Кабина неприкосновенна: корпуса не касается ни одна балка и ни одно
     // колесо. Землю она тоже не касается: её низ (узел 0) — узел каркаса,
     // узлы же ниже опорной плоскости отброшены гейтом выше.
@@ -638,9 +656,10 @@ unittest
     assert(buggyFitness(underGround) == 0.0f,
         "балка ниже уровня земли должна отбраковываться");
 
-    // Тот же каркас с узлом, лишь касающимся земли (допуск), — не отбраковка.
+    // Тот же каркас, у которого поверхность балки лишь касается земли
+    // (радиус 0.04 над отметкой -1.045), — не отбраковка.
     Frame boundary = symmetricBuggyFrame();
-    boundary.nodes ~= Node(vec3(1.0f, 0.55f, -1.045f));
+    boundary.nodes ~= Node(vec3(1.0f, 0.55f, -1.005f));
     boundary.beams ~= new Beam(2, boundary.nodes.length - 1, 0.04f);
     assert(buggyFitness(boundary) > 0.0f,
         "касание плоскости земли в пределах допуска не отбраковывается");

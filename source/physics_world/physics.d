@@ -1,13 +1,15 @@
 module physics_world.physics;
 
-import std.algorithm : min;
-import std.math : abs, PI;
+import std.algorithm : max, min;
+import std.math : abs, PI, sqrt;
 
 import dlib.math.vector;
 import dlib.math.quaternion;
 
 import frame.frame : Frame, Node, EphemeralBeam, Beam, Anchor, AnchorKind,
-    origin, frameBackward = backward, heightOf;
+    origin, frameBackward = backward, heightOf,
+    frameForward = forward, frameUp = up;
+import physics_world.wheel : wheelAxle;
 
 /// Радиус колеса по умолчанию, м. Совпадает с внешним радиусом визуального
 /// тора и коллизионного цилиндра. Генетический радиус каждого колеса
@@ -129,6 +131,75 @@ enum float wheelInnerRadius = 0.22f;
 /// Ширина колеса (длина оси цилиндра) при базовом радиусе `wheelRadius`.
 /// Масштабируется пропорционально радиусу генетического колеса.
 enum float wheelWidth = 0.2f;
+
+/// Задевает ли отрезок полосу покрышки: радиальный профиль `(радиус, осевая
+/// координата)` пересекается с полосой [inner, outer] по радиусу и
+/// [-halfWidth, halfWidth] по оси. Обе величины линейны вдоль отрезка,
+/// поэтому пересечение полосы — пересечение двух интервалов параметра.
+private bool segmentHitsTyreBand(const vec3 pa, const vec3 pb,
+    const float inner, const float outer, const float halfWidth)
+{
+    if (pa.y <= inner && pb.y <= inner)
+        return false;
+    float lo = 0.0f, hi = 1.0f;
+    if (!clipBand(pa.x, pb.x, -halfWidth, halfWidth, lo, hi))
+        return false;
+    if (!clipBand(pa.y, pb.y, inner, outer, lo, hi))
+        return false;
+    const float radAt = pa.y + (pb.y - pa.y) * lo;
+    return radAt > inner;
+}
+
+private bool clipBand(const float a, const float b, const float loV,
+    const float hiV, ref float lo, ref float hi)
+{
+    const float d = b - a;
+    if (abs(d) < 1e-7f)
+        return a >= loV && a <= hiV;
+    float t0 = (loV - a) / d, t1 = (hiV - a) / d;
+    if (t0 > t1)
+    {
+        const float t = t0;
+        t0 = t1;
+        t1 = t;
+    }
+    lo = max(lo, t0);
+    hi = min(hi, t1);
+    return lo <= hi;
+}
+
+/// Перевести точку в систему колеса: поперёк оси — `x`, радиальное расстояние
+/// от оси — `y`.
+private vec3 projectTyre(const vec3 p, const vec3 axle)
+{
+    const float axial = dot(p, axle);
+    const vec3 radial = p - axle * axial;
+    return vec3(axial, sqrt(dot(radial, radial)), 0.0f);
+}
+
+/// Режет ли какая-нибудь балка покрышку колеса на узле `hubNode`. `margin` —
+/// запас на толщину балки: на него расширяется полоса покрышки.
+bool beamHitsTyre(const Frame f, size_t hubNode, float tyreRadius, float margin)
+{
+    const vec3 hub = f.nodes[hubNode].pos;
+    const float scale = tyreRadius / wheelRadius;
+    const float inner = wheelInnerRadius * scale - margin;
+    const float outer = tyreRadius + margin;
+    const float halfWidth = 0.5f * wheelWidth * scale + margin;
+    const vec3 axle = wheelAxle(frameForward, frameUp, hub);
+
+    foreach (b; f.beams)
+    {
+        const beam = cast(Beam) b;
+        if (beam is null)
+            continue;
+        const vec3 pa = projectTyre(f.nodes[beam.a].pos - hub, axle);
+        const vec3 pb = projectTyre(f.nodes[beam.b].pos - hub, axle);
+        if (segmentHitsTyreBand(pa, pb, inner, outer, halfWidth))
+            return true;
+    }
+    return false;
+}
 
 /// Плотность материала колеса, кг/м^3.
 enum float wheelDensity = 400.0f;
