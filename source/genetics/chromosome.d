@@ -180,7 +180,7 @@ Chromosome normalized(const Chromosome c)
 {
     auto r = c.clone;
     if (r.segments.length < minSegments)
-        r.segments = [SegmentGenes.init];
+        r.segments = founderSegments[0 .. minSegments].dup;
     clampFields(r.species, speciesLo, speciesHi);
     foreach (ref seg; r.segments)
     {
