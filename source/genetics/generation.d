@@ -44,6 +44,15 @@ struct MutationStats
     }
 }
 
+/// Среднее, разброс и пределы одного гена по популяции.
+struct Spread
+{
+    float mean;
+    float sd;
+    float min = float.max;
+    float max = -float.max;
+}
+
 /// Сводка поколения: мутации при сборке и фитнес после заездов.
 struct GenerationStats
 {
@@ -54,12 +63,10 @@ struct GenerationStats
     float mean;
     float variance;
 
-    /// Наследуемая изменчивость популяции: среднее, разброс и пределы
-    /// гена mutationRate.
-    float rateMean;
-    float rateSd;
-    float rateMin;
-    float rateMax;
+    /// Наследуемая изменчивость: шаг, доля мутирующих генов и индел.
+    Spread rate;
+    Spread chance;
+    Spread indel;
 
     void addPopulation(const Individual[] pop)
     {
@@ -77,24 +84,9 @@ struct GenerationStats
         }
         variance = sum / individuals;
 
-        float rateSum = 0.0f;
-        rateMin = float.max;
-        rateMax = -float.max;
-        foreach (e; pop)
-        {
-            const float r = e.chromosome.mutationRate;
-            rateSum += r;
-            rateMin = min(rateMin, r);
-            rateMax = max(rateMax, r);
-        }
-        rateMean = rateSum / individuals;
-        float rateVar = 0.0f;
-        foreach (e; pop)
-        {
-            const float d = e.chromosome.mutationRate - rateMean;
-            rateVar += d * d;
-        }
-        rateSd = sqrt(rateVar / individuals);
+        rate = spreadOf(pop, c => c.mutationRate);
+        chance = spreadOf(pop, c => c.mutationChance);
+        indel = spreadOf(pop, c => c.indelRate);
 
         unique = 0;
         foreach (i, e; pop)
@@ -114,12 +106,39 @@ struct GenerationStats
     string line() const
     {
         const float n = individuals > 0 ? cast(float) individuals : 1.0f;
-        return format("clones=%d viable=%d fallback=%d attempts=%.1f genes=%.1f unique=%d/%d best=%.4f mean=%.4f var=%.5f rate=%.5f±%.5f [%.5f..%.5f]",
+        return format("clones=%d viable=%d fallback=%d attempts=%.1f genes=%.1f unique=%d/%d best=%.4f mean=%.4f var=%.5f rate=%.5f±%.5f [%.5f..%.5f] chance=%.3f±%.3f [%.3f..%.3f] indel=%.4f±%.4f [%.4f..%.4f]",
             mutation.clones, mutation.viable, mutation.fallback,
             mutation.attempts / n, mutation.genes / n,
             unique, individuals, best, mean, variance,
-            rateMean, rateSd, rateMin, rateMax);
+            rate.mean, rate.sd, rate.min, rate.max,
+            chance.mean, chance.sd, chance.min, chance.max,
+            indel.mean, indel.sd, indel.min, indel.max);
     }
+}
+
+private Spread spreadOf(const Individual[] pop,
+    scope float delegate(const Chromosome) value)
+{
+    Spread s;
+    if (pop.length == 0)
+        return s;
+    float sum = 0.0f;
+    foreach (e; pop)
+    {
+        const float v = value(e.chromosome);
+        sum += v;
+        s.min = min(s.min, v);
+        s.max = max(s.max, v);
+    }
+    s.mean = sum / pop.length;
+    float sq = 0.0f;
+    foreach (e; pop)
+    {
+        const float d = value(e.chromosome) - s.mean;
+        sq += d * d;
+    }
+    s.sd = sqrt(sq / pop.length);
+    return s;
 }
 
 /// Сколько аллелей различаются, включая разницу длин списков фаз.

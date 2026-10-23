@@ -18,9 +18,6 @@ enum float inhSpreadFloor = 1.5f;
 enum size_t minSegments = 1;
 enum size_t maxSegments = 8;
 
-/// Вероятность индела — вставки или удаления фазы за одну мутацию. Так список
-/// фаз становится признаком переменной длины, а не только набором значений.
-enum float indelRate = 0.1f;
 
 /// Гены вида: одно значение на организм, фазами не дробятся.
 struct SpeciesGenes
@@ -37,6 +34,13 @@ struct SpeciesGenes
     /// Шаг мутации потомков в долях диапазона гена. Тоже ген: изменчивость
     /// наследуется, скрещивается и отбирается вместе со всем остальным.
     float mutationRate = 0.05f;
+
+    /// Доля генов, которые мутируют за одну мутацию. Ниже — меньше генов
+    /// ломается разом; тоже наследуется и отбирается.
+    float mutationChance = 0.25f;
+
+    /// Вероятность индела — вставки или удаления фазы за одну мутацию.
+    float indelRate = 0.1f;
 }
 
 /// Гены фазы роста: поле, которым в этой фазе строится тело. Список таких фаз и
@@ -137,8 +141,8 @@ enum SegmentGenes[] founderSegments = [
 ];
 
 /// Границы генов вида — те же поля в том же порядке, что и `tupleof`.
-enum float[speciesGeneCount] speciesLo = [0.02f, 0.10f, -200.0f, 0.00001f];
-enum float[speciesGeneCount] speciesHi = [0.08f, 0.40f, 200.0f, 0.5f];
+enum float[speciesGeneCount] speciesLo = [0.02f, 0.10f, -200.0f, 0.00001f, 0.01f, 0.00001f];
+enum float[speciesGeneCount] speciesHi = [0.08f, 0.40f, 200.0f, 0.5f, 1.0f, 0.5f];
 
 /// Границы генов фазы — тоже свойства вида, а не гены: выход за границу
 /// означает «не такая машина», а не другой организм.
@@ -199,16 +203,20 @@ Chromosome normalized(const Chromosome c)
 /// но слабо: организм остаётся собой, а число фаз дрейфует.
 Chromosome mutated(const Chromosome c, float rate, ref Random rnd)
 {
+    const float chance = c.mutationChance;
+    const float indel = c.indelRate;
     auto r = c.clone;
     static foreach (i; 0 .. speciesGeneCount)
-        r.species.tupleof[i] += rate * (speciesHi[i] - speciesLo[i])
-            * cast(float) gaussian(rnd);
+        if (uniform(0.0f, 1.0f, rnd) < chance)
+            r.species.tupleof[i] += rate * (speciesHi[i] - speciesLo[i])
+                * cast(float) gaussian(rnd);
     foreach (ref seg; r.segments)
         static foreach (i; 0 .. segmentGeneCount)
-            seg.tupleof[i] += rate * (segmentHi[i] - segmentLo[i])
-                * cast(float) gaussian(rnd);
+            if (uniform(0.0f, 1.0f, rnd) < chance)
+                seg.tupleof[i] += rate * (segmentHi[i] - segmentLo[i])
+                    * cast(float) gaussian(rnd);
 
-    if (uniform(0.0f, 1.0f, rnd) < indelRate)
+    if (uniform(0.0f, 1.0f, rnd) < indel)
     {
         if (r.segments.length >= maxSegments
             || (r.segments.length > minSegments
