@@ -307,7 +307,7 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
             farthest = progress;
             reachTime = dt * (i + 1);
         }
-        lateral = route.project(focus).distance;
+        lateral = max(lateral, route.project(focus).distance);
     }
 
     r.distance = farthest;
