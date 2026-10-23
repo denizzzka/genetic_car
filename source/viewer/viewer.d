@@ -993,7 +993,20 @@ class BuggyScene: Scene
         const size_t strata = min(cast(size_t) galleryTop, population.length);
         Individual[] picks;
         foreach (members; population[0 .. $].evenChunks(strata))
-            picks ~= members.reduce!((a, b) => a.fitness > b.fitness ? a : b);
+        {
+            // Особь без выращенного каркаса не рисуется: иначе её полоса
+            // витрины остаётся пустой. Берём лучшую из выращенных.
+            Individual best;
+            bool have;
+            foreach (m; members)
+                if (!m.frame.isNull && (!have || m.fitness > best.fitness))
+                {
+                    best = m;
+                    have = true;
+                }
+            if (have)
+                picks ~= best;
+        }
 
         const float firstX = (picks.length - 1) * 0.5f * gallerySpacing;
 
