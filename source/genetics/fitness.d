@@ -69,21 +69,53 @@ enum bool symmetryFitnessEnabled = true;
 ///     колёс: узлы за его гранью штрафуются долей;
 ///   - симметрия через плоскость X=0 и баланс ведущих колёс (слой
 ///     `symmetryFitnessEnabled`).
-/// Есть ли чем рулить: балка от узла руля, уходящая вперёд. Без неё
-/// рулевой шарнир нечего крутить, и признак теряется из поколения в поколение.
+/// Есть ли чем рулить: реальное поддерево балок от узла руля. Обход
+/// прекращается на других узлах кабины — связь с ними означает сращивание
+/// носа с рамой, и такой каркас уже не рулится.
 private bool hasSteering(const Frame f)
 {
     import physics_world.physics : steerNodeIndex;
 
+    if (steerNodeIndex >= f.nodes.length)
+        return false;
+
+    bool[] cabin = new bool[f.nodes.length];
+    foreach (b; f.beams)
+        if (cast(Beam) b is null)
+        {
+            if (b.a < cabin.length) cabin[b.a] = true;
+            if (b.b < cabin.length) cabin[b.b] = true;
+        }
+
+    bool[] seen = new bool[f.nodes.length];
+    size_t[] stack = [steerNodeIndex];
+    seen[steerNodeIndex] = true;
+    while (stack.length)
+    {
+        const size_t n = stack[$ - 1];
+        stack.length--;
+        foreach (b; f.beams)
+        {
+            const beam = cast(Beam) b;
+            if (beam is null)
+                continue;
+            if (beam.a != n && beam.b != n)
+                continue;
+            const size_t other = beam.a == n ? beam.b : beam.a;
+            if (other >= seen.length || seen[other])
+                continue;
+            if (cabin[other] && other != steerNodeIndex)
+                return false;
+            seen[other] = true;
+            stack ~= other;
+        }
+    }
+
     foreach (b; f.beams)
     {
         const beam = cast(Beam) b;
-        if (beam is null)
-            continue;
-        if (beam.a != steerNodeIndex && beam.b != steerNodeIndex)
-            continue;
-        const size_t hub = beam.a == steerNodeIndex ? beam.b : beam.a;
-        if (dot(f.nodes[hub].pos - f.nodes[steerNodeIndex].pos, forward) > 0.0f)
+        if (beam !is null && beam.a < seen.length && beam.b < seen.length
+            && seen[beam.a] && seen[beam.b])
             return true;
     }
     return false;
