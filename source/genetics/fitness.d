@@ -79,6 +79,23 @@ private bool hasSteering(const Frame f)
     if (steerNodeIndex >= f.nodes.length)
         return false;
 
+    bool hasStem;
+    foreach (b; f.beams)
+    {
+        const beam = cast(Beam) b;
+        if (beam is null)
+            continue;
+        if (beam.a != steerNodeIndex && beam.b != steerNodeIndex)
+            continue;
+        const size_t other = beam.a == steerNodeIndex ? beam.b : beam.a;
+        if (other < f.nodes.length
+            && dot(f.nodes[other].pos - f.nodes[steerNodeIndex].pos,
+                forward) > 0.0f)
+            hasStem = true;
+    }
+    if (!hasStem)
+        return false;
+
     bool[] cabin = new bool[f.nodes.length];
     foreach (b; f.beams)
         if (cast(Beam) b is null)
