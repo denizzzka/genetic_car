@@ -69,6 +69,26 @@ enum bool symmetryFitnessEnabled = true;
 ///     колёс: узлы за его гранью штрафуются долей;
 ///   - симметрия через плоскость X=0 и баланс ведущих колёс (слой
 ///     `symmetryFitnessEnabled`).
+/// Есть ли чем рулить: балка от узла руля, уходящая вперёд. Без неё
+/// рулевой шарнир нечего крутить, и признак теряется из поколения в поколение.
+private bool hasSteering(const Frame f)
+{
+    import physics_world.physics : steerNodeIndex;
+
+    foreach (b; f.beams)
+    {
+        const beam = cast(Beam) b;
+        if (beam is null)
+            continue;
+        if (beam.a != steerNodeIndex && beam.b != steerNodeIndex)
+            continue;
+        const size_t hub = beam.a == steerNodeIndex ? beam.b : beam.a;
+        if (dot(f.nodes[hub].pos - f.nodes[steerNodeIndex].pos, forward) > 0.0f)
+            return true;
+    }
+    return false;
+}
+
 float buggyFitness(const Frame f)
 {
     // ---- Гейт: физическая выполнимость ----
@@ -107,6 +127,8 @@ float buggyFitness(const Frame f)
             nMotor += 1;
     }
     if (nMotor == 0)
+        return 0.0f;
+    if (!hasSteering(f))
         return 0.0f;
 
     // Опора — одно нижнее колесо: земля ложится по его нижней точке
