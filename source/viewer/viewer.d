@@ -1030,9 +1030,9 @@ class BuggyScene: Scene
 
         foreach (i, pick; picks)
         {
-            auto f = develop(pick.chromosome);
-            enforce(!f.isNull, "витрина: у выбранной особи не выращен каркас");
-            const fr = f.get;
+            enforce(!pick.frame.isNull,
+                "витрина: у выбранной особи не выращен каркас");
+            const fr = pick.frame.get;
             foreach (n; fr.nodes)
                 enforce(isFinite(n.pos.x) && isFinite(n.pos.y)
                     && isFinite(n.pos.z),
