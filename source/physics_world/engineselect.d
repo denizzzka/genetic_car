@@ -2,10 +2,10 @@
  * Выбор физического движка.
  *
  * Модель машины не знает про движки: она просит `createPhysWorld` и получает
- * `PhysWorld`. Кто за этим стоит — Newton или Jolt — решает здесь, один раз на
- * процесс, до того как вьюер и генетический драйвер создадут первые миры.
+ * `PhysWorld`. Кто за этим стоит - Newton, Jolt или Box3D - решает здесь, один
+ * раз на процесс, до того как вьюер и генетический драйвер создадут первые миры.
  *
- * Выбор приходит из командной строки (`--engine jolt|newton`) и разбирается
+ * Выбор приходит из командной строки (`--engine jolt|newton|box3d`) и разбирается
  * ДО старта dagon: dagon свои аргументы командной строки не разбирает, но
  * лишний флаг в `args` вьюеру лучше не отдавать.
  */
@@ -16,6 +16,7 @@ import std.array : array;
 import std.exception : enforce;
 
 import physics_world.engine;
+import physics_world.engine_box3d;
 import physics_world.engine_jolt;
 import physics_world.engine_newton;
 
@@ -30,15 +31,17 @@ enum PhysicsEngine
 {
     newton,
     jolt,
+    box3d,
 }
 
-/// Имя движка для вывода и разбора командной строки: `jolt`/`newton`.
+/// Имя движка для вывода и разбора командной строки: `jolt`/`newton`/`box3d`.
 string engineName(PhysicsEngine e) @property
 {
     final switch (e)
     {
         case PhysicsEngine.newton: return "newton";
         case PhysicsEngine.jolt: return "jolt";
+        case PhysicsEngine.box3d: return "box3d";
     }
 }
 
@@ -72,9 +75,15 @@ string[] selectEngine(string[] args)
         }
         else
             continue;
-        enforce(name == "jolt" || name == "newton",
-            "неизвестный движок: " ~ name ~ " (доступны jolt, newton)");
-        selected_ = name == "jolt" ? PhysicsEngine.jolt : PhysicsEngine.newton;
+        enforce(name == "jolt" || name == "newton" || name == "box3d",
+            "неизвестный движок: " ~ name ~ " (доступны jolt, newton, box3d)");
+        switch (name)
+        {
+            case "jolt": selected_ = PhysicsEngine.jolt; break;
+            case "newton": selected_ = PhysicsEngine.newton; break;
+            case "box3d": selected_ = PhysicsEngine.box3d; break;
+            default: assert(false);
+        }
         chosen_ = true;
         return (args[0 .. i] ~ tail).array;
     }
@@ -106,12 +115,14 @@ PhysWorld createPhysWorld()
             return physics_world.engine_newton.createPhysWorld();
         case PhysicsEngine.jolt:
             return physics_world.engine_jolt.createPhysWorld();
+        case PhysicsEngine.box3d:
+            return physics_world.engine_box3d.createPhysWorld();
     }
 }
 
 /// Замок движка на время заезда. У Jolt миры из разных потоков портят друг
-/// друга, поэтому заезд идёт под замком; у Newton своего общего состояния
-/// нет, и там возвращается null — заезды идут параллельно.
+/// друга, поэтому заезд идёт под замком; у Newton и Box3D своего общего
+/// состояния нет, и там возвращается null: заезды идут параллельно.
 Object simLock() @property
 {
     return selected_ == PhysicsEngine.jolt ? joltLock : null;
