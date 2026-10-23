@@ -2,6 +2,7 @@ module genetics.generation;
 
 import std.algorithm : sort, map, min, max;
 import std.format : format;
+import std.math : sqrt;
 import std.array : array;
 import std.exception : enforce;
 import std.range : iota;
@@ -53,6 +54,13 @@ struct GenerationStats
     float mean;
     float variance;
 
+    /// Наследуемая изменчивость популяции: среднее, разброс и пределы
+    /// гена mutationRate.
+    float rateMean;
+    float rateSd;
+    float rateMin;
+    float rateMax;
+
     void addPopulation(const Individual[] pop)
     {
         individuals = pop.length;
@@ -68,6 +76,25 @@ struct GenerationStats
             sum += d * d;
         }
         variance = sum / individuals;
+
+        float rateSum = 0.0f;
+        rateMin = float.max;
+        rateMax = -float.max;
+        foreach (e; pop)
+        {
+            const float r = e.chromosome.mutationRate;
+            rateSum += r;
+            rateMin = min(rateMin, r);
+            rateMax = max(rateMax, r);
+        }
+        rateMean = rateSum / individuals;
+        float rateVar = 0.0f;
+        foreach (e; pop)
+        {
+            const float d = e.chromosome.mutationRate - rateMean;
+            rateVar += d * d;
+        }
+        rateSd = sqrt(rateVar / individuals);
 
         unique = 0;
         foreach (i, e; pop)
@@ -87,10 +114,11 @@ struct GenerationStats
     string line() const
     {
         const float n = individuals > 0 ? cast(float) individuals : 1.0f;
-        return format("clones=%d viable=%d fallback=%d attempts=%.1f genes=%.1f unique=%d/%d best=%.4f mean=%.4f var=%.5f",
+        return format("clones=%d viable=%d fallback=%d attempts=%.1f genes=%.1f unique=%d/%d best=%.4f mean=%.4f var=%.5f rate=%.5f±%.5f [%.5f..%.5f]",
             mutation.clones, mutation.viable, mutation.fallback,
             mutation.attempts / n, mutation.genes / n,
-            unique, individuals, best, mean, variance);
+            unique, individuals, best, mean, variance,
+            rateMean, rateSd, rateMin, rateMax);
     }
 }
 
@@ -132,7 +160,7 @@ Organism tryCreateViableMutant(const Chromosome base, const EvolutionConfig p,
     foreach (_; 0 .. maxMutationAttempts)
     {
         ++attempts;
-        auto trial = mutated(base, p.mutationRate, rnd);
+        auto trial = mutated(base, base.mutationRate, rnd);
         // Одна проба — один вырост: и годность, и число якорей берём из него же.
         auto grownFrame = develop(trial);
         if (grownFrame.isNull)

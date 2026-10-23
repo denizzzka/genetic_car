@@ -32,10 +32,6 @@ struct EvolutionConfig
     enum size_t populationSize = 100;
     size_t tournamentSize = 2;
 
-    /// Шаг мутации в долях диапазона гена. Мало — эволюция ползёт, много —
-    /// потомки мгновенно вырождаются и отбору нечего выбирать.
-    float mutationRate = 0.05f;
-
     size_t generationsPerPress = 25;
 
     double simulateSeconds = 0.0;

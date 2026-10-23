@@ -33,6 +33,10 @@ struct SpeciesGenes
 
     /// Сила мотор-колёс, Н·м; знак задаёт направление привода.
     float motorPower = initialMotorPower;
+
+    /// Шаг мутации потомков в долях диапазона гена. Тоже ген: изменчивость
+    /// наследуется, скрещивается и отбирается вместе со всем остальным.
+    float mutationRate = 0.05f;
 }
 
 /// Гены фазы роста: поле, которым в этой фазе строится тело. Список таких фаз и
@@ -133,8 +137,8 @@ enum SegmentGenes[] founderSegments = [
 ];
 
 /// Границы генов вида — те же поля в том же порядке, что и `tupleof`.
-enum float[speciesGeneCount] speciesLo = [0.02f, 0.10f, -200.0f];
-enum float[speciesGeneCount] speciesHi = [0.08f, 0.40f, 200.0f];
+enum float[speciesGeneCount] speciesLo = [0.02f, 0.10f, -200.0f, 0.00001f];
+enum float[speciesGeneCount] speciesHi = [0.08f, 0.40f, 200.0f, 0.5f];
 
 /// Границы генов фазы — тоже свойства вида, а не гены: выход за границу
 /// означает «не такая машина», а не другой организм.
