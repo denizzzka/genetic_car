@@ -1466,13 +1466,17 @@ version (unittest)
             if (b is null)
                 continue;
             const vec3 dir = b.worldRotation.rotate(Vector3f(0.0f, 1.0f, 0.0f));
-            const vec3 lowCar = b.worldPosition - dir * (beamLen[i] * 0.5f);
-            const float ground = groundHeightAt(lowCar);
-            if (heightOf(lowCar) - asBeam(fr.beams[i]).radius < ground - beamGroundEps)
-            {
-                addFailBeam(i);
-                bad = true;
-            }
+            const float half = beamLen[i] * 0.5f;
+            const float radius = asBeam(fr.beams[i]).radius;
+            // Балка прямая: ниже земли может оказаться любой из концов, а не
+            // только тот, что смотрит в -Y тела.
+            foreach (end; [b.worldPosition - dir * half, b.worldPosition + dir * half])
+                if (heightOf(end) - radius < groundHeightAt(end) - beamGroundEps)
+                {
+                    addFailBeam(i);
+                    bad = true;
+                    break;
+                }
         }
         return bad;
     }
