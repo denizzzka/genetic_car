@@ -90,9 +90,14 @@ private struct ContactCtx
     ContactLog log;
     RoleRule[brc][brc] rules;
 
+    /// Мир, которому принадлежат тела: фильтр проверяет userData по нему.
+    void* owner;
+
     private static RoleRule ruleFor(const RoleRule[brc][brc] table,
         const BodyRole a, const BodyRole b)
     {
+        if (cast(size_t) a > BodyRole.max || cast(size_t) b > BodyRole.max)
+            return RoleRule.init;
         const lo = cast(size_t) (a < b ? a : b);
         const hi = cast(size_t) (a < b ? b : a);
         return table[lo][hi];
@@ -158,9 +163,16 @@ private extern(C) nothrow bool box3dFilter(b3ShapeId shapeA,
     try
     {
         auto ctx = cast(ContactCtx*) context;
-        auto a = physOf(shapeA);
-        auto b = physOf(shapeB);
-        if (ctx is null || a is null || b is null)
+        if (ctx is null)
+            return true;
+        auto world = cast(Box3DPhysWorld) ctx.owner;
+        if (world is null)
+            return true;
+        // userData может протухнуть после снимка или возврата мира в пул:
+        // чужое тело не разыменовываем, пару просто игнорируем.
+        auto a = world.ownedPhys(shapeA);
+        auto b = world.ownedPhys(shapeB);
+        if (a is null || b is null)
             return true;
         return !ctx.ignored(a.role, b.role);
     }
@@ -718,6 +730,7 @@ final class Box3DPhysWorld: PhysWorld
         def.workerCount = 1;
         world_ = b3CreateWorld(&def);
         enforce(b3World_IsValid(world_), "Box3D не создал мир");
+        ctx_.owner = cast(void*) this;
         b3World_SetFrictionCallback(world_, &box3dFriction);
         b3World_SetRestitutionCallback(world_, &box3dRestitution);
         b3World_SetCustomFilterCallback(world_, &box3dFilter,
@@ -814,11 +827,24 @@ final class Box3DPhysWorld: PhysWorld
 
     private void reportPair(b3ShapeId shapeA, b3ShapeId shapeB)
     {
-        auto a = physOf(shapeA);
-        auto b = physOf(shapeB);
+        auto a = ownedPhys(shapeA);
+        auto b = ownedPhys(shapeB);
         if (a is null || b is null)
             return;
         ctx_.report(a, b);
+    }
+
+    /// Тело по форме, только если userData указывает на тело этого мира.
+    /// Проверка сравнивает сырые указатели и не разыменовывает протухший.
+    private PhysBody ownedPhys(b3ShapeId id)
+    {
+        void* raw = b3Shape_GetUserData(id);
+        if (raw is null)
+            return null;
+        foreach (b; bodiesOwned_)
+            if (cast(void*) b is raw)
+                return b;
+        return null;
     }
 
     override double updateRate() @property { return 30.0; }

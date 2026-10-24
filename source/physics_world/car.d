@@ -731,7 +731,9 @@ final class BuggyPhysics
         foreach (w; wheelBodies)
             if (w !is null)
                 s.wheels ~= bodySnapshot(w);
-        if (world !is null && world.supportsSnapshot)
+        // Box3D-снимок тащит и ground-тело окна тайлов; после сдвига окна
+        // его D-обёртка уже другая, поэтому с рельефом остаётся снимок тел.
+        if (terrain_ is null && world !is null && world.supportsSnapshot)
         {
             s.engineSnapshot = world.saveSnapshot;
             s.hasEngineSnapshot = s.engineSnapshot.length > 0;
