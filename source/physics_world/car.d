@@ -190,8 +190,8 @@ unittest
 
 unittest
 {
-    // Ограничитель крутки: раскрученное сверх лимита колесо должно
-    // снизить скорость обода до wheelMaxSurfaceSpeed (75 км/ч).
+    // Антипробуксовка не даёт колесу раскрутиться в воздух на месте:
+    // после сброса газа обод быстро падает к стартовому окну.
     Frame frame;
     size_t node(vec3 pos)
     {
@@ -230,8 +230,8 @@ unittest
         physics.step(dt, 0.0f);
 
     const float surface = abs(dot(axle, w.angularVelocity)) * wheelRadius;
-    assert(surface <= wheelMaxSurfaceSpeed * 1.05f,
-        "регулятор не удержал скорость обода в пределах лимита");
+    assert(surface < 200.0f * wheelRadius * 0.5f,
+        "антипробуксовка не погасила раскрученное колесо");
 }
 
 /**
@@ -562,10 +562,7 @@ final class BuggyPhysics
     /// `wheelLaunchSurfaceSpeed` (иначе не тронуться с места). Превышение
     /// этого лимита гасится встречным моментом, пропорциональным превышению
     /// (`wheelSpinGain`) — предел мягкий, буксование ниже допуска ничем не
-    /// стесняются. Абсолютный предел `wheelMaxSurfaceSpeed` остаётся сверху:
-    /// на скорости выше него колесо не разгоняется даже ровно по грунту
-    /// (иначе каркас разнесло бы за красивым лимитом). Действует на все
-    /// колёса, не только на моторные: с каждой падает отряд.
+    /// стесняются. Действует на все колёса, не только на моторные.
     ///
     /// Агрессивность рассчитывается по колесу: gain не выше стабильной
     /// границы P-петли (2I/dt, запас `wheelSpinGainMargin`), момент — как и
@@ -583,10 +580,9 @@ final class BuggyPhysics
                 const float spin = dot(axle, w.angularVelocity);
                 const float r = i < fr.anchors.length ? fr.anchors[i].radius : wheelRadius;
                 const float groundSpeed = abs(alongCourse(w.velocity));
-                const float allowedSurface = min(
-                    max(groundSpeed * (1.0f + wheelSlipRatio),
-                        wheelLaunchSurfaceSpeed),
-                    wheelMaxSurfaceSpeed);
+                const float allowedSurface = max(
+                    groundSpeed * (1.0f + wheelSlipRatio),
+                    wheelLaunchSurfaceSpeed);
                 const float excess = abs(spin) - allowedSurface / r;
                 if (excess > 0.0f)
                 {
