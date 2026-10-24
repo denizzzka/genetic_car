@@ -1019,6 +1019,12 @@ final class JoltPhysWorld : PhysWorld
 
     override const(ContactPair)[] contacts() const { return ctx_.log.pairs; }
 
+    /// Jolt умеет SaveState/RestoreState в C++, но текущий C-API dagon их не
+    /// выставляет; остаётся снимок тел из модели.
+    override bool supportsSnapshot() @property { return false; }
+    override ubyte[] saveSnapshot() { return null; }
+    override bool restoreSnapshot(const ubyte[] image) { return false; }
+
     override PhysShape boxShape(const vec3 halfExtent)
     {
         JPH_Vec3 h = halfExtent;

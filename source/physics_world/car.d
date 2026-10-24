@@ -735,6 +735,11 @@ final class BuggyPhysics
         foreach (w; wheelBodies)
             if (w !is null)
                 s.wheels ~= bodySnapshot(w);
+        if (world !is null && world.supportsSnapshot)
+        {
+            s.engineSnapshot = world.saveSnapshot;
+            s.hasEngineSnapshot = s.engineSnapshot.length > 0;
+        }
         s.steerTargetYaw = steerJoint_ is null ? 0.0f : steerJoint_.targetYaw;
         s.autoSteer = autoSteer;
         s.stallTime = stallTime_;
@@ -760,12 +765,19 @@ final class BuggyPhysics
         assert(s.wheels.length == wheelBodies.length,
             "число колёс в снимке не совпадает с каркасом");
 
-        restoreBody(master, s.master);
-        if (s.hasSteer)
-            restoreBody(steer, s.steer);
-        foreach (i, w; wheelBodies)
-            if (w !is null)
-                restoreBody(w, s.wheels[i]);
+        bool exact;
+        if (s.hasEngineSnapshot && world !is null && world.supportsSnapshot)
+            exact = world.restoreSnapshot(s.engineSnapshot);
+
+        if (!exact)
+        {
+            restoreBody(master, s.master);
+            if (s.hasSteer)
+                restoreBody(steer, s.steer);
+            foreach (i, w; wheelBodies)
+                if (w !is null)
+                    restoreBody(w, s.wheels[i]);
+        }
 
         if (steerJoint_ !is null)
             steerJoint_.targetYaw = s.steerTargetYaw;
@@ -779,10 +791,20 @@ final class BuggyPhysics
         failBeams_.length = 0;
         failWheels_.length = 0;
 
-        syncBodies();
-        updateBeamPuppets();
-        if (terrainWorld_ !is null)
-            terrainWorld_.updateAround(master.worldPosition);
+        if (exact)
+        {
+            // Движок уже вернул и землю, и контакты: окно не пересобираем,
+            // иначе потеряем warm start восстановленного ground-тела.
+            if (terrainWorld_ !is null)
+                terrainWorld_.syncCenter(master.worldPosition);
+        }
+        else
+        {
+            syncBodies();
+            updateBeamPuppets();
+            if (terrainWorld_ !is null)
+                terrainWorld_.updateAround(master.worldPosition);
+        }
     }
 
     /// Касается ли кабина земли: любой угол нижней грани корпуса ушёл под
@@ -2246,4 +2268,54 @@ unittest
         && isFinite(physics.masterBody.worldPosition.y)
         && isFinite(physics.masterBody.worldPosition.z),
         "после отката мир снова шагает");
+}
+
+unittest
+{
+    // Box3D умеет полный снимок мира: после отката шаги повторяются бит-в-бит,
+    // включая контакты и warm start. Это проверка именно движка, не тел.
+    import physics_world.engineselect : defaultEngine, PhysicsEngine;
+
+    defaultEngine(PhysicsEngine.box3d);
+    scope (exit) defaultEngine(PhysicsEngine.jolt);
+
+    const double dt = 1.0 / 60.0;
+    auto physics = new BuggyPhysics(new Buggy(placedFrame(uprightStubFrame())));
+    scope (exit) physics.dispose();
+    physics.settle(dt, 30);
+    foreach (_; 0 .. 120)
+        physics.step(dt, 1.0f);
+
+    const auto snap = physics.saveState();
+    assert(snap.hasEngineSnapshot, "Box3D обязан дать полный снимок мира");
+
+    uint[] trace(BuggyPhysics p)
+    {
+        uint[] bits;
+        void addBody(PhysBody b)
+        {
+            const pos = b.worldPosition;
+            const q = b.worldRotation;
+            const v = b.velocity;
+            const w = b.angularVelocity;
+            foreach (f; [pos.x, pos.y, pos.z, q.w, q.x, q.y, q.z,
+                v.x, v.y, v.z, w.x, w.y, w.z])
+                bits ~= *cast(const uint*) &f;
+        }
+        addBody(p.masterBody);
+        foreach (wheel; p.wheelBodies)
+            if (wheel !is null)
+                addBody(wheel);
+        return bits;
+    }
+
+    foreach (_; 0 .. 120)
+        physics.step(dt, 1.0f);
+    const expected = trace(physics);
+
+    physics.restoreState(snap);
+    foreach (_; 0 .. 120)
+        physics.step(dt, 1.0f);
+    assert(trace(physics) == expected,
+        "полный снимок Box3D должен повторять шаги бит-в-бит");
 }

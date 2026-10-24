@@ -33,6 +33,11 @@ struct WorldSnapshot
     BodySnapshot steer;
     BodySnapshot[] wheels;
 
+    /// Полный снимок движка (контакты, warm start, острова), если он умеет.
+    /// Тела выше остаются переносимым fallback для остальных движков.
+    bool hasEngineSnapshot;
+    ubyte[] engineSnapshot;
+
     float steerTargetYaw;
     bool autoSteer;
     double stallTime;

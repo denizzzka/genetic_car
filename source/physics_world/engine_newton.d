@@ -720,6 +720,12 @@ final class NewtonPhysWorld : PhysWorld
 
     override const(ContactPair)[] contacts() const { return log_.pairs; }
 
+    /// У Newton есть сериализация сцены, но не гарантирует warm start;
+    /// модель пока хранит тела сама.
+    override bool supportsSnapshot() @property { return false; }
+    override ubyte[] saveSnapshot() { return null; }
+    override bool restoreSnapshot(const ubyte[] image) { return false; }
+
     override PhysShape boxShape(const vec3 halfExtent)
     {
         shapes_ ~= New!NewtonBoxShape(halfExtent, newton);

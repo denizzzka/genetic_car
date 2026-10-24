@@ -704,6 +704,9 @@ final class Box3DPhysWorld: PhysWorld
     private Box3DPhysBody[] bodiesOwned_;
     private Box3DJoint[] joints_;
 
+    /// Геометрия для снимков Box3D: образы ссылаются на неё по id.
+    private b3SnapshotStore* snapshotStore_;
+
     this()
     {
         b3WorldDef def = b3DefaultWorldDef();
@@ -821,6 +824,42 @@ final class Box3DPhysWorld: PhysWorld
     override double updateRate() @property { return 30.0; }
 
     override const(ContactPair)[] contacts() const { return ctx_.log.pairs; }
+
+    /// Box3D сохраняет всё: тела, формы, контакты с warm start, острова,
+    /// таймеры сна и broad-phase. Восстановление бит-в-бит.
+    override bool supportsSnapshot() @property { return true; }
+
+    override ubyte[] saveSnapshot()
+    {
+        ubyte* img;
+        const int size = b3World_SaveSnapshot(world_, snapshotStore(), &img);
+        if (size <= 0 || img is null)
+            return null;
+        auto data = new ubyte[size];
+        data[] = img[0 .. size];
+        b3FreeSnapshot(img, size);
+        return data;
+    }
+
+    override bool restoreSnapshot(const ubyte[] image)
+    {
+        if (image.length == 0)
+            return false;
+        if (!b3World_RestoreSnapshot(world_, snapshotStore(), image.ptr,
+            cast(int) image.length))
+            return false;
+        foreach (b; bodiesOwned_)
+            b.readBackPose();
+        ctx_.log.clear();
+        return true;
+    }
+
+    private b3SnapshotStore* snapshotStore()
+    {
+        if (snapshotStore_ is null)
+            snapshotStore_ = b3CreateSnapshotStore();
+        return snapshotStore_;
+    }
 
     /// Формы мира: Box3D клонирует hull, но сетку и поле высот держит
     /// указателем, поэтому освобождать их нужно вместе с формой.
@@ -1047,6 +1086,11 @@ final class Box3DPhysWorld: PhysWorld
         foreach (s; shapes_)
             s.dispose();
         shapes_ = null;
+        if (snapshotStore_ !is null)
+        {
+            b3DestroySnapshotStore(snapshotStore_);
+            snapshotStore_ = null;
+        }
         ctx_.log.clear();
     }
 
@@ -1056,6 +1100,11 @@ final class Box3DPhysWorld: PhysWorld
         if (b3World_IsValid(world_))
             b3DestroyWorld(world_);
         world_ = b3WorldId.init;
+        if (snapshotStore_ !is null)
+        {
+            b3DestroySnapshotStore(snapshotStore_);
+            snapshotStore_ = null;
+        }
         ctx_.log.dispose();
     }
 }

@@ -55,6 +55,15 @@ final class TerrainWorld
         }
     }
 
+    /// Синхронизировать только кэш центра после полного снимка движка:
+    /// ground уже восстановлен, пересобирать его нельзя.
+    void syncCenter(const vec3 focus)
+    {
+        const TileIndex c = tileIndexAt(focus, cfg_);
+        groundTx_ = c.tx;
+        groundTy_ = c.ty;
+    }
+
     /// Снести всё окно: обязательно вызвать до того, как мир очистят
     /// (`clearScene`) или уничтожат, — иначе двойное освобождение тел.
     void dispose()
