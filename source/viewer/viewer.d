@@ -805,7 +805,7 @@ class BuggyScene: Scene
      */
     private bool tryLiveRetry(RunOutcome why)
     {
-        liveRetry.beginFailure(livePhysics.time);
+        liveRetry.beginFailure(why, livePhysics.time);
         WorldSnapshot* snap;
         double releaseStart, releaseEnd;
         if (!liveRetry.select(liveHistory, snap, releaseStart, releaseEnd))

@@ -407,7 +407,7 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
         {
             if (retryable(stepFailure))
             {
-                retry.beginFailure(physics.time);
+                retry.beginFailure(stepFailure, physics.time);
                 FitnessSnapshot* snap;
                 double releaseStart, releaseEnd;
                 if (retry.select(history, snap, releaseStart, releaseEnd))
