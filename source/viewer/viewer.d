@@ -5,7 +5,7 @@ import dagon.core.keycodes;
 import dagon.core.time;
 import core.thread : Thread;
 import core.atomic : atomicStore, atomicLoad;
-import std.algorithm : canFind, min, map, reduce, sort;
+import std.algorithm : canFind, min, max, map, reduce, sort;
 import std.math : atan2, isFinite;
 import std.exception : enforce;
 import std.range : evenChunks;
@@ -89,6 +89,14 @@ class BuggyScene: Scene
     private PhysWorld liveWorld;
     private SnapshotHistory liveHistory;
     private Entity[] liveCar;
+
+    // Откат при касании кабиной или балкой земли: см. tryLiveRetry.
+    private bool liveRetry_;
+    private uint liveRetryAttempt_;
+    private double liveRetryFailTime_;
+    private double liveRetryReleaseStart_;
+    private double liveRetryReleaseEnd_;
+    private double liveRetryCursor_;
     private double liveSimTime;
     private double liveRunSeconds;
     /// Непрочитанный остаток кадра: физика идёт кратными `engineStep`, а
@@ -663,6 +671,7 @@ class BuggyScene: Scene
         liveFailTime = 0.0;
         liveNoBlink_.length = 0;
         liveHistory.clear();
+        resetLiveRetry();
 
         // Мгновенно садим камеру на нового багги: при старте заезда и при
         // каждом N smoothTarget догонял бы цель несколько секунд с прежней
@@ -741,16 +750,18 @@ class BuggyScene: Scene
         while (liveTimeDebt >= step && !liveFailed_)
         {
             liveTimeDebt -= step;
+            const float throttle = liveRetry_
+                ? retryThrottle(livePhysics.time) : 1.0f;
             import physics_world.engineselect: simLock;
             if (auto lk = simLock)
                 synchronized (lk)
                 {
-                    livePhysics.step(step, 1.0f);
+                    livePhysics.step(step, throttle);
                     liveHistory.maybeCapture(livePhysics);
                 }
             else
             {
-                livePhysics.step(step, 1.0f);
+                livePhysics.step(step, throttle);
                 liveHistory.maybeCapture(livePhysics);
             }
             liveSimTime += step;
@@ -765,24 +776,106 @@ class BuggyScene: Scene
     /// пропускала подшаги, на которых машина переворачивалась.
     private void checkLiveRun()
     {
-        const stepFailure = runFailure(livePhysics);
+        RunOutcome stepFailure = runFailure(livePhysics);
+        if (stepFailure == RunOutcome.none && livePhysics.cabinTouchesGround())
+            stepFailure = RunOutcome.cabinGround;
+
         if (stepFailure != RunOutcome.none)
         {
+            if ((stepFailure == RunOutcome.beamGround
+                || stepFailure == RunOutcome.cabinGround)
+                && tryLiveRetry(stepFailure))
+                return;
+
+            liveRetry_ = false;
             liveFailed_ = true;
             liveFailTime = 0.0;
             markFailureParts();
-            writefln("live: заезд оборван (%s) — машина заморожена, ждём N",
-                cast(string) stepFailure);
-        }
-        else if (livePhysics.cabinTouchesGround())
-        {
-            liveFailed_ = true;
-            liveFailTime = 0.0;
-            liveNoBlink_ = new bool[liveCar.length];
-            if (liveCabIdx_ < liveNoBlink_.length)
+            if (stepFailure == RunOutcome.cabinGround
+                && liveCabIdx_ < liveNoBlink_.length)
                 liveNoBlink_[liveCabIdx_] = true;
-            writefln("live: кабина коснулась земли — машина заморожена, ждём N");
+            writefln("live: заезд оборван (%s) - машина заморожена, ждём N",
+                cast(string) stepFailure);
+            return;
         }
+
+        if (liveRetry_ && livePhysics.time > liveRetryFailTime_ + 2.0)
+        {
+            writefln("live: откат удался, продолжаем с %.2f", livePhysics.time);
+            liveRetry_ = false;
+            liveRetryAttempt_ = 0;
+        }
+    }
+
+    /*
+     * Откат при касании кабиной или балкой земли.
+     * Первая попытка: снимок не позже T-1, полный газ до T-1, ноль до T+1.
+     * Дальше берём снимок старее и отпускаем газ от него до T+1, чтобы
+     * машина подошла медленнее. T - время последнего схода.
+     * Успех - до T+2 нет нового схода; иначе следующая попытка, пока есть
+     * снимки старше. Кончились - замораживаем.
+     */
+    private bool tryLiveRetry(RunOutcome why)
+    {
+        const bool first = !liveRetry_;
+        if (first)
+        {
+            liveRetry_ = true;
+            liveRetryAttempt_ = 0;
+            liveRetryFailTime_ = livePhysics.time;
+            liveRetryCursor_ = liveRetryFailTime_ - 1.0;
+        }
+        else
+            liveRetryFailTime_ = livePhysics.time;
+
+        auto snap = liveHistory.latestBefore(liveRetryCursor_);
+        if (snap is null && first)
+            snap = liveHistory.oldest();
+        if (snap is null)
+        {
+            liveRetry_ = false;
+            return false;
+        }
+
+        const double snapTime = snap.time;
+        const double releaseStart = first
+            ? max(snapTime, liveRetryFailTime_ - 1.0)
+            : snapTime;
+        const double releaseEnd = liveRetryFailTime_ + 1.0;
+
+        livePhysics.restoreState(*snap);
+        liveHistory.truncateAfter(snapTime);
+        liveRetryCursor_ = snapTime - 1e-6;
+        liveRetryReleaseStart_ = releaseStart;
+        liveRetryReleaseEnd_ = releaseEnd;
+        liveSimTime = livePhysics.time;
+        liveTimeDebt = 0.0;
+        liveFailed_ = false;
+        liveFailTime = 0.0;
+        liveNoBlink_.length = 0;
+        ++liveRetryAttempt_;
+
+        writefln("live: откат %d после %s, снимок %.2f, газ 0 с %.2f до %.2f",
+            liveRetryAttempt_, cast(string) why, snapTime, releaseStart,
+            releaseEnd);
+        return true;
+    }
+
+    /// Газ на попытке отката: 0 в окне торможения, иначе полный.
+    private float retryThrottle(double time)
+    {
+        return (time < liveRetryReleaseStart_ || time >= liveRetryReleaseEnd_)
+            ? 1.0f : 0.0f;
+    }
+
+    private void resetLiveRetry()
+    {
+        liveRetry_ = false;
+        liveRetryAttempt_ = 0;
+        liveRetryFailTime_ = 0.0;
+        liveRetryReleaseStart_ = 0.0;
+        liveRetryReleaseEnd_ = 0.0;
+        liveRetryCursor_ = 0.0;
     }
 
     /// Виновники схода остаются видимыми: балки и колёса, которые движок
@@ -991,6 +1084,7 @@ class BuggyScene: Scene
     private void disposeLivePhysicsRun()
     {
         liveHistory.clear();
+        resetLiveRetry();
         if (livePhysics !is null)
         {
             livePhysics.dispose();

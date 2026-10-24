@@ -96,6 +96,26 @@ struct SnapshotHistory
         return &slots_[(head_ + count_ - 1) % slots_.length];
     }
 
+    /// Самый старый снимок.
+    const(WorldSnapshot)* oldest() const
+    {
+        return count_ == 0 ? null : &slots_[head_];
+    }
+
+    /// Выбросить снимки новее `time`: после отката они из провалившейся ветки.
+    void truncateAfter(double time)
+    {
+        while (count_ > 0)
+        {
+            const size_t idx = (head_ + count_ - 1) % slots_.length;
+            if (times_[idx] <= time)
+                break;
+            --count_;
+        }
+        nextTime_ = time + interval;
+        started_ = count_ > 0;
+    }
+
     /// Новейший снимок не позже `time`.
     const(WorldSnapshot)* latestBefore(double time) const
     {
@@ -189,5 +209,10 @@ unittest
     {
         assert(h.rewindBefore(physics, physics.time - 10.0));
         assert(physics.time == older.time, "откат к снимку не позже времени");
+
+        const double olderTime = older.time;
+        h.truncateAfter(olderTime);
+        assert(h.newestTime == olderTime, "обрезка оставляет выбранный снимок");
+        assert(h.length >= 1, "после обрезки буфер не пуст");
     }
 }
