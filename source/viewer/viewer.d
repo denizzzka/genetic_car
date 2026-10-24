@@ -87,6 +87,7 @@ class BuggyScene: Scene
     // Живой заезд realtime:
     private BuggyPhysics livePhysics;
     private PhysWorld liveWorld;
+    private SnapshotHistory liveHistory;
     private Entity[] liveCar;
     private double liveSimTime;
     private double liveRunSeconds;
@@ -661,6 +662,7 @@ class BuggyScene: Scene
         liveFailed_ = false;
         liveFailTime = 0.0;
         liveNoBlink_.length = 0;
+        liveHistory.clear();
 
         // Мгновенно садим камеру на нового багги: при старте заезда и при
         // каждом N smoothTarget догонял бы цель несколько секунд с прежней
@@ -742,9 +744,15 @@ class BuggyScene: Scene
             import physics_world.engineselect: simLock;
             if (auto lk = simLock)
                 synchronized (lk)
+                {
                     livePhysics.step(step, 1.0f);
+                    liveHistory.maybeCapture(livePhysics);
+                }
             else
+            {
                 livePhysics.step(step, 1.0f);
+                liveHistory.maybeCapture(livePhysics);
+            }
             liveSimTime += step;
             checkLiveRun();
         }
@@ -982,6 +990,7 @@ class BuggyScene: Scene
 
     private void disposeLivePhysicsRun()
     {
+        liveHistory.clear();
         if (livePhysics !is null)
         {
             livePhysics.dispose();
