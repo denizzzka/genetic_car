@@ -1644,6 +1644,12 @@ version (unittest)
         return stallTime_;
     }
 
+    /// Время симуляции этого мира, с: по нему ставятся снимки в буфер.
+    double time() @property const
+    {
+        return elapsed_;
+    }
+
     /// Активное окно поверхности (если в этом заезде есть рельеф) — для вьюера.
     TerrainWorld terrainWorld() @property
     {

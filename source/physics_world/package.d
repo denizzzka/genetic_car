@@ -10,3 +10,4 @@ public import physics_world.terrain;
 public import physics_world.route;
 public import physics_world.terrainworld;
 public import physics_world.state;
+public import physics_world.history;
