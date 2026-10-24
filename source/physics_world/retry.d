@@ -2,7 +2,7 @@ module physics_world.retry;
 
 import std.algorithm : max;
 
-import physics_world.physics : RunOutcome, baseThrottle;
+import physics_world.physics : RunOutcome, baseThrottle, stallSeconds;
 
 /// Газ в окне, когда машину учат выбираться из застоя.
 enum float gasThrottle = 1.0f;
@@ -36,6 +36,7 @@ enum RetryAction
 struct RetryState
 {
     double lead = 1.0;
+    double stallLead = stallSeconds + 1.0;
     double hold = 1.0;
     double successAfter = 2.0;
 
@@ -46,6 +47,7 @@ struct RetryState
     double releaseEnd;
     RetryAction action;
 
+    private double lead_;
     private double cursor_;
     private bool first_;
 
@@ -55,12 +57,13 @@ struct RetryState
     {
         action = why == RunOutcome.stalled ? RetryAction.gas
             : RetryAction.release;
+        lead_ = why == RunOutcome.stalled ? stallLead : lead;
         if (!active)
         {
             active = true;
             attempts = 0;
             failTime = now;
-            cursor_ = now - lead;
+            cursor_ = now - lead_;
             first_ = true;
         }
         else
@@ -87,7 +90,7 @@ struct RetryState
         }
 
         const double snapTime = snap.time;
-        releaseStart = first_ ? max(snapTime, failTime - lead) : snapTime;
+        releaseStart = first_ ? max(snapTime, failTime - lead_) : snapTime;
         releaseEnd = failTime + hold;
         cursor_ = snapTime - 1e-6;
         this.releaseStart = releaseStart;
@@ -122,6 +125,7 @@ struct RetryState
         releaseStart = 0.0;
         releaseEnd = 0.0;
         action = RetryAction.release;
+        lead_ = 0.0;
         cursor_ = 0.0;
         first_ = false;
     }
@@ -185,9 +189,11 @@ unittest
     RetryState gas;
     gas.beginFailure(RunOutcome.stalled, 12.0);
     assert(gas.select(history, snap, releaseStart, releaseEnd));
-    assert(snap.value == 10);
+    assert(snap.value == 0, "застой откатывается к началу, а не к T-1");
     assert(gas.action == RetryAction.gas);
-    assert(gas.throttle(10.5) == baseThrottle);
-    assert(gas.throttle(11.5) == gasThrottle);
+    assert(releaseStart == 1.0 && releaseEnd == 13.0);
+    assert(gas.throttle(0.5) == baseThrottle);
+    assert(gas.throttle(1.5) == gasThrottle);
+    assert(gas.throttle(12.5) == gasThrottle);
     assert(gas.throttle(13.0) == baseThrottle);
 }

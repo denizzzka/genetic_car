@@ -2277,6 +2277,31 @@ unittest
 
 unittest
 {
+    // Откат с рельефом: снимок тел должен вернуть машину назад, а не оставить
+    // её на месте снимка по времени.
+    const double dt = 1.0 / 60.0;
+    auto physics = new BuggyPhysics(new Buggy(placedFrame(uprightStubFrame())),
+        sharedTerrain());
+    scope (exit) physics.dispose();
+    physics.settle(dt, 30);
+    foreach (_; 0 .. 60)
+        physics.step(dt, 0.7f);
+
+    const auto snap = physics.saveState();
+    const auto master = snap.master.position;
+    const auto wheel = snap.wheels[0].position;
+    foreach (_; 0 .. 60)
+        physics.step(dt, 0.7f);
+
+    physics.restoreState(snap);
+    assert((physics.masterBody.worldPosition - master).length < 1e-4f,
+        "мастер не вернулся в снимок с рельефом");
+    assert((physics.wheelStates()[0].position - wheel).length < 1e-4f,
+        "колесо не вернулось в снимок с рельефом");
+}
+
+unittest
+{
     // Box3D умеет полный снимок мира: после отката шаги повторяются бит-в-бит,
     // включая контакты и warm start. Это проверка именно движка, не тел.
     import physics_world.engineselect : defaultEngine, PhysicsEngine;
