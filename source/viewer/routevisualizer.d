@@ -10,17 +10,14 @@ import dagon;
 
 import frame.frame : origin, frameForward = forward, frameUp = up;
 import physics_world : dropHeight, TerrainSurface, BuggyPhysics, fixedRoute,
-    Route, ensureRouteAhead, trimRouteBehind, routeWindowHalfLength;
+    Route, ensureRouteAhead, trimRouteBehind, routeWindowHalfLength,
+    routeCorridorHalfWidth;
 import viewer.scene : carToScenePos;
 
 /// Подъём ленты над рельефом, м. dagon не даёт polygonOffset из сущности,
 /// поэтому depth bias делается подъёмом вершин: лента не тонет в поверхности
 /// и не мерцает на её склонах.
 enum float routeLift = 0.03f;
-
-/// Полуширина рисуемой ленты, м: чуть уже коридора зачёта, чтобы край
-/// коридора читался как запас, а не как обрыв прогресса.
-enum float routeVisualHalfWidth = 1.5f;
 
 /// Ёмкость меша ленты: пара вершин на точку и по два треугольника на сегмент.
 /// Окно маршрута держится в `2·routeWindowHalfLength` плюс перелёт сегмента,
@@ -132,8 +129,8 @@ final class RouteVisualizer
 
             const vec3 base = p
                 + frameUp * (terrain_.heightAt(p) + dropHeight + routeLift);
-            const vec3 l = base - side * routeVisualHalfWidth;
-            const vec3 r = base + side * routeVisualHalfWidth;
+            const vec3 l = base - side * routeCorridorHalfWidth;
+            const vec3 r = base + side * routeCorridorHalfWidth;
 
             mesh_.vertices[vi + 0] = carToScenePos(l);
             mesh_.vertices[vi + 1] = carToScenePos(r);

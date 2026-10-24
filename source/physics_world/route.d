@@ -19,11 +19,11 @@ import frame.frame : origin, frameForward = forward, frameRight = right;
 
 /// Полуширина коридора зачёта прогресса, м. Габарит каркаса требует запаса
 /// (boxWidthHalf = 1.25). Вне коридора прогресс не начисляется.
-enum float routeCorridorHalfWidth = 1.5f;
+enum float routeCorridorHalfWidth = 2.5f;
 
 /// Дальше этого бокового отклонения заезд обрывается: вне коридора прогресс
 /// уже не растёт, и ехать поперёк маршрута бесконечно незачем.
-enum float routeMaxLateral = 2.0f * routeCorridorHalfWidth;
+enum float routeMaxLateral = routeCorridorHalfWidth + 1.5f;
 
 /// Шаг разбиения дуг на полилинию, м.
 enum float routeStep = 1.0f;
