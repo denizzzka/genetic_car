@@ -25,6 +25,8 @@ import physics_world.engine;
 import physics_world.physics;
 import physics_world.terrain;
 import physics_world.terrainworld;
+import physics_world.state : BodySnapshot, WorldSnapshot, bodySnapshot,
+    restoreBody, worldStateVersion;
 import physics_world.wheel;
 import physics_world.route;
 import frame.cockpit : CockpitGeometry, cockpitGeometry, cockpitInertia, cockpitMass;
@@ -385,6 +387,12 @@ final class BuggyPhysics
     /// на маршрут стоит.
     private double forwardTravel_ = 0.0;
 
+    /// Время симуляции этого мира, с: по нему ставятся снимки в буфер.
+    private double elapsed_ = 0.0;
+
+    /// Последний поданный газ: снимок хранит его для повтора с другим газом.
+    private float lastThrottle_ = 0.0f;
+
     /// Собственное окно маршрута для Pure Pursuit. Каждый экземпляр ведёт
     /// своё окно: общий маршрут гонялся бы между потоками отбора.
     private Route route_;
@@ -498,6 +506,7 @@ final class BuggyPhysics
         if (world is null)
             return;
 
+        lastThrottle_ = throttle;
         beamFail_ = BeamFailure.none;
         failBeams_.length = 0;
         failWheels_.length = 0;
@@ -506,6 +515,7 @@ final class BuggyPhysics
         applyWheelSpinGovernor(dt);
         applySteer();
         world.step(dt);
+        elapsed_ += dt;
         syncBodies();
         updateContacts();
         updateBeamPuppets();
@@ -710,6 +720,69 @@ final class BuggyPhysics
         s.position = master.worldPosition + frameRot.rotate(cockpitLocal_);
         s.orientation = frameRot;
         return s;
+    }
+
+    /// Снимок мира: мастер, руль, колёса, маршрут и таймеры заезда.
+    /// Балки и кабина сюда не входят: они выводятся из тел и каркаса.
+    WorldSnapshot saveState()
+    {
+        WorldSnapshot s;
+        assert(master !is null, "снимок мира без мастера");
+        s.master = bodySnapshot(master);
+        s.hasSteer = steer !is null;
+        if (s.hasSteer)
+            s.steer = bodySnapshot(steer);
+        foreach (w; wheelBodies)
+            if (w !is null)
+                s.wheels ~= bodySnapshot(w);
+        s.steerTargetYaw = steerJoint_ is null ? 0.0f : steerJoint_.targetYaw;
+        s.autoSteer = autoSteer;
+        s.stallTime = stallTime_;
+        s.forwardTravel = forwardTravel_;
+        s.time = elapsed_;
+        s.lastThrottle = lastThrottle_;
+        s.hasTerrain = terrain_ !is null;
+        s.route = route_.clone;
+        return s;
+    }
+
+    /// Вернуть мир в снимок. Тела ставятся на место, маршрут и таймеры
+    /// восстанавливаются; балки пересчитываются из мастера и руля.
+    void restoreState(const WorldSnapshot s)
+    {
+        assert(s.formatVersion == worldStateVersion,
+            "версия снимка мира не совпадает");
+        assert(master !is null, "снимок мира без мастера");
+        assert(s.hasSteer == (steer !is null),
+            "руль в снимке не совпадает с каркасом");
+        assert(s.hasTerrain == (terrain_ !is null),
+            "рельеф в снимке не совпадает с миром");
+        assert(s.wheels.length == wheelBodies.length,
+            "число колёс в снимке не совпадает с каркасом");
+
+        restoreBody(master, s.master);
+        if (s.hasSteer)
+            restoreBody(steer, s.steer);
+        foreach (i, w; wheelBodies)
+            if (w !is null)
+                restoreBody(w, s.wheels[i]);
+
+        if (steerJoint_ !is null)
+            steerJoint_.targetYaw = s.steerTargetYaw;
+        autoSteer = s.autoSteer;
+        stallTime_ = s.stallTime;
+        forwardTravel_ = s.forwardTravel;
+        elapsed_ = s.time;
+        lastThrottle_ = s.lastThrottle;
+        route_ = s.route.clone;
+        beamFail_ = BeamFailure.none;
+        failBeams_.length = 0;
+        failWheels_.length = 0;
+
+        syncBodies();
+        updateBeamPuppets();
+        if (terrainWorld_ !is null)
+            terrainWorld_.updateAround(master.worldPosition);
     }
 
     /// Касается ли кабина земли: любой угол нижней грани корпуса ушёл под
@@ -2124,4 +2197,53 @@ unittest
         fr.anchors ~= Anchor(rearRight, AnchorKind.motorWheel);
         return fr;
     }
+}
+
+unittest
+{
+    // Снимок возвращает тела, маршрут и таймеры в то же состояние.
+    const double dt = 1.0 / 60.0;
+    auto physics = new BuggyPhysics(new Buggy(placedFrame(uprightStubFrame())));
+    scope (exit) physics.dispose();
+    physics.settle(dt, 30);
+    foreach (_; 0 .. 120)
+        physics.step(dt, 1.0f);
+
+    const auto snap = physics.saveState();
+    const auto masterPos = snap.master.position;
+    const auto masterRot = snap.master.orientation;
+    const auto masterVel = snap.master.velocity;
+    const auto wheelPos = snap.wheels[0].position;
+    const auto wheelVel = snap.wheels[0].velocity;
+    const auto stall = snap.stallTime;
+    const auto time = snap.time;
+
+    foreach (_; 0 .. 120)
+        physics.step(dt, 1.0f);
+    physics.restoreState(snap);
+
+    const auto back = physics.saveState();
+    assert((back.master.position - masterPos).length < 1e-4f,
+        "мастер не вернулся в позу снимка");
+    assert((back.master.velocity - masterVel).length < 1e-4f,
+        "скорость мастера не вернулась");
+    assert((back.wheels[0].position - wheelPos).length < 1e-4f,
+        "колесо не вернулось в позу снимка");
+    assert((back.wheels[0].velocity - wheelVel).length < 1e-4f,
+        "скорость колеса не вернулась");
+    assert(back.stallTime == stall, "таймер застоя не вернулся");
+    assert(back.time == time, "время мира не вернулось");
+    assert(back.route.points.length == snap.route.points.length
+        && back.route.cursor == snap.route.cursor,
+        "маршрут не вернулся в снимок");
+    const q = back.master.orientation;
+    assert(abs(q.w - masterRot.w) < 1e-4f && abs(q.x - masterRot.x) < 1e-4f
+        && abs(q.y - masterRot.y) < 1e-4f && abs(q.z - masterRot.z) < 1e-4f,
+        "поворот мастера не вернулся");
+
+    physics.step(dt, 1.0f);
+    assert(isFinite(physics.masterBody.worldPosition.x)
+        && isFinite(physics.masterBody.worldPosition.y)
+        && isFinite(physics.masterBody.worldPosition.z),
+        "после отката мир снова шагает");
 }
