@@ -100,6 +100,9 @@ struct SegmentGenes
 enum size_t speciesGeneCount = FieldNameTuple!SpeciesGenes.length;
 enum size_t segmentGeneCount = FieldNameTuple!SegmentGenes.length;
 
+/// Версия раскладки генома: меняется вместе с набором генов или их границами.
+enum uint chromosomeVersion = 1;
+
 /**
  * Хромосома — контейнер генов особи: гены вида плюс список фаз роста. Ген
  * здесь не «балка в точке», а правило роста: каркас вырастает сам из
@@ -312,28 +315,44 @@ private double gaussian(ref Random rnd)
     return sqrt(-2.0 * log(u1)) * cos(2.0 * PI * uniform(0.0, 1.0, rnd));
 }
 
-/// Каждый ген конечен и лежит в своих границах, а фазы не вырождены.
-private void assertGenesOk(const Chromosome g)
+/// Проверка генома для загрузки: `null` — годен, иначе причина.
+string chromosomeError(const Chromosome g)
 {
+    if (g.segments.length < minSegments || g.segments.length > maxSegments)
+        return "число фаз вне диапазона";
     static foreach (i; 0 .. speciesGeneCount)
     {
-        assert(isFinite(g.species.tupleof[i]), "ген вида не конечен");
-        assert(g.species.tupleof[i] >= speciesLo[i] - 1e-6f
-            && g.species.tupleof[i] <= speciesHi[i] + 1e-6f,
-            "ген вида вне диапазона");
+        {
+            const float v = g.species.tupleof[i];
+            if (!isFinite(v))
+                return "ген вида не конечен";
+            if (v < speciesLo[i] || v > speciesHi[i])
+                return "ген вида вне диапазона";
+        }
     }
     foreach (seg; g.segments)
     {
         static foreach (i; 0 .. segmentGeneCount)
         {
-            assert(isFinite(seg.tupleof[i]), "ген фазы не конечен");
-            assert(seg.tupleof[i] >= segmentLo[i] - 1e-6f
-                && seg.tupleof[i] <= segmentHi[i] + 1e-6f,
-                "ген фазы вне диапазона");
+            {
+                const float v = seg.tupleof[i];
+                if (!isFinite(v))
+                    return "ген фазы не конечен";
+                if (v < segmentLo[i] || v > segmentHi[i])
+                    return "ген фазы вне диапазона";
+            }
         }
-        assert(seg.inhDiffusion >= seg.actDiffusion * inhSpreadFloor - 1e-6f,
-            "ингибитор обязан быть шире активатора");
+        if (seg.inhDiffusion < seg.actDiffusion * inhSpreadFloor)
+            return "ингибитор уже активатора";
     }
+    return null;
+}
+
+/// Каждый ген конечен и лежит в своих границах, а фазы не вырождены.
+private void assertGenesOk(const Chromosome g)
+{
+    const why = chromosomeError(g);
+    assert(why is null, why);
 }
 
 unittest

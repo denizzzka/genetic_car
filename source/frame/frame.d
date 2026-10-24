@@ -5,6 +5,9 @@ import std.typecons : Nullable;
 import dlib.math.vector;
 import physics_world.wheel : defaultWheelRadius;
 
+/// Версия раскладки каркаса: меняется вместе с полями Frame/Beam/Anchor.
+enum uint frameVersion = 1;
+
 /*
  * Система координат каркаса задаётся его собственным ортонормированным
  * базисом: right/forward/up и их отрицания (константы ниже). Им пользуются
@@ -201,6 +204,44 @@ bool isConnected(const Frame frame)
         if (!v)
             return false;
     return true;
+}
+
+/// Проверка каркаса для загрузки: `null` — годен, иначе причина.
+string frameError(const Frame f)
+{
+    if (f.nodes.length == 0)
+        return "каркас без узлов";
+    foreach (n; f.nodes)
+        if (!isFinite(n.pos.x) || !isFinite(n.pos.y) || !isFinite(n.pos.z))
+            return "узел каркаса не конечен";
+    foreach (i, b; f.beams)
+    {
+        if (b is null)
+            return "пустая балка";
+        if (b.a >= f.nodes.length || b.b >= f.nodes.length || b.a == b.b)
+            return "балка ссылается на негодный узел";
+        const beam = cast(Beam) b;
+        if (beam !is null && (!isFinite(beam.radius) || beam.radius <= 0.0f))
+            return "радиус балки негоден";
+        if (beam !is null && beam.kind != BeamKind.normal)
+            return "неизвестный тип балки";
+    }
+    foreach (a; f.anchors)
+    {
+        if (a.node >= f.nodes.length)
+            return "якорь ссылается на негодный узел";
+        if (a.kind != AnchorKind.wheel && a.kind != AnchorKind.motorWheel)
+            return "неизвестный тип якоря";
+        if (!isFinite(a.radius) || a.radius <= 0.0f)
+            return "радиус колеса негоден";
+    }
+    if (!isFinite(f.motorPower))
+        return "момент мотора не конечен";
+    if (f.anchors.length < 2)
+        return "в каркасе меньше двух колёс";
+    if (!isConnected(f))
+        return "каркас не связный";
+    return null;
 }
 
 unittest

@@ -23,6 +23,9 @@ import frame.cockpit : beamHitsCabin, cockpitFrameContext,
 import genetics.fitness : maxBeamCount;
 import genetics.chromosome : Chromosome, SegmentGenes, normalized;
 
+/// Версия правил роста: меняется при правках констант или алгоритма.
+enum uint growthGrammarVersion = 1;
+
 /*
  * Рост каркаса по Nodal/Lefty.
  *

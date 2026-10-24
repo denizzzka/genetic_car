@@ -7,3 +7,4 @@ public import genetics.fitness;
 public import genetics.selection;
 public import genetics.generation;
 public import genetics.timing;
+public import genetics.persistence;
