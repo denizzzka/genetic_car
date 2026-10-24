@@ -4,21 +4,22 @@ import physics_world.car : BuggyPhysics;
 import physics_world.state : WorldSnapshot;
 
 /**
- * Кольцевой буфер снимков мира: раз в `interval` секунд, хранит `span`.
+ * Кольцевой буфер снимков: раз в `interval` секунд, хранит `span`.
  *
- * Снимки ставятся вызовом `maybeCapture` после шага; сам мир ничего о буфере
- * не знает, поэтому фитнес может его не заводить. Память ограничена
- * `capacity` слотами.
+ * Значение и время кладёт вызывающий, поэтому буфер годится и для мира, и для
+ * снимка заезда с внешним прогрессом. Память ограничена `capacity` слотами.
  */
-struct SnapshotHistory
+struct History(T)
 {
-    /// Как часто снимать мир, с.
+    /// Как часто снимать, с.
     double interval = 5.0;
 
     /// Сколько секунд истории хранить, с.
     double span = 30.0;
 
-    private WorldSnapshot[] slots_;
+    alias Value = T;
+
+    private T[] slots_;
     private double[] times_;
     private size_t head_;
     private size_t count_;
@@ -26,7 +27,7 @@ struct SnapshotHistory
     private bool started_;
 
     /// Сколько снимков помещается в окно.
-    size_t capacity() const
+    size_t capacity() const @property
     {
         if (interval <= 0.0)
             return 1;
@@ -57,31 +58,36 @@ struct SnapshotHistory
             : times_[(head_ + count_ - 1) % slots_.length];
     }
 
-    /// Снять мир, если прошёл `interval` с прошлого снимка.
-    bool maybeCapture(BuggyPhysics physics)
+    /// Пора ли делать следующий снимок.
+    bool due(double time) const
     {
-        if (started_ && physics.time < nextTime_)
+        return !started_ || time >= nextTime_;
+    }
+
+    /// Снять значение, если прошёл `interval`.
+    bool maybeCapture(T value, double time)
+    {
+        if (!due(time))
             return false;
-        capture(physics);
+        capture(value, time);
         return true;
     }
 
-    /// Снять мир сейчас, не дожидаясь интервала.
-    void capture(BuggyPhysics physics)
+    /// Снять значение сейчас, не дожидаясь интервала.
+    void capture(T value, double time)
     {
         ensureStorage();
-        const double now = physics.time;
         const size_t idx = (head_ + count_) % slots_.length;
-        slots_[idx] = physics.saveState();
-        times_[idx] = now;
+        slots_[idx] = value;
+        times_[idx] = time;
         if (count_ < slots_.length)
             ++count_;
         else
             head_ = (head_ + 1) % slots_.length;
-        nextTime_ = now + interval;
+        nextTime_ = time + interval;
         started_ = true;
 
-        while (count_ > 0 && times_[head_] < now - span)
+        while (count_ > 0 && times_[head_] < time - span)
         {
             head_ = (head_ + 1) % slots_.length;
             --count_;
@@ -89,7 +95,7 @@ struct SnapshotHistory
     }
 
     /// Новейший снимок.
-    const(WorldSnapshot)* latest() const
+    const(T)* latest() const
     {
         if (count_ == 0)
             return null;
@@ -97,9 +103,21 @@ struct SnapshotHistory
     }
 
     /// Самый старый снимок.
-    const(WorldSnapshot)* oldest() const
+    const(T)* oldest() const
     {
         return count_ == 0 ? null : &slots_[head_];
+    }
+
+    /// Новейший снимок не позже `time`.
+    const(T)* latestBefore(double time) const
+    {
+        for (size_t k = count_; k > 0; --k)
+        {
+            const size_t idx = (head_ + k - 1) % slots_.length;
+            if (times_[idx] <= time)
+                return &slots_[idx];
+        }
+        return null;
     }
 
     /// Выбросить снимки новее `time`: после отката они из провалившейся ветки.
@@ -114,38 +132,6 @@ struct SnapshotHistory
         }
         nextTime_ = time + interval;
         started_ = count_ > 0;
-    }
-
-    /// Новейший снимок не позже `time`.
-    const(WorldSnapshot)* latestBefore(double time) const
-    {
-        for (size_t k = count_; k > 0; --k)
-        {
-            const size_t idx = (head_ + k - 1) % slots_.length;
-            if (times_[idx] <= time)
-                return &slots_[idx];
-        }
-        return null;
-    }
-
-    /// Откатить мир к новейшему снимку. `false` — снимков нет.
-    bool rewind(BuggyPhysics physics)
-    {
-        const s = latest();
-        if (s is null)
-            return false;
-        physics.restoreState(*s);
-        return true;
-    }
-
-    /// Откатить мир к снимку не позже `time`.
-    bool rewindBefore(BuggyPhysics physics, double time)
-    {
-        const s = latestBefore(time);
-        if (s is null)
-            return false;
-        physics.restoreState(*s);
-        return true;
     }
 
     void clear()
@@ -163,11 +149,72 @@ struct SnapshotHistory
         const size_t cap = capacity;
         if (slots_.length == cap)
             return;
-        slots_ = new WorldSnapshot[cap];
+        slots_ = new T[cap];
         times_ = new double[cap];
         head_ = 0;
         count_ = 0;
     }
+}
+
+/// Буфер снимков мира багги: удобные методы поверх `History!WorldSnapshot`.
+struct SnapshotHistory
+{
+    private History!WorldSnapshot hist_;
+
+    alias Value = WorldSnapshot;
+
+    @property double interval() const { return hist_.interval; }
+    @property void interval(double v) { hist_.interval = v; }
+    @property double span() const { return hist_.span; }
+    @property void span(double v) { hist_.span = v; }
+    @property size_t capacity() const { return hist_.capacity; }
+    @property size_t length() const { return hist_.length; }
+    @property bool empty() const { return hist_.empty; }
+    @property double oldestTime() const { return hist_.oldestTime; }
+    @property double newestTime() const { return hist_.newestTime; }
+
+    bool due(double time) const { return hist_.due(time); }
+
+    bool maybeCapture(BuggyPhysics physics)
+    {
+        if (!hist_.due(physics.time))
+            return false;
+        hist_.capture(physics.saveState(), physics.time);
+        return true;
+    }
+
+    void capture(BuggyPhysics physics)
+    {
+        hist_.capture(physics.saveState(), physics.time);
+    }
+
+    const(WorldSnapshot)* latest() const { return hist_.latest(); }
+    const(WorldSnapshot)* oldest() const { return hist_.oldest(); }
+    const(WorldSnapshot)* latestBefore(double time) const
+    {
+        return hist_.latestBefore(time);
+    }
+
+    bool rewind(BuggyPhysics physics)
+    {
+        const s = latest();
+        if (s is null)
+            return false;
+        physics.restoreState(*s);
+        return true;
+    }
+
+    bool rewindBefore(BuggyPhysics physics, double time)
+    {
+        const s = latestBefore(time);
+        if (s is null)
+            return false;
+        physics.restoreState(*s);
+        return true;
+    }
+
+    void truncateAfter(double time) { hist_.truncateAfter(time); }
+    void clear() { hist_.clear(); }
 }
 
 unittest

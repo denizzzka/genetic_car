@@ -312,6 +312,20 @@ struct PhysicsResult
     RunOutcome why = RunOutcome.none;
 }
 
+/// Снимок заезда: мир плюс внешний прогресс, который живёт в фитнесе.
+private struct FitnessSnapshot
+{
+    double time;
+    WorldSnapshot world;
+    Route route;
+    double farthest;
+    double reachTime;
+    float lateral;
+    bool passedStart;
+}
+
+private alias FitnessHistory = History!FitnessSnapshot;
+
 /// Счёт — средний темп продвижения по дуге маршрута (в долях номинала),
 /// ослабленный мягким штрафом за съезд с коридора.
 PhysicsResult physicsFitness(const Buggy buggy, double seconds)
@@ -363,7 +377,6 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
 
     // Шаг заезда берём у движка: столько раз в секунду он считает устойчиво.
     const double dt = 1.0 / physics.updateRate;
-    const size_t steps = cast(size_t)(seconds / dt);
 
     r.beams = physics.beamStates().length;
 
@@ -379,23 +392,42 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
     double farthest = 0.0;
     double reachTime = seconds;
     float lateral = 0.0f;
-    foreach (i; 0 .. steps)
-    {
-        physics.step(dt, 1.0f);
 
-        const stepFailure = runFailure(physics);
+    FitnessHistory history;
+    RetryState retry;
+
+    while (physics.time < seconds)
+    {
+        physics.step(dt, retry.throttle(physics.time));
+
+        RunOutcome stepFailure = runFailure(physics);
+        if (stepFailure == RunOutcome.none && physics.cabinTouchesGround())
+            stepFailure = RunOutcome.cabinGround;
         if (stepFailure != RunOutcome.none)
         {
+            if (retryable(stepFailure))
+            {
+                retry.beginFailure(physics.time);
+                FitnessSnapshot* snap;
+                double releaseStart, releaseEnd;
+                if (retry.select(history, snap, releaseStart, releaseEnd))
+                {
+                    physics.restoreState(snap.world);
+                    route = snap.route.clone;
+                    farthest = snap.farthest;
+                    reachTime = snap.reachTime;
+                    lateral = snap.lateral;
+                    passedStart = snap.passedStart;
+                    history.truncateAfter(snap.time);
+                    continue;
+                }
+            }
             r.why = stepFailure;
             break;
         }
 
-        const cabinGround = physics.cabinTouchesGround();
-        if (cabinGround)
-        {
-            r.why = RunOutcome.cabinGround;
-            break;
-        }
+        if (retry.succeeded(physics.time))
+            retry.reset();
 
         const focus = physics.wheelFocus();
         const tile = tileIndexAt(focus, tcfg);
@@ -405,9 +437,22 @@ private PhysicsResult physicsFitnessRun(const Buggy buggy, double seconds)
         if (progress > farthest)
         {
             farthest = progress;
-            reachTime = dt * (i + 1);
+            reachTime = physics.time;
         }
         lateral = max(lateral, route.project(focus).distance);
+
+        if (history.due(physics.time))
+        {
+            FitnessSnapshot snap;
+            snap.time = physics.time;
+            snap.world = physics.saveState();
+            snap.route = route.clone;
+            snap.farthest = farthest;
+            snap.reachTime = reachTime;
+            snap.lateral = lateral;
+            snap.passedStart = passedStart;
+            history.capture(snap, physics.time);
+        }
     }
 
     r.distance = farthest;
