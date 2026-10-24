@@ -49,6 +49,12 @@ struct TerrainConfig
     float detailAmplitude = 0.9f;
     float detailFrequency = 0.12f;
 
+    /// Крупные горы: склон длиной около 2-3 тайлов. При частоте 0.0125
+    /// волна ~80 м, а склон от ложбины до гребня ~20 м.
+    float mountainAmplitude = 8.0f;
+    float mountainFrequency = 0.0125f;
+    uint mountainOctaves = 1;
+
     uint mainOctaves = 4;
     uint detailOctaves = 5;
     float lacunarity = 2.0f;
@@ -88,7 +94,17 @@ float terrainHeightAt(const TerrainConfig cfg, const vec3 p)
     float h = fbm01(cfg.seed, u, v, freq, cfg.mainOctaves) * amp;
     h += fbm01(cfg.seed + 100, u, v, cfg.detailFrequency, cfg.detailOctaves)
         * cfg.detailAmplitude * t;
+    h += ridge01(cfg.seed + 200, u, v, cfg.mountainFrequency,
+        cfg.mountainOctaves) * cfg.mountainAmplitude * t;
     return h;
+}
+
+/// Гребни гор: единица на хребте, ноль в ложбине. FBM даёт [-1,1], поэтому
+/// 1-|n| превращает нули шума в длинные хребты, а не в отдельные пики.
+private float ridge01(int seed, float u, float v, float frequency,
+    uint octaves)
+{
+    return 1.0f - abs(fbm01(seed, u, v, frequency, octaves));
 }
 
 /// FBM-шум OpenSimplex2 в [-1,1] в точке (u, v). Состояние FastNoise строится
