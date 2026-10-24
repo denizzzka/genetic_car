@@ -2,7 +2,7 @@ module physics_world.retry;
 
 import std.algorithm : max;
 
-import physics_world.physics : RunOutcome, baseThrottle, stallSeconds;
+import physics_world.physics : RunOutcome, baseThrottle;
 
 /// Газ в окне, когда машину учат выбираться из застоя.
 enum float gasThrottle = 1.0f;
@@ -36,7 +36,8 @@ enum RetryAction
 struct RetryState
 {
     double lead = 1.0;
-    double stallLead = stallSeconds + 1.0;
+    /// Шаг отката при застое: сначала T-5, потом T-10 и так до окна истории.
+    double stallLead = 5.0;
     double hold = 1.0;
     double successAfter = 2.0;
 
@@ -189,11 +190,16 @@ unittest
     RetryState gas;
     gas.beginFailure(RunOutcome.stalled, 12.0);
     assert(gas.select(history, snap, releaseStart, releaseEnd));
-    assert(snap.value == 0, "застой откатывается к началу, а не к T-1");
+    assert(snap.value == 5, "первый откат застоя - на 5 секунд назад");
     assert(gas.action == RetryAction.gas);
-    assert(releaseStart == 1.0 && releaseEnd == 13.0);
+    assert(releaseStart == 7.0 && releaseEnd == 13.0);
     assert(gas.throttle(0.5) == baseThrottle);
-    assert(gas.throttle(1.5) == gasThrottle);
+    assert(gas.throttle(7.5) == gasThrottle);
     assert(gas.throttle(12.5) == gasThrottle);
     assert(gas.throttle(13.0) == baseThrottle);
+
+    // Следующий сход уходит ещё на 5 секунд назад, пока есть история.
+    gas.beginFailure(RunOutcome.stalled, 13.0);
+    assert(gas.select(history, snap, releaseStart, releaseEnd));
+    assert(snap.value == 0, "второй откат застоя - ещё на 5 секунд назад");
 }
