@@ -207,6 +207,10 @@ enum float beamGroundEps = 0.02f;
 /// и физический заезд запускать незачем.
 enum float minMotorPower = 1.0f;
 
+/// Базовый газ, к которому откалиброван `motorPower`: полный газ даёт
+/// момент больше на 1/baseThrottle.
+enum float baseThrottle = 0.7f;
+
 /// Сцепление пары «покрышка × грунт» (сухая почва/глина): статическое —
 /// срыв (зацепление), кинетическое — удержание при скольжении.
 enum float soilFrictionStatic = 0.7f;

@@ -2,10 +2,7 @@ module physics_world.retry;
 
 import std.algorithm : max;
 
-import physics_world.physics : RunOutcome;
-
-/// Базовый газ обычного хода: 1.0 оставляем для «поддать газу».
-enum float baseThrottle = 0.7f;
+import physics_world.physics : RunOutcome, baseThrottle;
 
 /// Газ в окне, когда машину учат выбираться из застоя.
 enum float gasThrottle = 1.0f;

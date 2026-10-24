@@ -524,7 +524,8 @@ final class BuggyPhysics
             terrainWorld_.updateAround(master.worldPosition);
     }
 
-    /// Момент полного газа на каждое мотор-колесо, разложенный по `throttle`.
+    /// Момент газа на каждое мотор-колесо. Базовая доля газа даёт
+    /// `motorPower`, полный газ - больше на 1/`baseThrottle`.
     /// Сила мотора — наследуемый параметр каркаса (`Frame.motorPower`),
     /// знак силы — направление привода: положительный момент едет вперёд по
     /// курсу, отрицательный разворачивает вращение и едет назад (backward).
@@ -547,7 +548,7 @@ final class BuggyPhysics
                 // только вокруг неё), а знак — зафиксированный на сборке:
                 // колесо крутится по «генному» направлению оси, текущая
                 // ориентация знак не разворачивает.
-                float t = throttle * fr.motorPower;
+                float t = throttle * fr.motorPower / baseThrottle;
                 const float cap = wheelAxialMom[i] * maxWheelAngularAccel;
                 if (abs(t) > cap)
                     t = copysign(cap, t);
